@@ -33,7 +33,7 @@ function App() {
   const loadFromGoogleSheets = async (sheetId) => {
     setIsLoadingSheets(true);
     try {
-      const response = await fetch('/api/sheets', {
+      const response = await fetch('/.netlify/functions/sheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,7 +85,7 @@ function App() {
     if (!spreadsheetId) return;
 
     try {
-      await fetch('/api/sheets', {
+      await fetch('/.netlify/functions/sheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
