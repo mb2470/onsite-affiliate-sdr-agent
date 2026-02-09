@@ -134,7 +134,7 @@ function App() {
 
   // Call Claude API via Netlify function
   const callClaudeAPI = async (prompt, systemPrompt) => {
-    const response = await fetch('/api/claude', {
+    const response = await fetch('/.netlify/functions/claude', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
