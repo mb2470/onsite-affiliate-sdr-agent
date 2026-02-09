@@ -1,17 +1,25 @@
 // Netlify serverless function to interact with private Google Sheets
 // Handles both reading leads and writing back status updates
 
-import { google } from 'googleapis';
+const { google } = require('googleapis');
 
-export default async (req, context) => {
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+exports.handler = async (event, context) => {
+  // Only allow POST requests
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ error: 'Method not allowed' })
+    };
   }
 
   try {
-    const { action, spreadsheetId, range, values } = await req.json();
+    const { action, spreadsheetId, range, values } = JSON.parse(event.body);
 
     // Parse service account credentials from environment variable
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY environment variable not set');
+    }
+
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
 
     // Authenticate with Google Sheets
@@ -27,15 +35,16 @@ export default async (req, context) => {
       // Read data from sheet
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: range || 'Sheet1!A:D', // Default: columns A-D
+        range: range || 'Sheet1!A:E', // Default: columns A-E
       });
 
-      return new Response(JSON.stringify({
-        values: response.data.values || []
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          values: response.data.values || []
+        })
+      };
 
     } else if (action === 'write') {
       // Write data to sheet (e.g., update status column)
@@ -48,30 +57,32 @@ export default async (req, context) => {
         }
       });
 
-      return new Response(JSON.stringify({
-        updatedCells: response.data.updatedCells
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          updatedCells: response.data.updatedCells
+        })
+      };
 
     } else if (action === 'append') {
       // Append new rows (e.g., add new leads)
       const response = await sheets.spreadsheets.values.append({
         spreadsheetId,
-        range: range || 'Sheet1!A:D',
+        range: range || 'Sheet1!A:E',
         valueInputOption: 'RAW',
         requestBody: {
           values
         }
       });
 
-      return new Response(JSON.stringify({
-        updates: response.data.updates
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          updates: response.data.updates
+        })
+      };
 
     } else {
       throw new Error('Invalid action. Use: read, write, or append');
@@ -79,19 +90,16 @@ export default async (req, context) => {
 
   } catch (error) {
     console.error('Google Sheets API error:', error);
-    return new Response(
-      JSON.stringify({ 
+    console.error('Error details:', JSON.stringify(error, null, 2));
+    
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
         error: error.message || 'Failed to access Google Sheets',
-        details: error.toString()
-      }),
-      { 
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
+        details: error.toString(),
+        stack: error.stack
+      })
+    };
   }
-};
-
-export const config = {
-  path: "/api/sheets"
 };
