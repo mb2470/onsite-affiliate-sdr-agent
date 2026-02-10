@@ -14,6 +14,9 @@ function App() {
   const [isAnalyzingCatalog, setIsAnalyzingCatalog] = useState(false);
   const [isLoadingSheets, setIsLoadingSheets] = useState(false);
   const [lastSync, setLastSync] = useState(null);
+  const [contacts, setContacts] = useState([]);
+  const [isLoadingContacts, setIsLoadingContacts] = useState(false);
+  const [selectedContact, setSelectedContact] = useState(null);
 
   // Load spreadsheet ID from localStorage on mount
   useEffect(() => {
@@ -495,6 +498,71 @@ Talking Points: ${researchData.talkingPoints}`;
     alert(`✅ Enriched ${unenrichedLeads.length} leads!`);
   };
   
+// Find contacts using Apollo.io
+const findContacts = async (lead) => {
+  setIsLoadingContacts(true);
+  setContacts([]);
+  
+  try {
+    console.log(`Finding contacts for: ${lead.website}`);
+
+    const response = await fetch('/.netlify/functions/apollo-contacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        website: lead.website,
+        titles: [
+          'VP Digital Marketing',
+          'Director Digital Marketing',
+          'VP Marketing',
+          'Director Marketing',
+          'VP Ecommerce',
+          'Director Ecommerce',
+          'CMO',
+          'Chief Marketing Officer',
+          'Head of Digital',
+          'Head of Ecommerce'
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to find contacts');
+    }
+
+    const data = await response.json();
+    
+    if (data.contacts && data.contacts.length > 0) {
+      setContacts(data.contacts);
+      console.log(`Found ${data.contacts.length} contacts`);
+    } else {
+      alert('No contacts found with verified emails. Try a different search or check Apollo.io credits.');
+    }
+
+  } catch (error) {
+    console.error('Error finding contacts:', error);
+    alert(`Failed to find contacts: ${error.message}. Make sure your Apollo API key is set in Netlify.`);
+  } finally {
+    setIsLoadingContacts(false);
+  }
+};
+
+// Select a contact and personalize the email
+const selectContact = (contact) => {
+  setSelectedContact(contact);
+  
+  // Personalize the generated email with contact's name
+  if (generatedEmail) {
+    const personalizedEmail = generatedEmail.replace(
+      /Hi there|Hello|Greetings/gi,
+      `Hi ${contact.firstName || contact.name.split(' ')[0]}`
+    );
+    setGeneratedEmail(personalizedEmail);
+  }
+};
+
+  
   // Update lead status (and sync to Google Sheets)
   const updateLeadStatus = (leadId, newStatus) => {
     const updatedLeads = leads.map(lead => {
@@ -782,7 +850,86 @@ Talking Points: ${researchData.talkingPoints}`;
                           </div>
                         )}
                       </div>
-                      
+
+                      {generatedEmail && (
+  <div className="contact-finder">
+    <div className="contact-finder-header">
+      <h3>🎯 Find Decision Maker</h3>
+      <button 
+        className="find-contacts-btn"
+        onClick={() => findContacts(selectedLead)}
+        disabled={isLoadingContacts}
+      >
+        {isLoadingContacts ? '🔍 Searching...' : '🔍 Find Contacts (Apollo.io)'}
+      </button>
+    </div>
+
+    {contacts.length > 0 && (
+      <div className="contacts-list">
+        <p className="contacts-count">Found {contacts.length} decision makers:</p>
+        {contacts.map((contact) => (
+          <div 
+            key={contact.id} 
+            className={`contact-card ${selectedContact?.id === contact.id ? 'selected' : ''}`}
+          >
+            <div className="contact-info">
+              {contact.photoUrl && (
+                <img 
+                  src={contact.photoUrl} 
+                  alt={contact.name}
+                  className="contact-photo"
+                />
+              )}
+              <div className="contact-details">
+                <h4>{contact.name}</h4>
+                <p className="contact-title">{contact.title}</p>
+                <div className="contact-meta">
+                  <span className="contact-email">
+                    ✉️ {contact.email}
+                    {contact.emailStatus === 'verified' && (
+                      <span className="verified-badge">✓ Verified</span>
+                    )}
+                  </span>
+                  {contact.linkedinUrl && (
+                    <a 
+                      href={contact.linkedinUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="linkedin-link"
+                    >
+                      🔗 LinkedIn
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+            <button 
+              className="select-contact-btn"
+              onClick={() => selectContact(contact)}
+            >
+              {selectedContact?.id === contact.id ? '✓ Selected' : 'Select'}
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {selectedContact && (
+      <div className="selected-contact-banner">
+        <p>
+          ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
+        </p>
+        <button 
+          className="copy-email-address-btn"
+          onClick={() => navigator.clipboard.writeText(selectedContact.email)}
+        >
+          📋 Copy Email Address
+        </button>
+      </div>
+    )}
+  </div>
+)}
+
                       <div className={`qualification-badge ${catalogAnalysis.confidence}`}>
                         <strong>Qualification:</strong> {catalogAnalysis.qualification}
                       </div>
