@@ -1,5 +1,5 @@
-// UPDATED Apollo.io contacts function - Fixed for Apollo Basic Plan API
-// Replace your existing /netlify/functions/apollo-contacts.js with this
+// FINAL CORRECT Apollo.io contacts function
+// Based on your successful API test showing api_search works
 
 exports.handler = async (event, context) => {
   if (event.httpMethod !== 'POST') {
@@ -20,109 +20,179 @@ exports.handler = async (event, context) => {
       throw new Error('Website is required');
     }
 
-    // Default titles to search for if not provided (based on ICP)
-    const searchTitles = titles || [
-      // Primary: Influencer/Affiliate Leaders
-      'Director of Influencer Marketing',
-      'Head of Partnerships',
-      'Senior Manager of Affiliate Marketing',
-      'Director of Brand Advocacy',
-      'VP Influencer Marketing',
-      'Manager Influencer Marketing',
-      // Secondary: E-Commerce Leaders
-      'VP of E-Commerce',
-      'Director of E-Commerce',
-      'Head of Digital Product',
-      'VP Ecommerce',
-      'Director Ecommerce',
-      // Tertiary: Brand & Social Leaders
-      'Director of Brand Marketing',
-      'Head of Social Media',
-      'Director of Content Strategy',
-      'VP Brand Marketing',
-      // Growth/Performance Leaders
-      'VP of Growth',
-      'Director of Performance Marketing',
-      'Head of User Acquisition',
-      'VP Growth Marketing'
-    ];
-
     console.log(`Searching Apollo for contacts at: ${website}`);
 
-    // Apollo.io API endpoint - using correct v1 endpoint
-    const response = await fetch('https://api.apollo.io/v1/mixed_people/search', {
+    // STEP 1: Search for people using EXACT format from your working test
+    const searchResponse = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
+      method: 'POST',
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+        'x-api-key': process.env.APOLLO_API_KEY
+      },
+      body: JSON.stringify({
+        page: 1,
+        per_page: 25,
+        // Use the website domain to filter
+        q_organization_domains: website
+      })
+    });
+
+    if (!searchResponse.ok) {
+      const errorText = await searchResponse.text();
+      console.error('Apollo search error:', searchResponse.status, errorText);
+      
+      if (searchResponse.status === 401) {
+        throw new Error('Invalid Apollo API key');
+      }
+      if (searchResponse.status === 403) {
+        throw new Error('Apollo API access forbidden. Verify your plan includes API access.');
+      }
+      
+      throw new Error(`Apollo API error ${searchResponse.status}: ${errorText}`);
+    }
+
+    const searchData = await searchResponse.json();
+
+    if (!searchData.people || searchData.people.length === 0) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          contacts: [],
+          total: 0,
+          message: `No contacts found at ${website}`
+        })
+      };
+    }
+
+    console.log(`Found ${searchData.people.length} people, filtering for relevant titles...`);
+
+    // Filter for relevant titles (case-insensitive)
+    const relevantTitles = [
+      'director of influencer marketing',
+      'head of partnerships',
+      'vp influencer marketing',
+      'director of e-commerce',
+      'vp of e-commerce',
+      'director of brand marketing',
+      'head of social media',
+      'vp of growth',
+      'director of performance marketing',
+      'head of digital',
+      'vp marketing',
+      'director of marketing',
+      'manager influencer marketing',
+      'manager affiliate marketing'
+    ];
+
+    const filteredPeople = searchData.people.filter(person => {
+      if (!person.has_email) return false;
+      if (!person.title) return false;
+      
+      const titleLower = person.title.toLowerCase();
+      return relevantTitles.some(relevantTitle => 
+        titleLower.includes(relevantTitle)
+      );
+    });
+
+    console.log(`Filtered to ${filteredPeople.length} people with relevant titles and emails`);
+
+    if (filteredPeople.length === 0) {
+      // Return all people with emails even if titles don't match
+      const peopleWithEmails = searchData.people
+        .filter(p => p.has_email)
+        .slice(0, 10);
+      
+      console.log(`No title matches, returning ${peopleWithEmails.length} people with emails`);
+    }
+
+    const peopleToEnrich = filteredPeople.length > 0 
+      ? filteredPeople.slice(0, 5)  // Use filtered if we have them
+      : searchData.people.filter(p => p.has_email).slice(0, 5); // Otherwise use first 5 with emails
+
+    if (peopleToEnrich.length === 0) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          contacts: [],
+          total: searchData.people.length,
+          message: 'Found people but none have email addresses'
+        })
+      };
+    }
+
+    // STEP 2: Enrich to get actual emails and full names
+    const enrichResponse = await fetch('https://api.apollo.io/api/v1/people/bulk_match', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache',
-        'X-Api-Key': process.env.APOLLO_API_KEY
+        'x-api-key': process.env.APOLLO_API_KEY
       },
       body: JSON.stringify({
-        // Required parameters
-        api_key: process.env.APOLLO_API_KEY, // Apollo sometimes needs this in body too
-        page: 1,
-        per_page: 10,
-        
-        // Search filters
-        organization_domains: [website],
-        person_titles: searchTitles,
-        
-        // Email requirements - only return contacts with emails
-        contact_email_status: ['verified', 'guessed', 'likely'],
-        
-        // Sort by email status (verified first)
-        sort_by_field: 'contact_email_status',
-        sort_ascending: false
+        details: peopleToEnrich.map(person => ({ id: person.id }))
       })
     });
 
-    // Check for errors
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      console.error('Apollo API error:', response.status, errorData);
+    if (!enrichResponse.ok) {
+      const errorText = await enrichResponse.text();
+      console.error('Apollo enrich error:', enrichResponse.status, errorText);
       
-      // Provide helpful error messages
-      if (response.status === 403) {
-        throw new Error('Apollo API key is invalid or lacks permissions. Check your API key in Netlify settings.');
-      }
-      if (response.status === 422) {
-        throw new Error('Invalid search parameters. This might be an API plan limitation.');
-      }
-      if (response.status === 429) {
-        throw new Error('Apollo API rate limit exceeded. Wait a few minutes and try again.');
-      }
-      
-      throw new Error(`Apollo API error ${response.status}: ${errorData.error || 'Unknown error'}`);
+      // Return basic info without emails if enrichment fails
+      const basicContacts = peopleToEnrich.map(person => ({
+        id: person.id,
+        name: `${person.first_name} ${person.last_name_obfuscated || ''}`.trim(),
+        firstName: person.first_name,
+        lastName: person.last_name_obfuscated || '***',
+        title: person.title || 'Unknown',
+        email: null,
+        emailStatus: 'enrichment_required',
+        organization: {
+          name: person.organization?.name || '',
+          website: website
+        },
+        note: 'Email available - enrichment failed. May need higher Apollo plan.'
+      }));
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          success: true,
+          contacts: basicContacts,
+          total: searchData.people.length,
+          message: 'Found contacts but could not retrieve emails. Check Apollo plan.'
+        })
+      };
     }
 
-    const data = await response.json();
+    const enrichData = await enrichResponse.json();
 
-    // Check if we got valid data
-    if (!data.people || !Array.isArray(data.people)) {
-      console.error('Unexpected Apollo response format:', data);
-      throw new Error('Apollo API returned unexpected response format');
-    }
-
-    // Transform Apollo response to simplified format
-    const contacts = data.people
-      .filter(person => person.email) // Only contacts with emails
+    // Transform enriched contacts
+    const contacts = (enrichData.matches || [])
+      .filter(person => person.email) // Only return those with actual emails
       .map(person => ({
         id: person.id,
-        name: person.name || `${person.first_name || ''} ${person.last_name || ''}`.trim() || 'Unknown',
+        name: person.name || `${person.first_name || ''} ${person.last_name || ''}`.trim(),
         firstName: person.first_name || '',
         lastName: person.last_name || '',
-        title: person.title || 'Unknown Title',
+        title: person.title || '',
         email: person.email,
         emailStatus: person.email_status || 'unknown',
         linkedinUrl: person.linkedin_url || null,
         photoUrl: person.photo_url || null,
-        organization: person.organization ? {
-          name: person.organization.name || '',
-          website: person.organization.website_url || ''
-        } : null
+        organization: {
+          name: person.organization?.name || '',
+          website: person.organization?.primary_domain || website
+        }
       }));
 
-    console.log(`Found ${contacts.length} contacts with emails out of ${data.people.length} total people`);
+    console.log(`Successfully enriched ${contacts.length} contacts with emails`);
 
     return {
       statusCode: 200,
@@ -130,8 +200,9 @@ exports.handler = async (event, context) => {
       body: JSON.stringify({
         success: true,
         contacts,
-        total: data.pagination?.total_entries || contacts.length,
-        creditsUsed: 1 // Apollo charges ~1 credit per search
+        total: searchData.people.length,
+        enriched: contacts.length,
+        creditsUsed: 1 + contacts.length // 1 for search + 1 per enrichment
       })
     };
 
@@ -142,8 +213,7 @@ exports.handler = async (event, context) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         success: false,
-        error: error.message || 'Failed to search contacts',
-        details: error.toString()
+        error: error.message || 'Failed to search contacts'
       })
     };
   }
