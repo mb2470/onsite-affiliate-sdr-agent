@@ -675,6 +675,49 @@ Talking Points: ${researchData.talkingPoints}`;
       setGeneratedEmail(personalizedEmail);
     }
   };
+
+  // Add this function after selectContact
+const sendViaGmail = () => {
+  if (!selectedContact || !generatedEmail) {
+    alert('Please select a contact and generate an email first');
+    return;
+  }
+
+  // Parse subject and body from generated email
+  const subjectMatch = generatedEmail.match(/Subject:\s*(.+)/i);
+  const subject = subjectMatch ? subjectMatch[1].trim() : 'Onsite Affiliate Introduction';
+  
+  // Get body (everything after "Subject: ...")
+  const bodyStart = generatedEmail.indexOf('\n', generatedEmail.indexOf('Subject:'));
+  const body = bodyStart > -1 ? generatedEmail.substring(bodyStart).trim() : generatedEmail;
+
+  // Create Gmail compose URL
+  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(selectedContact.email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  // Open Gmail in new tab
+  window.open(gmailUrl, '_blank');
+
+  // Mark lead as contacted
+  updateLeadStatus(selectedLead.id, 'contacted');
+
+  // Log sent email
+  const updatedLeads = leads.map(l => {
+    if (l.id === selectedLead.id) {
+      return {
+        ...l,
+        emails: [...(l.emails || []).map(e => 
+          e.timestamp === selectedLead.emails?.[selectedLead.emails.length - 1]?.timestamp 
+            ? { ...e, sent: true, sentAt: new Date().toISOString(), sentTo: selectedContact.email }
+            : e
+        )]
+      };
+    }
+    return l;
+  });
+  setLeads(updatedLeads);
+
+  alert(`✅ Opening Gmail to send to ${selectedContact.name}!\n\nLead marked as "Contacted"`);
+};
   
   // Update lead status (and sync to Google Sheets)
   const updateLeadStatus = (leadId, newStatus) => {
@@ -1125,12 +1168,12 @@ Talking Points: ${researchData.talkingPoints}`;
                       <p>
                         ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
                       </p>
-                      <button 
-                        className="copy-email-address-btn"
-                        onClick={() => navigator.clipboard.writeText(selectedContact.email)}
-                      >
-                        📋 Copy Email Address
-                      </button>
+button 
+  className="send-gmail-btn"
+  onClick={sendViaGmail}
+>
+  📧 Send via Gmail
+</button>
                     </div>
                   )}
                 </div>
