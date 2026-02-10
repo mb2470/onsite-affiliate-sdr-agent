@@ -41,7 +41,7 @@ function App() {
         body: JSON.stringify({
           action: 'read',
           spreadsheetId: sheetId,
-          range: 'Sheet1!A:G' // Read columns A-G (including Research and Catalog)
+          range: 'Sheet1!A:G' // Read columns A-G
         })
       });
 
@@ -55,21 +55,21 @@ function App() {
       // Skip header row
       const dataRows = rows.slice(1);
 
-const importedLeads = dataRows
-  .filter(row => row[0]) // Has website
-  .map((row, index) => ({
-    id: row[0], // Use website as ID
-    website: row[0] || '',
-    revenue: row[1] || 'Unknown',
-    source: row[2] || '',
-    description: row[3] || '',
-    status: row[4] || 'new', // Status from sheet (column E)
-    notes: row[5] || '', // Research notes from sheet (column F) ← NEW!
-    catalogInfo: row[6] || '', // Catalog info from sheet (column G) ← NEW!
-    lastContact: null,
-    emails: [],
-    rowIndex: index + 2 // Track which row this is (for writing back)
-  }));
+      const importedLeads = dataRows
+        .filter(row => row[0]) // Has website
+        .map((row, index) => ({
+          id: row[0],
+          website: row[0] || '',
+          revenue: row[1] || 'Unknown',
+          source: row[2] || '',
+          description: row[3] || '',
+          status: row[4] || 'new',
+          notes: row[5] || '',
+          catalogSize: row[6] || '',
+          lastContact: null,
+          emails: [],
+          rowIndex: index + 2
+        }));
 
       setLeads(importedLeads);
       setLastSync(new Date());
@@ -94,13 +94,12 @@ const importedLeads = dataRows
         body: JSON.stringify({
           action: 'write',
           spreadsheetId: spreadsheetId,
-          range: `Sheet1!E${lead.rowIndex}`, // Update status column (E) for this row
+          range: `Sheet1!E${lead.rowIndex}`,
           values: [[newStatus]]
         })
       });
     } catch (error) {
       console.error('Error syncing to Google Sheets:', error);
-      // Don't alert - just log it, local state is still updated
     }
   };
 
@@ -112,7 +111,7 @@ const importedLeads = dataRows
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target.result;
-      const rows = text.split('\n').slice(1); // Skip header
+      const rows = text.split('\n').slice(1);
       
       const importedLeads = rows
         .filter(row => row.trim())
@@ -197,7 +196,6 @@ Then the email body.`;
       const emailContent = await callClaudeAPI(prompt, systemPrompt);
       setGeneratedEmail(emailContent);
 
-      // Add to lead's email history
       const updatedLeads = leads.map(l => {
         if (l.id === lead.id) {
           return {
@@ -222,14 +220,14 @@ Then the email body.`;
     }
   };
 
- // Research company with AI
-const researchCompany = async (lead) => {
-  setIsGenerating(true);
-  
-  try {
-    const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs.`;
+  // Research company with AI
+  const researchCompany = async (lead) => {
+    setIsGenerating(true);
     
-    const prompt = `Research this ecommerce company for B2B sales outreach:
+    try {
+      const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs.`;
+      
+      const prompt = `Research this ecommerce company for B2B sales outreach:
 
 Company: ${lead.website}
 Revenue: ${lead.revenue}
@@ -245,108 +243,257 @@ Provide:
 
 Keep it concise and actionable.`;
 
-    const research = await callClaudeAPI(prompt, systemPrompt);
-    
-    const updatedLeads = leads.map(l => {
-      if (l.id === lead.id) {
-        return { ...l, notes: research };
-      }
-      return l;
-    });
-    setLeads(updatedLeads);
-    setSelectedLead({ ...lead, notes: research });
+      const research = await callClaudeAPI(prompt, systemPrompt);
+      
+      const updatedLeads = leads.map(l => {
+        if (l.id === lead.id) {
+          return { ...l, notes: research };
+        }
+        return l;
+      });
+      setLeads(updatedLeads);
+      setSelectedLead({ ...lead, notes: research });
 
-    // Write research back to Google Sheets (Column F)
-    if (spreadsheetId && lead.rowIndex) {
-      try {
-        await fetch('/.netlify/functions/sheets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'write',
-            spreadsheetId: spreadsheetId,
-            range: `Sheet1!F${lead.rowIndex}`,
-            values: [[research]]
-          })
-        });
-        console.log('Research saved to Google Sheets');
-      } catch (error) {
-        console.error('Error saving research to Sheets:', error);
+      // Write research back to Google Sheets (Column F)
+      if (spreadsheetId && lead.rowIndex) {
+        try {
+          await fetch('/.netlify/functions/sheets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'write',
+              spreadsheetId: spreadsheetId,
+              range: `Sheet1!F${lead.rowIndex}`,
+              values: [[research]]
+            })
+          });
+          console.log('Research saved to Google Sheets');
+        } catch (error) {
+          console.error('Error saving research to Sheets:', error);
+        }
       }
+
+    } catch (error) {
+      console.error('Error researching company:', error);
+    } finally {
+      setIsGenerating(false);
     }
-
-  } catch (error) {
-    console.error('Error researching company:', error);
-  } finally {
-    setIsGenerating(false);
-  }
-};
+  };
 
   // Estimate product catalog size
-const estimateCatalogSize = async (lead) => {
-  setIsAnalyzingCatalog(true);
-  setCatalogAnalysis(null);
-  
-  try {
-    const response = await fetch('/.netlify/functions/catalog-estimator', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        website: lead.website
-      })
-    });
+  const estimateCatalogSize = async (lead) => {
+    setIsAnalyzingCatalog(true);
+    setCatalogAnalysis(null);
+    
+    try {
+      const response = await fetch('/.netlify/functions/catalog-estimator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          website: lead.website
+        })
+      });
 
-    if (!response.ok) {
-      throw new Error('Failed to estimate catalog size');
+      if (!response.ok) {
+        throw new Error('Failed to estimate catalog size');
+      }
+
+      const analysis = await response.json();
+      setCatalogAnalysis(analysis);
+      
+      const updatedLeads = leads.map(l => {
+        if (l.id === lead.id) {
+          return { 
+            ...l, 
+            catalogSize: analysis.estimatedProducts,
+            platform: analysis.platform,
+            catalogAnalysis: analysis
+          };
+        }
+        return l;
+      });
+      setLeads(updatedLeads);
+
+      // Write catalog info back to Google Sheets (Column G)
+      if (spreadsheetId && lead.rowIndex) {
+        try {
+          const catalogInfo = `${analysis.platform} | ${analysis.estimatedProducts} products`;
+          await fetch('/.netlify/functions/sheets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'write',
+              spreadsheetId: spreadsheetId,
+              range: `Sheet1!G${lead.rowIndex}`,
+              values: [[catalogInfo]]
+            })
+          });
+          console.log('Catalog info saved to Google Sheets');
+        } catch (error) {
+          console.error('Error saving catalog to Sheets:', error);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error estimating catalog:', error);
+      setCatalogAnalysis({
+        error: true,
+        message: error.message
+      });
+    } finally {
+      setIsAnalyzingCatalog(false);
+    }
+  };
+
+  // Enrich lead - automatically fill all columns from website
+  const enrichLead = async (lead) => {
+    if (!spreadsheetId || !lead.rowIndex) {
+      alert('Google Sheets must be connected to enrich leads');
+      return;
     }
 
-    const analysis = await response.json();
-    setCatalogAnalysis(analysis);
+    setIsGenerating(true);
     
-    // Update lead with catalog info
-    const updatedLeads = leads.map(l => {
-      if (l.id === lead.id) {
-        return { 
-          ...l, 
-          catalogSize: analysis.estimatedProducts,
-          platform: analysis.platform,
-          catalogAnalysis: analysis
-        };
-      }
-      return l;
-    });
-    setLeads(updatedLeads);
+    try {
+      console.log(`Enriching lead: ${lead.website}`);
 
-    // Write catalog info back to Google Sheets (Column G)
-    if (spreadsheetId && lead.rowIndex) {
+      const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs. 
+      
+IMPORTANT: Your response must be valid JSON in this exact format:
+{
+  "revenue": "estimated revenue range like $10M-$50M or $1B+",
+  "description": "brief 1-sentence description of what they sell",
+  "industry": "industry/vertical",
+  "platform": "likely ecommerce platform",
+  "companySize": "estimated employee count",
+  "decisionMakers": "titles to target",
+  "painPoints": "pain points related to creator UGC",
+  "talkingPoints": "relevant talking points for outreach"
+}
+
+Only return the JSON, no other text.`;
+      
+      const prompt = `Research this ecommerce company: ${lead.website}
+
+Provide all information in JSON format as specified.`;
+
+      const researchText = await callClaudeAPI(prompt, systemPrompt);
+      
+      let researchData;
       try {
-        const catalogInfo = `${analysis.platform} | ${analysis.estimatedProducts} products`;
-        await fetch('/.netlify/functions/sheets', {
+        const cleanJson = researchText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        researchData = JSON.parse(cleanJson);
+      } catch (parseError) {
+        console.error('Failed to parse AI response:', researchText);
+        throw new Error('AI returned invalid JSON. Raw response: ' + researchText.substring(0, 200));
+      }
+
+      // Get catalog size
+      let catalogInfo = 'Unknown';
+      let platform = 'Unknown';
+      
+      try {
+        const catalogResponse = await fetch('/.netlify/functions/catalog-estimator', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'write',
-            spreadsheetId: spreadsheetId,
-            range: `Sheet1!G${lead.rowIndex}`,
-            values: [[catalogInfo]]
-          })
+          body: JSON.stringify({ website: lead.website })
         });
-        console.log('Catalog info saved to Google Sheets');
-      } catch (error) {
-        console.error('Error saving catalog to Sheets:', error);
+
+        if (catalogResponse.ok) {
+          const catalogData = await catalogResponse.json();
+          platform = catalogData.platform || 'Unknown';
+          const productCount = catalogData.estimatedProducts || 'Unknown';
+          catalogInfo = `${platform} | ${productCount} products`;
+        }
+      } catch (catalogError) {
+        console.error('Catalog estimation failed:', catalogError);
+      }
+
+      const fullResearch = `Industry: ${researchData.industry}
+Platform: ${platform}
+Company Size: ${researchData.companySize}
+Decision Makers: ${researchData.decisionMakers}
+Pain Points: ${researchData.painPoints}
+Talking Points: ${researchData.talkingPoints}`;
+
+      const rowData = [
+        lead.website,
+        researchData.revenue,
+        'Auto-enriched',
+        researchData.description,
+        'new',
+        fullResearch,
+        catalogInfo
+      ];
+
+      await fetch('/.netlify/functions/sheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'write',
+          spreadsheetId: spreadsheetId,
+          range: `Sheet1!A${lead.rowIndex}:G${lead.rowIndex}`,
+          values: [rowData]
+        })
+      });
+
+      const updatedLeads = leads.map(l => {
+        if (l.id === lead.id) {
+          return {
+            ...l,
+            revenue: researchData.revenue,
+            source: 'Auto-enriched',
+            description: researchData.description,
+            status: 'new',
+            notes: fullResearch,
+            catalogSize: catalogInfo,
+            platform: platform
+          };
+        }
+        return l;
+      });
+      
+      setLeads(updatedLeads);
+      setSelectedLead(updatedLeads.find(l => l.id === lead.id));
+
+      alert(`✅ Successfully enriched ${lead.website}!`);
+
+    } catch (error) {
+      console.error('Error enriching lead:', error);
+      alert(`❌ Failed to enrich lead: ${error.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Bulk enrich all leads that are missing data
+  const bulkEnrichLeads = async () => {
+    const unenrichedLeads = leads.filter(lead => 
+      !lead.revenue || lead.revenue === 'Unknown' || !lead.description
+    );
+
+    if (unenrichedLeads.length === 0) {
+      alert('All leads are already enriched!');
+      return;
+    }
+
+    if (!confirm(`Enrich ${unenrichedLeads.length} leads? This will use AI credits.`)) {
+      return;
+    }
+
+    for (let i = 0; i < unenrichedLeads.length; i++) {
+      const lead = unenrichedLeads[i];
+      console.log(`Enriching ${i + 1}/${unenrichedLeads.length}: ${lead.website}`);
+      
+      await enrichLead(lead);
+      
+      if (i < unenrichedLeads.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
-  } catch (error) {
-    console.error('Error estimating catalog:', error);
-    setCatalogAnalysis({
-      error: true,
-      message: error.message
-    });
-  } finally {
-    setIsAnalyzingCatalog(false);
-  }
-};
+    alert(`✅ Enriched ${unenrichedLeads.length} leads!`);
+  };
   
   // Update lead status (and sync to Google Sheets)
   const updateLeadStatus = (leadId, newStatus) => {
@@ -358,7 +505,6 @@ const estimateCatalogSize = async (lead) => {
           lastContact: newStatus !== 'new' ? new Date().toISOString() : lead.lastContact
         };
         
-        // Sync status back to Google Sheets
         syncStatusToSheet(updated, newStatus);
         
         return updated;
@@ -442,6 +588,13 @@ const estimateCatalogSize = async (lead) => {
                       style={{ display: 'none' }}
                     />
                   </label>
+                  <button 
+                    className="bulk-enrich-btn secondary"
+                    onClick={bulkEnrichLeads}
+                    disabled={isGenerating || leads.length === 0}
+                  >
+                    🔬 Bulk Enrich All
+                  </button>
                 </div>
               </div>
 
@@ -474,7 +627,7 @@ const estimateCatalogSize = async (lead) => {
                       <li>Make sure you've shared the sheet with your service account email</li>
                       <li>Paste the Spreadsheet ID above</li>
                     </ol>
-                    <p className="tip">💡 Required columns: Website, Revenue, Source, Description, Status</p>
+                    <p className="tip">💡 Required columns: Website, Revenue, Source, Description, Status, Research Notes, Catalog Size</p>
                     <p className="tip">🔒 This uses Google Sheets API with service account authentication - fully private!</p>
                   </div>
                 </div>
@@ -594,69 +747,81 @@ const estimateCatalogSize = async (lead) => {
                     <pre>{selectedLead.notes}</pre>
                   </div>
                 )}
-                {/* Catalog Size Estimator */}
-<div className="catalog-estimator">
-  <button 
-    className="research-btn"
-    onClick={() => estimateCatalogSize(selectedLead)}
-    disabled={isAnalyzingCatalog}
-  >
-    {isAnalyzingCatalog ? '🛍️ Analyzing...' : '🛍️ Estimate Catalog Size'}
-  </button>
-  
-  {catalogAnalysis && !catalogAnalysis.error && (
-    <div className="catalog-results">
-      <h3>📊 Product Catalog Analysis</h3>
-      <div className="catalog-grid">
-        <div className="catalog-stat">
-          <span className="catalog-label">Platform</span>
-          <span className="catalog-value">{catalogAnalysis.platform}</span>
-        </div>
-        <div className="catalog-stat">
-          <span className="catalog-label">Estimated Products</span>
-          <span className="catalog-value">{catalogAnalysis.estimatedProducts}</span>
-        </div>
-        {catalogAnalysis.categories > 0 && (
-          <div className="catalog-stat">
-            <span className="catalog-label">Categories</span>
-            <span className="catalog-value">{catalogAnalysis.categories}</span>
-          </div>
-        )}
-        {catalogAnalysis.productUrlPattern && (
-          <div className="catalog-stat full-width">
-            <span className="catalog-label">URL Pattern</span>
-            <span className="catalog-value">{catalogAnalysis.productUrlPattern}</span>
-          </div>
-        )}
-      </div>
-      
-      <div className={`qualification-badge ${catalogAnalysis.confidence}`}>
-        <strong>Qualification:</strong> {catalogAnalysis.qualification}
-      </div>
-      
-      {catalogAnalysis.details && catalogAnalysis.details.length > 0 && (
-        <div className="catalog-details">
-          <p><strong>Analysis Details:</strong></p>
-          <ul>
-            {catalogAnalysis.details.map((detail, idx) => (
-              <li key={idx}>{detail}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  )}
-  
-  {catalogAnalysis && catalogAnalysis.error && (
-    <div className="catalog-error">
-      <p>⚠️ Could not analyze catalog: {catalogAnalysis.message}</p>
-      <p>The website may be blocking crawlers or not be an ecommerce site.</p>
-    </div>
-  )}
-</div>
+
+                <div className="catalog-estimator">
+                  <button 
+                    className="research-btn"
+                    onClick={() => estimateCatalogSize(selectedLead)}
+                    disabled={isAnalyzingCatalog}
+                  >
+                    {isAnalyzingCatalog ? '🛍️ Analyzing...' : '🛍️ Estimate Catalog Size'}
+                  </button>
+                  
+                  {catalogAnalysis && !catalogAnalysis.error && (
+                    <div className="catalog-results">
+                      <h3>📊 Product Catalog Analysis</h3>
+                      <div className="catalog-grid">
+                        <div className="catalog-stat">
+                          <span className="catalog-label">Platform</span>
+                          <span className="catalog-value">{catalogAnalysis.platform}</span>
+                        </div>
+                        <div className="catalog-stat">
+                          <span className="catalog-label">Estimated Products</span>
+                          <span className="catalog-value">{catalogAnalysis.estimatedProducts}</span>
+                        </div>
+                        {catalogAnalysis.categories > 0 && (
+                          <div className="catalog-stat">
+                            <span className="catalog-label">Categories</span>
+                            <span className="catalog-value">{catalogAnalysis.categories}</span>
+                          </div>
+                        )}
+                        {catalogAnalysis.productUrlPattern && (
+                          <div className="catalog-stat full-width">
+                            <span className="catalog-label">URL Pattern</span>
+                            <span className="catalog-value">{catalogAnalysis.productUrlPattern}</span>
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div className={`qualification-badge ${catalogAnalysis.confidence}`}>
+                        <strong>Qualification:</strong> {catalogAnalysis.qualification}
+                      </div>
+                      
+                      {catalogAnalysis.details && catalogAnalysis.details.length > 0 && (
+                        <div className="catalog-details">
+                          <p><strong>Analysis Details:</strong></p>
+                          <ul>
+                            {catalogAnalysis.details.map((detail, idx) => (
+                              <li key={idx}>{detail}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {catalogAnalysis && catalogAnalysis.error && (
+                    <div className="catalog-error">
+                      <p>⚠️ Could not analyze catalog: {catalogAnalysis.message}</p>
+                      <p>The website may be blocking crawlers or not be an ecommerce site.</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="enrich-section">
+                  <button 
+                    className="enrich-btn primary-btn"
+                    onClick={() => enrichLead(selectedLead)}
+                    disabled={isGenerating || isAnalyzingCatalog}
+                  >
+                    {isGenerating ? '🔬 Enriching...' : '🔬 Enrich Lead (Auto-fill All Data)'}
+                  </button>
+                  <p className="enrich-description">
+                    Automatically research and fill in Revenue, Description, Research Notes, and Catalog Size
+                  </p>
+                </div>
               </div>
 
-              
               <div className="email-actions">
                 <h3>Generate Personalized Email</h3>
                 <div className="button-group">
