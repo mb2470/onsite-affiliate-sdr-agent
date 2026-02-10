@@ -1,113 +1,152 @@
-// Add this new state variable near the top with other useState declarations
-const [catalogAnalysis, setCatalogAnalysis] = useState(null);
-const [isAnalyzingCatalog, setIsAnalyzingCatalog] = useState(false);
+// Add this state variable with the other useState declarations (around line 16):
+const [contacts, setContacts] = useState([]);
+const [isLoadingContacts, setIsLoadingContacts] = useState(false);
+const [selectedContact, setSelectedContact] = useState(null);
 
-// Add this new function after the researchCompany function
-const estimateCatalogSize = async (lead) => {
-  setIsAnalyzingCatalog(true);
-  setCatalogAnalysis(null);
+// Add this function after the enrichLead function (around line 500):
+
+// Find contacts using Apollo.io
+const findContacts = async (lead) => {
+  setIsLoadingContacts(true);
+  setContacts([]);
   
   try {
-    const response = await fetch('/.netlify/functions/catalog-estimator', {
+    console.log(`Finding contacts for: ${lead.website}`);
+
+    const response = await fetch('/.netlify/functions/apollo-contacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        website: lead.website
+        website: lead.website,
+        titles: [
+          'VP Digital Marketing',
+          'Director Digital Marketing',
+          'VP Marketing',
+          'Director Marketing',
+          'VP Ecommerce',
+          'Director Ecommerce',
+          'CMO',
+          'Chief Marketing Officer',
+          'Head of Digital',
+          'Head of Ecommerce'
+        ]
       })
     });
 
     if (!response.ok) {
-      throw new Error('Failed to estimate catalog size');
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to find contacts');
     }
 
-    const analysis = await response.json();
-    setCatalogAnalysis(analysis);
+    const data = await response.json();
     
-    // Optionally update lead with catalog info
-    const updatedLeads = leads.map(l => {
-      if (l.id === lead.id) {
-        return { 
-          ...l, 
-          catalogSize: analysis.estimatedProducts,
-          platform: analysis.platform,
-          catalogAnalysis: analysis
-        };
-      }
-      return l;
-    });
-    setLeads(updatedLeads);
+    if (data.contacts && data.contacts.length > 0) {
+      setContacts(data.contacts);
+      console.log(`Found ${data.contacts.length} contacts`);
+    } else {
+      alert('No contacts found with verified emails. Try a different search or check Apollo.io credits.');
+    }
 
   } catch (error) {
-    console.error('Error estimating catalog:', error);
-    setCatalogAnalysis({
-      error: true,
-      message: error.message
-    });
+    console.error('Error finding contacts:', error);
+    alert(`Failed to find contacts: ${error.message}. Make sure your Apollo API key is set in Netlify.`);
   } finally {
-    setIsAnalyzingCatalog(false);
+    setIsLoadingContacts(false);
   }
 };
 
-// Add this UI component in the email generator section, after the research button
-// Insert this in the lead-details div, after the research section:
+// Select a contact and personalize the email
+const selectContact = (contact) => {
+  setSelectedContact(contact);
+  
+  // Personalize the generated email with contact's name
+  if (generatedEmail) {
+    const personalizedEmail = generatedEmail.replace(
+      /Hi there|Hello|Greetings/gi,
+      `Hi ${contact.firstName || contact.name.split(' ')[0]}`
+    );
+    setGeneratedEmail(personalizedEmail);
+  }
+};
 
-{/* Catalog Size Estimator - NEW */}
-<div className="catalog-estimator">
-  <button 
-    className="research-btn"
-    onClick={() => estimateCatalogSize(selectedLead)}
-    disabled={isAnalyzingCatalog}
-  >
-    {isAnalyzingCatalog ? '🛍️ Analyzing...' : '🛍️ Estimate Catalog Size'}
-  </button>
-  
-  {catalogAnalysis && !catalogAnalysis.error && (
-    <div className="catalog-results">
-      <h3>📊 Product Catalog Analysis</h3>
-      <div className="catalog-grid">
-        <div className="catalog-stat">
-          <span className="catalog-label">Platform</span>
-          <span className="catalog-value">{catalogAnalysis.platform}</span>
-        </div>
-        <div className="catalog-stat">
-          <span className="catalog-label">Estimated Products</span>
-          <span className="catalog-value">{catalogAnalysis.estimatedProducts}</span>
-        </div>
-        {catalogAnalysis.categories > 0 && (
-          <div className="catalog-stat">
-            <span className="catalog-label">Categories</span>
-            <span className="catalog-value">{catalogAnalysis.categories}</span>
-          </div>
-        )}
-        {catalogAnalysis.productUrlPattern && (
-          <div className="catalog-stat full-width">
-            <span className="catalog-label">URL Pattern</span>
-            <span className="catalog-value">{catalogAnalysis.productUrlPattern}</span>
-          </div>
-        )}
-      </div>
-      
-      <div className={`qualification-badge ${catalogAnalysis.confidence}`}>
-        <strong>Qualification:</strong> {catalogAnalysis.qualification}
-      </div>
-      
-      {catalogAnalysis.details && catalogAnalysis.details.length > 0 && (
-        <div className="catalog-details">
-          <p><strong>Analysis Details:</strong></p>
-          <ul>
-            {catalogAnalysis.details.map((detail, idx) => (
-              <li key={idx}>{detail}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+// ADD THIS UI SECTION in the email-generator section, after the generated email block:
+// Insert after the closing </div> of generated-email (around line 850)
+
+{generatedEmail && (
+  <div className="contact-finder">
+    <div className="contact-finder-header">
+      <h3>🎯 Find Decision Maker</h3>
+      <button 
+        className="find-contacts-btn"
+        onClick={() => findContacts(selectedLead)}
+        disabled={isLoadingContacts}
+      >
+        {isLoadingContacts ? '🔍 Searching...' : '🔍 Find Contacts (Apollo.io)'}
+      </button>
     </div>
-  )}
-  
-  {catalogAnalysis && catalogAnalysis.error && (
-    <div className="catalog-error">
-      <p>⚠️ Could not analyze catalog: {catalogAnalysis.message}</p>
-      <p>The website may be blocking crawlers or not be an ecommerce site.</p>
-    </div>
-  )}
-</div>
+
+    {contacts.length > 0 && (
+      <div className="contacts-list">
+        <p className="contacts-count">Found {contacts.length} decision makers:</p>
+        {contacts.map((contact) => (
+          <div 
+            key={contact.id} 
+            className={`contact-card ${selectedContact?.id === contact.id ? 'selected' : ''}`}
+          >
+            <div className="contact-info">
+              {contact.photoUrl && (
+                <img 
+                  src={contact.photoUrl} 
+                  alt={contact.name}
+                  className="contact-photo"
+                />
+              )}
+              <div className="contact-details">
+                <h4>{contact.name}</h4>
+                <p className="contact-title">{contact.title}</p>
+                <div className="contact-meta">
+                  <span className="contact-email">
+                    ✉️ {contact.email}
+                    {contact.emailStatus === 'verified' && (
+                      <span className="verified-badge">✓ Verified</span>
+                    )}
+                  </span>
+                  {contact.linkedinUrl && (
+                    <a 
+                      href={contact.linkedinUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="linkedin-link"
+                    >
+                      🔗 LinkedIn
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+            <button 
+              className="select-contact-btn"
+              onClick={() => selectContact(contact)}
+            >
+              {selectedContact?.id === contact.id ? '✓ Selected' : 'Select'}
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {selectedContact && (
+      <div className="selected-contact-banner">
+        <p>
+          ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
+        </p>
+        <button 
+          className="copy-email-address-btn"
+          onClick={() => navigator.clipboard.writeText(selectedContact.email)}
+        >
+          📋 Copy Email Address
+        </button>
+      </div>
+    )}
+  </div>
+)}
