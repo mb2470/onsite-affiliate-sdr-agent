@@ -157,12 +157,12 @@ function App() {
   };
 
   // Generate personalized email with AI (BULLETPROOF VERSION)
-  const generateEmail = async (lead, emailType = 'initial') => {
-    setIsGenerating(true);
-    setGeneratedEmail('');
+const generateEmail = async (lead, emailType = 'initial') => {
+  setIsGenerating(true);
+  setGeneratedEmail('');
 
-    try {
-      const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
+  try {
+    const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
 a revolutionary AI-powered platform that helps ecommerce brands monetize creator UGC content on their product pages.
 
 CRITICAL WRITING INSTRUCTIONS:
@@ -180,41 +180,41 @@ TARGET BUYER PERSONAS (based on ICP):
 Role: Managing creator relationships, sourcing UGC, running influencer campaigns
 Budget: Creator commissions, affiliate payouts, influencer tools
 Pain Points:
-- Paying creators $500-2k per post with 48-hour shelf life on social
-- Can't prove ROI beyond vanity metrics (likes, views)
-- Manual process to get creator content onto website
-- Content disappears after social posts - wasted investment
+• Paying creators $500-2k per post with 48-hour shelf life on social
+• Can't prove ROI beyond vanity metrics (likes, views)
+• Manual process to get creator content onto website
+• Content disappears after social posts - wasted investment
 Hooks: Extend content value, prove incremental sales, automate onsite UGC
 
 2. VP / DIRECTOR OF E-COMMERCE (TECHNICAL BUYER)
 Role: Conversion rate optimization, site performance, PDP engagement
 Budget: E-commerce tech stack, CRO tools
 Pain Points:
-- "Leaky bucket" - traffic goes to Instagram/TikTok, never comes back
-- High bounce rates on product pages
-- Need authentic content but studio photography is expensive
-- Concerned about site speed impacts
+• "Leaky bucket" - traffic goes to Instagram/TikTok, never comes back
+• High bounce rates on product pages
+• Need authentic content but studio photography is expensive
+• Concerned about site speed impacts
 Hooks: Keep users onsite, increase time on page, no site speed impact
 
 3. DIRECTOR OF BRAND MARKETING / HEAD OF SOCIAL MEDIA (CONTENT BUYER)
 Role: Content production, social strategy, brand authenticity
 Budget: Content creation, production costs
 Pain Points:
-- Content fatigue - need high volume of fresh assets
-- Studio content performs poorly vs. authentic UGC
-- Can't scale content across entire catalog (too expensive)
-- Already paying for influencer content, not maximizing value
+• Content fatigue - need high volume of fresh assets
+• Studio content performs poorly vs. authentic UGC
+• Can't scale content across entire catalog (too expensive)
+• Already paying for influencer content, not maximizing value
 Hooks: Repurpose social content, scale across catalog, authentic UGC
 
 4. VP OF GROWTH / DIRECTOR OF PERFORMANCE MARKETING (ROI BUYER)
 Role: Lower CAC, improve ROAS, scale profitable channels
 Budget: Paid media, ad creative, performance marketing
 Pain Points:
-- UGC ads outperform studio ads but can't get enough content
-- Need to prove incremental revenue (not just attributed)
-- Testing new channels but need measurable results
-- Attribution challenges with influencer marketing
-Hooks: Guaranteed incrementality, 6.2x ROCS case study, performance-based pricing
+• UGC ads outperform studio ads but can't get enough content
+• Need to prove incremental revenue (not just attributed)
+• Testing new channels but need measurable results
+• Attribution challenges with influencer marketing
+Hooks: Guaranteed incrementality, Amazon's model, performance-based pricing
 
 VALUE PROPOSITIONS (Choose 2-3 most relevant):
 ✓ Guarantees incrementality (only pay for actual sales lift)
@@ -224,7 +224,21 @@ VALUE PROPOSITIONS (Choose 2-3 most relevant):
 ✓ Extends creator content value - lives permanently on PDPs
 ✓ Clear attribution - prove direct ROI of influencer spend
 ✓ 3-month pilot to prove ROI before commitment
-✓ Case study: Brand with $141 AOV saw 6.2x ROCS
+
+SOCIAL PROOF TO USE (CRITICAL - USE AMAZON, NOT FAKE CASE STUDIES):
+✓ Amazon's Onsite Associates program as validation:
+  - "Same model Amazon uses for their Onsite Associates program"
+  - "Think Amazon Onsite Associates, but for creator content on your PDPs"
+  - "Amazon proved onsite commissions drive incremental revenue - we bring that to D2C brands"
+  - "You know Amazon's Onsite program - we're the white-label version for brands"
+  - Your ICP will instantly recognize and trust Amazon's program
+  - Amazon's model is proven - drives massive incremental sales
+
+IMPORTANT - DO NOT USE:
+✗ Made-up case studies (e.g., "Brand saw 6.2x ROCS")
+✗ Fake customer results (we don't have customers yet)
+✗ Fabricated ROI numbers
+✗ Testimonials from companies
 
 INTEGRATION POINTS (for technical buyers):
 ✓ Direct integration with Shopify, Salesforce Commerce Cloud
@@ -241,6 +255,7 @@ Beauty: "tutorials", "application demos", "before/after content"
 INDUSTRY CONTEXT:
 Target companies: J.Crew, Backcountry, Wayfair, Under Armour, Meyer Cookware, Allbirds
 They likely have: Active social presence, affiliate programs (Impact/Rakuten), creator tools (CreatorIQ/Grin)
+Your ICP will recognize Amazon's Onsite Associates program as the gold standard
 
 EMAIL STRUCTURE:
 Subject: [Hook related to specific pain point - under 50 chars]
@@ -249,9 +264,9 @@ Hi [Name],
 
 [Opening line - reference specific pain point they face]
 
-[1-2 sentences on how Onsite Affiliate solves it]
+[1-2 sentences on how Onsite Affiliate solves it - reference Amazon's model]
 
-[Social proof - case study or relevant example]
+[Social proof - Amazon Onsite Associates as validation]
 
 [CTA - usually 15-min demo or quick chat]
 
@@ -263,11 +278,13 @@ QUALITY CHECKLIST:
 ✓ Opening line sounds like I understand their business?
 ✓ Did I reference their actual industry/products?
 ✓ Is the tone conversational (not salesy)?
+✓ Used Amazon Onsite Associates as social proof?
+✓ NO fake case studies or customer results?
 ✓ Under 150 words total?
 ✓ Clear next step (CTA)?
 ✓ Would I respond to this email?`;
 
-      const prompt = `Write a ${emailType} outreach email for this lead:
+    const prompt = `Write a ${emailType} outreach email for this lead:
 
 Company: ${lead.website}
 Industry: ${lead.notes ? lead.notes.match(/Industry[:\s]+([^\n]+)/)?.[1] || 'eCommerce' : 'eCommerce'}
@@ -280,7 +297,7 @@ ${lead.notes ? `Research Insights:\n${lead.notes.substring(0, 500)}` : ''}
 ${emailType === 'followup' ? `
 FOLLOW-UP EMAIL INSTRUCTIONS:
 - Reference that you reached out before
-- Add a new angle or insight (new case study, industry trend, specific pain point)
+- Add a new angle or insight (mention Amazon's success, industry trend, specific pain point)
 - Create curiosity without being pushy
 - Keep it even shorter (100 words max)
 ` : ''}
@@ -299,45 +316,53 @@ IMPORTANT REQUIREMENTS:
 2. Reference their SPECIFIC industry (${lead.description || 'their products'})
 3. Lead with ONE specific pain point most relevant to their likely buyer persona
 4. Use conversational language (write like a human, not a robot)
-5. Include ONE specific number/case study (6.2x ROCS, $141 AOV, etc.)
+5. Reference Amazon's Onsite Associates program as social proof (NOT fake case studies)
 6. Keep under 150 words total
 7. End with clear CTA (usually "Worth a 15-min chat?")
+
+CRITICAL - SOCIAL PROOF:
+- Use Amazon Onsite Associates program as validation
+- Your ICP knows this program and trusts it
+- DO NOT make up customer case studies or ROI numbers
+- Amazon's model is the proof point
 
 DO NOT:
 - Use generic phrases like "I hope this email finds you well"
 - Sound salesy or pushy
 - Use buzzwords ("synergy", "leverage", "paradigm shift")
+- Make up fake case studies or customer results
+- Use fabricated ROI numbers
 - Write long paragraphs
 - Be overly formal
 
 Write the email now:`;
 
-      const emailContent = await callClaudeAPI(prompt, systemPrompt);
-      setGeneratedEmail(emailContent);
+    const emailContent = await callClaudeAPI(prompt, systemPrompt);
+    setGeneratedEmail(emailContent);
 
-      const updatedLeads = leads.map(l => {
-        if (l.id === lead.id) {
-          return {
-            ...l,
-            emails: [...(l.emails || []), {
-              type: emailType,
-              content: emailContent,
-              timestamp: new Date().toISOString(),
-              sent: false
-            }]
-          };
-        }
-        return l;
-      });
-      setLeads(updatedLeads);
+    const updatedLeads = leads.map(l => {
+      if (l.id === lead.id) {
+        return {
+          ...l,
+          emails: [...(l.emails || []), {
+            type: emailType,
+            content: emailContent,
+            timestamp: new Date().toISOString(),
+            sent: false
+          }]
+        };
+      }
+      return l;
+    });
+    setLeads(updatedLeads);
 
-    } catch (error) {
-      console.error('Error generating email:', error);
-      setGeneratedEmail(`Error: ${error.message}. Please make sure your Anthropic API key is set in Netlify environment variables.`);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+  } catch (error) {
+    console.error('Error generating email:', error);
+    setGeneratedEmail(`Error: ${error.message}. Please make sure your Anthropic API key is set in Netlify environment variables.`);
+  } finally {
+    setIsGenerating(false);
+  }
+};
 
   // Research company with AI (BULLETPROOF VERSION)
   const researchCompany = async (lead) => {
