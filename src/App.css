@@ -1110,3 +1110,213 @@ body {
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* Apollo.io Contact Finder Styles - Add to App.css */
+
+.contact-finder {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: 10px;
+  border: 2px solid var(--border);
+}
+
+.contact-finder-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.contact-finder-header h3 {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.find-contacts-btn {
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.find-contacts-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(245, 158, 11, 0.3);
+}
+
+.find-contacts-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.contacts-list {
+  margin-top: 1rem;
+}
+
+.contacts-count {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+.contact-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: var(--bg-main);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  transition: all 0.2s ease;
+}
+
+.contact-card:hover {
+  border-color: var(--primary);
+  transform: translateX(4px);
+}
+
+.contact-card.selected {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.contact-info {
+  display: flex;
+  gap: 1rem;
+  flex: 1;
+  align-items: center;
+}
+
+.contact-photo {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border);
+}
+
+.contact-details {
+  flex: 1;
+}
+
+.contact-details h4 {
+  font-size: 1rem;
+  color: var(--text-primary);
+  margin: 0 0 0.25rem 0;
+}
+
+.contact-title {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.5rem 0;
+  font-style: italic;
+}
+
+.contact-meta {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.contact-email {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.verified-badge {
+  padding: 0.2rem 0.5rem;
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--success);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.linkedin-link {
+  font-size: 0.85rem;
+  color: #0077b5;
+  text-decoration: none;
+  transition: opacity 0.2s;
+}
+
+.linkedin-link:hover {
+  opacity: 0.7;
+  text-decoration: underline;
+}
+
+.select-contact-btn {
+  padding: 0.5rem 1.5rem;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.select-contact-btn:hover {
+  background: #5b21b6;
+  transform: scale(1.05);
+}
+
+.contact-card.selected .select-contact-btn {
+  background: var(--success);
+}
+
+.selected-contact-banner {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(5, 150, 105, 0.1));
+  border: 2px solid var(--success);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.selected-contact-banner p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.selected-contact-banner strong {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.copy-email-address-btn {
+  padding: 0.5rem 1rem;
+  background: var(--success);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.copy-email-address-btn:hover {
+  background: #059669;
+  transform: translateY(-1px);
+}
