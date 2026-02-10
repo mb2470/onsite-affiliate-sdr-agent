@@ -20,16 +20,34 @@ exports.handler = async (event, context) => {
       throw new Error('Website is required');
     }
 
-    // Default titles to search for if not provided
+    // Default titles to search for if not provided (based on ICP)
     const searchTitles = titles || [
-      'VP Digital Marketing',
-      'Director Digital Marketing',
-      'VP Marketing',
-      'Director Marketing',
+      // Primary: Influencer/Affiliate Leaders
+      'Director of Influencer Marketing',
+      'Head of Partnerships',
+      'Senior Manager of Affiliate Marketing',
+      'Director of Brand Advocacy',
+      'VP Influencer Marketing',
+      'Manager Influencer Marketing',
+      
+      // Secondary: E-Commerce Leaders
+      'VP of E-Commerce',
+      'Director of E-Commerce',
+      'Head of Digital Product',
       'VP Ecommerce',
       'Director Ecommerce',
-      'CMO',
-      'Head of Digital'
+      
+      // Tertiary: Brand & Social Leaders
+      'Director of Brand Marketing',
+      'Head of Social Media',
+      'Director of Content Strategy',
+      'VP Brand Marketing',
+      
+      // Quaternary: Growth/Performance Leaders
+      'VP of Growth',
+      'Director of Performance Marketing',
+      'Head of User Acquisition',
+      'VP Growth Marketing'
     ];
 
     console.log(`Searching Apollo for contacts at: ${website}`);
