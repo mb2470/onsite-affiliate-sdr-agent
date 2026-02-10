@@ -913,3 +913,129 @@ body {
     justify-content: space-around;
   }
 }
+/* Catalog Estimator Styles - Add to App.css */
+
+.catalog-estimator {
+  margin-top: 1.5rem;
+}
+
+.catalog-results {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  background: var(--bg-main);
+  border-radius: 10px;
+  border-left: 3px solid var(--primary);
+}
+
+.catalog-results h3 {
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+  color: var(--primary);
+}
+
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.catalog-stat {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.catalog-stat.full-width {
+  grid-column: 1 / -1;
+}
+
+.catalog-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.catalog-value {
+  font-size: 1.25rem;
+  color: var(--text-primary);
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.qualification-badge {
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+}
+
+.qualification-badge.high {
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+
+.qualification-badge.medium {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid var(--warning);
+  color: var(--warning);
+}
+
+.qualification-badge.low {
+  background: rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--text-secondary);
+  color: var(--text-secondary);
+}
+
+.catalog-details {
+  padding: 1rem;
+  background: var(--bg-card);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.catalog-details p {
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.catalog-details ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.catalog-details li {
+  color: var(--text-secondary);
+  padding: 0.25rem 0;
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.catalog-details li:before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--primary);
+  font-weight: bold;
+}
+
+.catalog-error {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.catalog-error p {
+  margin-bottom: 0.5rem;
+}
