@@ -10,6 +10,8 @@ function App() {
   const [activeTab, setActiveTab] = useState('leads');
   const [searchTerm, setSearchTerm] = useState('');
   const [spreadsheetId, setSpreadsheetId] = useState('');
+  const [catalogAnalysis, setCatalogAnalysis] = useState(null);
+  const [isAnalyzingCatalog, setIsAnalyzingCatalog] = useState(false);
   const [isLoadingSheets, setIsLoadingSheets] = useState(false);
   const [lastSync, setLastSync] = useState(null);
 
@@ -260,6 +262,52 @@ Keep it concise and actionable.`;
     }
   };
 
+  // Estimate product catalog size
+const estimateCatalogSize = async (lead) => {
+  setIsAnalyzingCatalog(true);
+  setCatalogAnalysis(null);
+  
+  try {
+    const response = await fetch('/.netlify/functions/catalog-estimator', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        website: lead.website
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to estimate catalog size');
+    }
+
+    const analysis = await response.json();
+    setCatalogAnalysis(analysis);
+    
+    // Update lead with catalog info
+    const updatedLeads = leads.map(l => {
+      if (l.id === lead.id) {
+        return { 
+          ...l, 
+          catalogSize: analysis.estimatedProducts,
+          platform: analysis.platform,
+          catalogAnalysis: analysis
+        };
+      }
+      return l;
+    });
+    setLeads(updatedLeads);
+
+  } catch (error) {
+    console.error('Error estimating catalog:', error);
+    setCatalogAnalysis({
+      error: true,
+      message: error.message
+    });
+  } finally {
+    setIsAnalyzingCatalog(false);
+  }
+};
+  
   // Update lead status (and sync to Google Sheets)
   const updateLeadStatus = (leadId, newStatus) => {
     const updatedLeads = leads.map(lead => {
@@ -506,8 +554,69 @@ Keep it concise and actionable.`;
                     <pre>{selectedLead.notes}</pre>
                   </div>
                 )}
+                {/* Catalog Size Estimator */}
+<div className="catalog-estimator">
+  <button 
+    className="research-btn"
+    onClick={() => estimateCatalogSize(selectedLead)}
+    disabled={isAnalyzingCatalog}
+  >
+    {isAnalyzingCatalog ? '🛍️ Analyzing...' : '🛍️ Estimate Catalog Size'}
+  </button>
+  
+  {catalogAnalysis && !catalogAnalysis.error && (
+    <div className="catalog-results">
+      <h3>📊 Product Catalog Analysis</h3>
+      <div className="catalog-grid">
+        <div className="catalog-stat">
+          <span className="catalog-label">Platform</span>
+          <span className="catalog-value">{catalogAnalysis.platform}</span>
+        </div>
+        <div className="catalog-stat">
+          <span className="catalog-label">Estimated Products</span>
+          <span className="catalog-value">{catalogAnalysis.estimatedProducts}</span>
+        </div>
+        {catalogAnalysis.categories > 0 && (
+          <div className="catalog-stat">
+            <span className="catalog-label">Categories</span>
+            <span className="catalog-value">{catalogAnalysis.categories}</span>
+          </div>
+        )}
+        {catalogAnalysis.productUrlPattern && (
+          <div className="catalog-stat full-width">
+            <span className="catalog-label">URL Pattern</span>
+            <span className="catalog-value">{catalogAnalysis.productUrlPattern}</span>
+          </div>
+        )}
+      </div>
+      
+      <div className={`qualification-badge ${catalogAnalysis.confidence}`}>
+        <strong>Qualification:</strong> {catalogAnalysis.qualification}
+      </div>
+      
+      {catalogAnalysis.details && catalogAnalysis.details.length > 0 && (
+        <div className="catalog-details">
+          <p><strong>Analysis Details:</strong></p>
+          <ul>
+            {catalogAnalysis.details.map((detail, idx) => (
+              <li key={idx}>{detail}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )}
+  
+  {catalogAnalysis && catalogAnalysis.error && (
+    <div className="catalog-error">
+      <p>⚠️ Could not analyze catalog: {catalogAnalysis.message}</p>
+      <p>The website may be blocking crawlers or not be an ecommerce site.</p>
+    </div>
+  )}
+</div>
               </div>
 
+              
               <div className="email-actions">
                 <h3>Generate Personalized Email</h3>
                 <div className="button-group">
