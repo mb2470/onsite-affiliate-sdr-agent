@@ -221,14 +221,14 @@ Then the email body.`;
     }
   };
 
-  // Research company with AI
-  const researchCompany = async (lead) => {
-    setIsGenerating(true);
+ // Research company with AI
+const researchCompany = async (lead) => {
+  setIsGenerating(true);
+  
+  try {
+    const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs.`;
     
-    try {
-      const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs.`;
-      
-      const prompt = `Research this ecommerce company for B2B sales outreach:
+    const prompt = `Research this ecommerce company for B2B sales outreach:
 
 Company: ${lead.website}
 Revenue: ${lead.revenue}
@@ -244,23 +244,42 @@ Provide:
 
 Keep it concise and actionable.`;
 
-      const research = await callClaudeAPI(prompt, systemPrompt);
-      
-      const updatedLeads = leads.map(l => {
-        if (l.id === lead.id) {
-          return { ...l, notes: research };
-        }
-        return l;
-      });
-      setLeads(updatedLeads);
-      setSelectedLead({ ...lead, notes: research });
+    const research = await callClaudeAPI(prompt, systemPrompt);
+    
+    const updatedLeads = leads.map(l => {
+      if (l.id === lead.id) {
+        return { ...l, notes: research };
+      }
+      return l;
+    });
+    setLeads(updatedLeads);
+    setSelectedLead({ ...lead, notes: research });
 
-    } catch (error) {
-      console.error('Error researching company:', error);
-    } finally {
-      setIsGenerating(false);
+    // Write research back to Google Sheets (Column F)
+    if (spreadsheetId && lead.rowIndex) {
+      try {
+        await fetch('/.netlify/functions/sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'write',
+            spreadsheetId: spreadsheetId,
+            range: `Sheet1!F${lead.rowIndex}`,
+            values: [[research]]
+          })
+        });
+        console.log('Research saved to Google Sheets');
+      } catch (error) {
+        console.error('Error saving research to Sheets:', error);
+      }
     }
-  };
+
+  } catch (error) {
+    console.error('Error researching company:', error);
+  } finally {
+    setIsGenerating(false);
+  }
+};
 
   // Estimate product catalog size
 const estimateCatalogSize = async (lead) => {
@@ -296,6 +315,26 @@ const estimateCatalogSize = async (lead) => {
       return l;
     });
     setLeads(updatedLeads);
+
+    // Write catalog info back to Google Sheets (Column G)
+    if (spreadsheetId && lead.rowIndex) {
+      try {
+        const catalogInfo = `${analysis.platform} | ${analysis.estimatedProducts} products`;
+        await fetch('/.netlify/functions/sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'write',
+            spreadsheetId: spreadsheetId,
+            range: `Sheet1!G${lead.rowIndex}`,
+            values: [[catalogInfo]]
+          })
+        });
+        console.log('Catalog info saved to Google Sheets');
+      } catch (error) {
+        console.error('Error saving catalog to Sheets:', error);
+      }
+    }
 
   } catch (error) {
     console.error('Error estimating catalog:', error);
