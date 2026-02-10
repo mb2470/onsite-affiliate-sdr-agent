@@ -1163,27 +1163,27 @@ const sendViaGmail = () => {
                     </div>
                   )}
 
-                  {selectedContact && (
-                    <div className="selected-contact-banner">
-                      <p>
-                        ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
-                      </p>
-                    <button 
-                        className="copy-email-address-btn"
-                        onClick={() => navigator.clipboard.writeText(selectedContact.email)}
-                      >
-                        📋 Copy Email Address
-                      </button>
-                      <button 
-                        className="send-gmail-btn"
-                        onClick={sendViaGmail}
-                      >
-                        📧 Send via Gmail
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
+{selectedContact && (
+  <div className="selected-contact-banner">
+    <p>
+      ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
+    </p>
+    <div className="button-group">
+      <button 
+        className="copy-email-address-btn"
+        onClick={() => navigator.clipboard.writeText(selectedContact.email)}
+      >
+        📋 Copy Email Address
+      </button>
+      <button 
+        className="send-gmail-btn"
+        onClick={sendViaGmail}
+      >
+        📧 Send via Gmail
+      </button>
+    </div>
+  </div>
+)}
 
               {selectedLead.emails?.length > 0 && (
                 <div className="email-history">
