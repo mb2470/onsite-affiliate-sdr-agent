@@ -1168,12 +1168,18 @@ const sendViaGmail = () => {
                       <p>
                         ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
                       </p>
-button 
-  className="send-gmail-btn"
-  onClick={sendViaGmail}
->
-  📧 Send via Gmail
-</button>
+                    <button 
+                        className="copy-email-address-btn"
+                        onClick={() => navigator.clipboard.writeText(selectedContact.email)}
+                      >
+                        📋 Copy Email Address
+                      </button>
+                      <button 
+                        className="send-gmail-btn"
+                        onClick={sendViaGmail}
+                      >
+                        📧 Send via Gmail
+                      </button>
                     </div>
                   )}
                 </div>
