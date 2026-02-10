@@ -156,7 +156,7 @@ function App() {
     return data.content[0].text;
   };
 
-  // Generate personalized email with AI
+  // Generate personalized email with AI (ICP-INFORMED)
   const generateEmail = async (lead, emailType = 'initial') => {
     setIsGenerating(true);
     setGeneratedEmail('');
@@ -165,36 +165,83 @@ function App() {
       const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
 a revolutionary AI-powered platform that helps ecommerce brands monetize creator UGC content on their product pages.
 
-Key value propositions:
+TARGET BUYERS (based on ICP):
+1. Directors of Influencer Marketing / Heads of Partnerships (PRIMARY)
+   - Managing affiliate programs and influencer relationships
+   - Sourcing creators for UGC (TikTok, Instagram, YouTube)
+   - Budget for partner commissions and creator fees
+   
+2. VPs of E-Commerce / Directors of E-Commerce (TECHNICAL BUYER)
+   - North Star: Conversion Rate Optimization (CRO)
+   - Care about site speed and PDP engagement
+   - Budget: E-Commerce Tech Stack
+   
+3. Directors of Brand Marketing / Heads of Social Media (CONTENT BUYER)
+   - Problem: Content fatigue - need high volume of authentic assets
+   - Budget: Content Production / Brand Marketing
+   
+4. VPs of Growth / Directors of Performance Marketing (ROI BUYER)
+   - Goal: Lower Customer Acquisition Cost (CAC)
+   - Use UGC as ad creative for Meta/TikTok
+   - Budget: Paid Media / Ad Creative
+
+KEY PAIN POINTS TO ADDRESS:
+- "Leaky Bucket": Traffic goes to social platforms, lost sales opportunity
+- Content ROI: Paying creators for content with short social shelf-life
+- Attribution: Can't prove influencer ROI beyond awareness
+- Content Fatigue: Need high volume of authentic assets
+- Site Performance: Concerned about slowing down PDPs
+
+VALUE PROPOSITIONS:
 - Guarantees incrementality (only pay for actual sales lift, not just any sales)
 - No upfront creator costs - pay based on performance
 - Scales to entire product catalog automatically
+- Keeps engagement onsite (solves "leaky bucket")
+- Extends content value - creator videos live permanently on PDPs
+- Clear attribution - prove direct ROI of influencer content
 - 3-month pilot to prove ROI before full commitment
 - Case study: Brand with $141 AOV saw 6.2x ROCS (Return on Commission Spend)
 
-Your job is to write compelling, personalized cold outreach emails that:
-1. Reference the specific company and industry
-2. Lead with a relevant pain point (scaling UGC, measuring creator ROI, slow manual processes)
-3. Present Onsite Affiliate as the solution
-4. Include a clear CTA (usually booking a 15-min demo)
-5. Keep it concise (under 150 words)
-6. Sound human and conversational, not salesy
+INTEGRATION POINTS (for technical buyers):
+- Direct integration with Shopify, Salesforce Commerce Cloud
+- No site speed impact
+- Easy implementation on Product Detail Pages
 
-Write emails that would get responses from eCommerce Directors, Digital Marketing Leads, and CMOs.`;
+EMAIL WRITING RULES:
+1. Lead with their specific pain point based on their likely role
+2. Use authentic, conversational language (not salesy)
+3. Reference specific workflows they deal with (creator sourcing, PDP optimization, etc.)
+4. Mention relevant platforms they likely use (Impact, Rakuten, CreatorIQ, Grin)
+5. Include clear CTA (usually booking a 15-min demo)
+6. Keep it under 150 words
+7. Sound like you understand their day-to-day challenges
+
+INDUSTRY CONTEXT:
+Target companies: Retail, Fashion, Apparel, Outdoor/Lifestyle, Home Goods
+Company examples: J.Crew, Backcountry, Wayfair, Under Armour
+They likely already have: Active social presence, affiliate networks, creator platforms
+
+Write emails that would get responses from these decision makers who already have budget and mandate to work with creators.`;
 
       const prompt = `Write a ${emailType} outreach email for this lead:
 
 Company: ${lead.website}
 Revenue: ${lead.revenue}
 Description: ${lead.description || 'eCommerce company'}
+${lead.notes ? `Research Notes: ${lead.notes.substring(0, 300)}` : ''}
 
-${emailType === 'followup' ? 'This is a follow-up email. Reference that you reached out before and add a new angle or insight.' : ''}
-${emailType === 'breakup' ? 'This is a final "breakup" email. Create urgency by suggesting you\'ll move on if they\'re not interested.' : ''}
+${emailType === 'followup' ? 'This is a follow-up email. Reference that you reached out before and add a new angle or insight about their specific pain point.' : ''}
+${emailType === 'breakup' ? 'This is a final "breakup" email. Create urgency by suggesting you\'ll move on if they\'re not interested. Mention a specific insight about their business that makes this relevant.' : ''}
 
 Include a subject line at the top in this format:
 Subject: [your subject line]
 
-Then the email body.`;
+Then the email body.
+
+IMPORTANT: 
+- Personalize based on their industry (fashion, outdoor, home goods, etc.)
+- Lead with ONE specific pain point (leaky bucket, content ROI, attribution)
+- Keep it conversational and consultative, not pushy`;
 
       const emailContent = await callClaudeAPI(prompt, systemPrompt);
       setGeneratedEmail(emailContent);
@@ -223,28 +270,64 @@ Then the email body.`;
     }
   };
 
-  // Research company with AI
+  // Research company with AI (ICP-INFORMED)
   const researchCompany = async (lead) => {
     setIsGenerating(true);
     
     try {
-      const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs.`;
+      const systemPrompt = `You are a B2B sales researcher specializing in e-commerce brands and their influencer/affiliate marketing strategies.
+
+Focus your research on identifying:
+1. Whether they fit the ICP (Ideal Customer Profile) for Onsite Affiliate
+2. Signs they're already investing in creator/influencer programs
+3. Their tech stack and integration points
+4. Decision makers in key roles
+
+ICP CRITERIA:
+- Industry: Retail, Fashion, Apparel, Outdoor/Lifestyle, Home Goods
+- Size: Mid-Market to Enterprise
+- Signs: High SKU count, active social presence, UGC usage
+- Likely platforms: Impact, Rakuten, CJ (affiliates), CreatorIQ, Grin (creators)`;
       
-      const prompt = `Research this ecommerce company for B2B sales outreach:
+      const prompt = `Research this ecommerce company for Onsite Affiliate outreach:
 
 Company: ${lead.website}
 Revenue: ${lead.revenue}
 Description: ${lead.description || 'eCommerce company'}
 
-Provide:
-1. Industry/vertical
-2. Likely tech stack (ecommerce platform)
-3. Estimated company size
-4. Key decision makers (titles to target)
-5. Pain points related to creator UGC and onsite conversion
-6. Relevant talking points for outreach
+Provide a qualification report:
 
-Keep it concise and actionable.`;
+1. INDUSTRY/VERTICAL: (Fashion, Apparel, Outdoor, Home Goods, etc.)
+
+2. ICP FIT: (High/Medium/Low)
+   - Do they have high SKU count?
+   - Active on social media with UGC?
+   - Right industry and size?
+
+3. TECH STACK:
+   - E-commerce platform (Shopify, Salesforce, Magento)
+   - Likely affiliate networks
+   - Creator/influencer tools
+
+4. DECISION MAKERS TO TARGET:
+   - Director of Influencer Marketing
+   - VP of E-Commerce
+   - Director of Brand Marketing
+   - VP of Growth/Performance Marketing
+   (Note which roles they likely have based on company size)
+
+5. KEY PAIN POINTS THEY LIKELY FACE:
+   - Leaky bucket (social traffic not converting)
+   - Content ROI (short shelf-life)
+   - Attribution challenges
+   - Content fatigue
+
+6. TALKING POINTS FOR OUTREACH:
+   - Specific use cases based on their products
+   - How they're currently handling creator content
+   - Integration points with their stack
+
+Keep it concise, actionable, and focused on qualifying them for Onsite Affiliate.`;
 
       const research = await callClaudeAPI(prompt, systemPrompt);
       
@@ -348,7 +431,7 @@ Keep it concise and actionable.`;
     }
   };
 
-  // Enrich lead - automatically fill all columns from website
+  // Enrich lead - automatically fill all columns from website (ICP-INFORMED)
   const enrichLead = async (lead) => {
     if (!spreadsheetId || !lead.rowIndex) {
       alert('Google Sheets must be connected to enrich leads');
@@ -360,18 +443,31 @@ Keep it concise and actionable.`;
     try {
       console.log(`Enriching lead: ${lead.website}`);
 
-      const systemPrompt = `You are a B2B sales researcher. Analyze the company and provide key insights for SDRs. 
-      
+      const systemPrompt = `You are a B2B sales researcher analyzing e-commerce companies for Onsite Affiliate qualification.
+
+IDEAL CUSTOMER PROFILE (ICP):
+- Industries: Retail, Fashion, Apparel, Outdoor/Lifestyle, Home Goods
+- Size: Mid-Market to Enterprise ($10M-$1B+ revenue)
+- Characteristics: High SKU count, active social presence, uses UGC/creator content
+- Likely tools: Impact/Rakuten/CJ (affiliates), CreatorIQ/Grin (creators)
+
+KEY DECISION MAKER ROLES:
+1. Director of Influencer Marketing / Head of Partnerships (PRIMARY)
+2. VP of E-Commerce / Director of E-Commerce (TECHNICAL)
+3. Director of Brand Marketing / Head of Social Media (CONTENT)
+4. VP of Growth / Director of Performance Marketing (ROI)
+
 IMPORTANT: Your response must be valid JSON in this exact format:
 {
-  "revenue": "estimated revenue range like $10M-$50M or $1B+",
-  "description": "brief 1-sentence description of what they sell",
-  "industry": "industry/vertical",
-  "platform": "likely ecommerce platform",
-  "companySize": "estimated employee count",
-  "decisionMakers": "titles to target",
-  "painPoints": "pain points related to creator UGC",
-  "talkingPoints": "relevant talking points for outreach"
+  "revenue": "estimated revenue range - focus on $10M-$1B+ (e.g., $50M-$100M or $500M+)",
+  "description": "1-sentence description emphasizing product category (e.g., 'Fashion retailer specializing in women's activewear and lifestyle apparel')",
+  "industry": "specific vertical - Fashion/Apparel/Outdoor/Home Goods/Lifestyle",
+  "platform": "ecommerce platform - Shopify/Salesforce/Magento/etc",
+  "companySize": "employee count estimate",
+  "decisionMakers": "most relevant titles from ICP list above based on company size",
+  "painPoints": "their likely pain points - leaky bucket, content ROI, attribution, content fatigue, etc.",
+  "talkingPoints": "specific hooks for outreach - mention SKU count, social presence, creator strategy, etc.",
+  "icpFit": "HIGH/MEDIUM/LOW - based on industry, size, and signals of UGC/creator usage"
 }
 
 Only return the JSON, no other text.`;
@@ -412,7 +508,8 @@ Provide all information in JSON format as specified.`;
         console.error('Catalog estimation failed:', catalogError);
       }
 
-      const fullResearch = `Industry: ${researchData.industry}
+      const fullResearch = `ICP FIT: ${researchData.icpFit}
+Industry: ${researchData.industry}
 Platform: ${platform}
 Company Size: ${researchData.companySize}
 Decision Makers: ${researchData.decisionMakers}
@@ -450,7 +547,8 @@ Talking Points: ${researchData.talkingPoints}`;
             status: 'new',
             notes: fullResearch,
             catalogSize: catalogInfo,
-            platform: platform
+            platform: platform,
+            icpFit: researchData.icpFit
           };
         }
         return l;
@@ -459,7 +557,7 @@ Talking Points: ${researchData.talkingPoints}`;
       setLeads(updatedLeads);
       setSelectedLead(updatedLeads.find(l => l.id === lead.id));
 
-      alert(`✅ Successfully enriched ${lead.website}!`);
+      alert(`✅ Successfully enriched ${lead.website}!\nICP Fit: ${researchData.icpFit}`);
 
     } catch (error) {
       console.error('Error enriching lead:', error);
@@ -498,7 +596,7 @@ Talking Points: ${researchData.talkingPoints}`;
     alert(`✅ Enriched ${unenrichedLeads.length} leads!`);
   };
 
-  // Find contacts using Apollo.io
+  // Find contacts using Apollo.io (ICP-INFORMED)
   const findContacts = async (lead) => {
     setIsLoadingContacts(true);
     setContacts([]);
@@ -512,16 +610,32 @@ Talking Points: ${researchData.talkingPoints}`;
         body: JSON.stringify({
           website: lead.website,
           titles: [
-            'VP Digital Marketing',
-            'Director Digital Marketing',
-            'VP Marketing',
-            'Director Marketing',
+            // PRIMARY: Influencer/Affiliate Leaders (most common buyer)
+            'Director of Influencer Marketing',
+            'Head of Partnerships',
+            'Senior Manager of Affiliate Marketing',
+            'Director of Brand Advocacy',
+            'VP Influencer Marketing',
+            'Manager Influencer Marketing',
+            
+            // SECONDARY: E-Commerce Leaders (technical buyer)
+            'VP of E-Commerce',
+            'Director of E-Commerce',
+            'Head of Digital Product',
             'VP Ecommerce',
             'Director Ecommerce',
-            'CMO',
-            'Chief Marketing Officer',
-            'Head of Digital',
-            'Head of Ecommerce'
+            
+            // TERTIARY: Brand & Social Leaders (content buyer)
+            'Director of Brand Marketing',
+            'Head of Social Media',
+            'Director of Content Strategy',
+            'VP Brand Marketing',
+            
+            // QUATERNARY: Growth/Performance Leaders (ROI buyer)
+            'VP of Growth',
+            'Director of Performance Marketing',
+            'Head of User Acquisition',
+            'VP Growth Marketing'
           ]
         })
       });
