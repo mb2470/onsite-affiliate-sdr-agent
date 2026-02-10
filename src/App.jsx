@@ -41,7 +41,7 @@ function App() {
         body: JSON.stringify({
           action: 'read',
           spreadsheetId: sheetId,
-          range: 'Sheet1!A:E' // Read columns A-E (Website, Revenue, Source, Description, Status)
+          range: 'Sheet1!A:G' // Read columns A-G (including Research and Catalog)
         })
       });
 
@@ -55,20 +55,21 @@ function App() {
       // Skip header row
       const dataRows = rows.slice(1);
 
-      const importedLeads = dataRows
-        .filter(row => row[0]) // Has website
-        .map((row, index) => ({
-          id: row[0], // Use website as ID
-          website: row[0] || '',
-          revenue: row[1] || 'Unknown',
-          source: row[2] || '',
-          description: row[3] || '',
-          status: row[4] || 'new', // Status from sheet (column E)
-          lastContact: null,
-          emails: [],
-          notes: '',
-          rowIndex: index + 2 // Track which row this is (for writing back)
-        }));
+const importedLeads = dataRows
+  .filter(row => row[0]) // Has website
+  .map((row, index) => ({
+    id: row[0], // Use website as ID
+    website: row[0] || '',
+    revenue: row[1] || 'Unknown',
+    source: row[2] || '',
+    description: row[3] || '',
+    status: row[4] || 'new', // Status from sheet (column E)
+    notes: row[5] || '', // Research notes from sheet (column F) ← NEW!
+    catalogInfo: row[6] || '', // Catalog info from sheet (column G) ← NEW!
+    lastContact: null,
+    emails: [],
+    rowIndex: index + 2 // Track which row this is (for writing back)
+  }));
 
       setLeads(importedLeads);
       setLastSync(new Date());
