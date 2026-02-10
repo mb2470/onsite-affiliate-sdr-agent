@@ -156,7 +156,7 @@ function App() {
     return data.content[0].text;
   };
 
-  // Generate personalized email with AI (ICP-INFORMED)
+  // Generate personalized email with AI (BULLETPROOF VERSION)
   const generateEmail = async (lead, emailType = 'initial') => {
     setIsGenerating(true);
     setGeneratedEmail('');
@@ -165,83 +165,152 @@ function App() {
       const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
 a revolutionary AI-powered platform that helps ecommerce brands monetize creator UGC content on their product pages.
 
-TARGET BUYERS (based on ICP):
-1. Directors of Influencer Marketing / Heads of Partnerships (PRIMARY)
-   - Managing affiliate programs and influencer relationships
-   - Sourcing creators for UGC (TikTok, Instagram, YouTube)
-   - Budget for partner commissions and creator fees
-   
-2. VPs of E-Commerce / Directors of E-Commerce (TECHNICAL BUYER)
-   - North Star: Conversion Rate Optimization (CRO)
-   - Care about site speed and PDP engagement
-   - Budget: E-Commerce Tech Stack
-   
-3. Directors of Brand Marketing / Heads of Social Media (CONTENT BUYER)
-   - Problem: Content fatigue - need high volume of authentic assets
-   - Budget: Content Production / Brand Marketing
-   
-4. VPs of Growth / Directors of Performance Marketing (ROI BUYER)
-   - Goal: Lower Customer Acquisition Cost (CAC)
-   - Use UGC as ad creative for Meta/TikTok
-   - Budget: Paid Media / Ad Creative
+CRITICAL WRITING INSTRUCTIONS:
+1. Research the company's actual products and industry FIRST
+2. Reference their SPECIFIC pain points (don't use generic language)
+3. Use authentic, conversational tone (not salesy or robotic)
+4. Lead with ONE specific pain point most relevant to their role
+5. Keep under 150 words (shorter is better)
+6. Sound like you understand their day-to-day challenges
+7. No buzzwords or jargon - write like a human
 
-KEY PAIN POINTS TO ADDRESS:
-- "Leaky Bucket": Traffic goes to social platforms, lost sales opportunity
-- Content ROI: Paying creators for content with short social shelf-life
-- Attribution: Can't prove influencer ROI beyond awareness
-- Content Fatigue: Need high volume of authentic assets
-- Site Performance: Concerned about slowing down PDPs
+TARGET BUYER PERSONAS (based on ICP):
 
-VALUE PROPOSITIONS:
-- Guarantees incrementality (only pay for actual sales lift, not just any sales)
-- No upfront creator costs - pay based on performance
-- Scales to entire product catalog automatically
-- Keeps engagement onsite (solves "leaky bucket")
-- Extends content value - creator videos live permanently on PDPs
-- Clear attribution - prove direct ROI of influencer content
-- 3-month pilot to prove ROI before full commitment
-- Case study: Brand with $141 AOV saw 6.2x ROCS (Return on Commission Spend)
+1. DIRECTOR OF INFLUENCER MARKETING / HEAD OF PARTNERSHIPS (PRIMARY)
+Role: Managing creator relationships, sourcing UGC, running influencer campaigns
+Budget: Creator commissions, affiliate payouts, influencer tools
+Pain Points:
+- Paying creators $500-2k per post with 48-hour shelf life on social
+- Can't prove ROI beyond vanity metrics (likes, views)
+- Manual process to get creator content onto website
+- Content disappears after social posts - wasted investment
+Hooks: Extend content value, prove incremental sales, automate onsite UGC
+
+2. VP / DIRECTOR OF E-COMMERCE (TECHNICAL BUYER)
+Role: Conversion rate optimization, site performance, PDP engagement
+Budget: E-commerce tech stack, CRO tools
+Pain Points:
+- "Leaky bucket" - traffic goes to Instagram/TikTok, never comes back
+- High bounce rates on product pages
+- Need authentic content but studio photography is expensive
+- Concerned about site speed impacts
+Hooks: Keep users onsite, increase time on page, no site speed impact
+
+3. DIRECTOR OF BRAND MARKETING / HEAD OF SOCIAL MEDIA (CONTENT BUYER)
+Role: Content production, social strategy, brand authenticity
+Budget: Content creation, production costs
+Pain Points:
+- Content fatigue - need high volume of fresh assets
+- Studio content performs poorly vs. authentic UGC
+- Can't scale content across entire catalog (too expensive)
+- Already paying for influencer content, not maximizing value
+Hooks: Repurpose social content, scale across catalog, authentic UGC
+
+4. VP OF GROWTH / DIRECTOR OF PERFORMANCE MARKETING (ROI BUYER)
+Role: Lower CAC, improve ROAS, scale profitable channels
+Budget: Paid media, ad creative, performance marketing
+Pain Points:
+- UGC ads outperform studio ads but can't get enough content
+- Need to prove incremental revenue (not just attributed)
+- Testing new channels but need measurable results
+- Attribution challenges with influencer marketing
+Hooks: Guaranteed incrementality, 6.2x ROCS case study, performance-based pricing
+
+VALUE PROPOSITIONS (Choose 2-3 most relevant):
+✓ Guarantees incrementality (only pay for actual sales lift)
+✓ No upfront creator costs - performance-based commissions
+✓ Scales to entire product catalog automatically
+✓ Keeps engagement onsite (solves "leaky bucket")
+✓ Extends creator content value - lives permanently on PDPs
+✓ Clear attribution - prove direct ROI of influencer spend
+✓ 3-month pilot to prove ROI before commitment
+✓ Case study: Brand with $141 AOV saw 6.2x ROCS
 
 INTEGRATION POINTS (for technical buyers):
-- Direct integration with Shopify, Salesforce Commerce Cloud
-- No site speed impact
-- Easy implementation on Product Detail Pages
+✓ Direct integration with Shopify, Salesforce Commerce Cloud
+✓ No site speed impact (<100ms page load)
+✓ Easy implementation on Product Detail Pages
+✓ Works with existing affiliate networks (Impact, Rakuten, CJ)
 
-EMAIL WRITING RULES:
-1. Lead with their specific pain point based on their likely role
-2. Use authentic, conversational language (not salesy)
-3. Reference specific workflows they deal with (creator sourcing, PDP optimization, etc.)
-4. Mention relevant platforms they likely use (Impact, Rakuten, CreatorIQ, Grin)
-5. Include clear CTA (usually booking a 15-min demo)
-6. Keep it under 150 words
-7. Sound like you understand their day-to-day challenges
+INDUSTRY-SPECIFIC LANGUAGE:
+Fashion/Apparel: "outfit inspiration", "styling content", "try-on videos"
+Home Goods/Kitchenware: "how-to demos", "recipe content", "product in use"
+Outdoor/Lifestyle: "adventure content", "gear reviews", "real-world testing"
+Beauty: "tutorials", "application demos", "before/after content"
 
 INDUSTRY CONTEXT:
-Target companies: Retail, Fashion, Apparel, Outdoor/Lifestyle, Home Goods
-Company examples: J.Crew, Backcountry, Wayfair, Under Armour
-They likely already have: Active social presence, affiliate networks, creator platforms
+Target companies: J.Crew, Backcountry, Wayfair, Under Armour, Meyer Cookware, Allbirds
+They likely have: Active social presence, affiliate programs (Impact/Rakuten), creator tools (CreatorIQ/Grin)
 
-Write emails that would get responses from these decision makers who already have budget and mandate to work with creators.`;
+EMAIL STRUCTURE:
+Subject: [Hook related to specific pain point - under 50 chars]
+
+Hi [Name],
+
+[Opening line - reference specific pain point they face]
+
+[1-2 sentences on how Onsite Affiliate solves it]
+
+[Social proof - case study or relevant example]
+
+[CTA - usually 15-min demo or quick chat]
+
+Best,
+[Your name]
+
+QUALITY CHECKLIST:
+✓ Does subject line reference their specific pain?
+✓ Opening line sounds like I understand their business?
+✓ Did I reference their actual industry/products?
+✓ Is the tone conversational (not salesy)?
+✓ Under 150 words total?
+✓ Clear next step (CTA)?
+✓ Would I respond to this email?`;
 
       const prompt = `Write a ${emailType} outreach email for this lead:
 
 Company: ${lead.website}
+Industry: ${lead.notes ? lead.notes.match(/Industry[:\s]+([^\n]+)/)?.[1] || 'eCommerce' : 'eCommerce'}
 Revenue: ${lead.revenue}
 Description: ${lead.description || 'eCommerce company'}
-${lead.notes ? `Research Notes: ${lead.notes.substring(0, 300)}` : ''}
+ICP Fit: ${lead.icpFit || lead.notes?.match(/ICP FIT[:\s]+([^\n]+)/)?.[1] || 'Unknown'}
 
-${emailType === 'followup' ? 'This is a follow-up email. Reference that you reached out before and add a new angle or insight about their specific pain point.' : ''}
-${emailType === 'breakup' ? 'This is a final "breakup" email. Create urgency by suggesting you\'ll move on if they\'re not interested. Mention a specific insight about their business that makes this relevant.' : ''}
+${lead.notes ? `Research Insights:\n${lead.notes.substring(0, 500)}` : ''}
 
-Include a subject line at the top in this format:
-Subject: [your subject line]
+${emailType === 'followup' ? `
+FOLLOW-UP EMAIL INSTRUCTIONS:
+- Reference that you reached out before
+- Add a new angle or insight (new case study, industry trend, specific pain point)
+- Create curiosity without being pushy
+- Keep it even shorter (100 words max)
+` : ''}
 
-Then the email body.
+${emailType === 'breakup' ? `
+BREAKUP EMAIL INSTRUCTIONS:
+- This is the final attempt - create urgency
+- Reference a specific insight about their business
+- Suggest you'll move on if not interested
+- Leave door open but show you're busy with other prospects
+- Keep it very short (75 words max)
+` : ''}
 
-IMPORTANT: 
-- Personalize based on their industry (fashion, outdoor, home goods, etc.)
-- Lead with ONE specific pain point (leaky bucket, content ROI, attribution)
-- Keep it conversational and consultative, not pushy`;
+IMPORTANT REQUIREMENTS:
+1. Start with: Subject: [compelling subject line]
+2. Reference their SPECIFIC industry (${lead.description || 'their products'})
+3. Lead with ONE specific pain point most relevant to their likely buyer persona
+4. Use conversational language (write like a human, not a robot)
+5. Include ONE specific number/case study (6.2x ROCS, $141 AOV, etc.)
+6. Keep under 150 words total
+7. End with clear CTA (usually "Worth a 15-min chat?")
+
+DO NOT:
+- Use generic phrases like "I hope this email finds you well"
+- Sound salesy or pushy
+- Use buzzwords ("synergy", "leverage", "paradigm shift")
+- Write long paragraphs
+- Be overly formal
+
+Write the email now:`;
 
       const emailContent = await callClaudeAPI(prompt, systemPrompt);
       setGeneratedEmail(emailContent);
@@ -270,64 +339,87 @@ IMPORTANT:
     }
   };
 
-  // Research company with AI (ICP-INFORMED)
+  // Research company with AI (BULLETPROOF VERSION)
   const researchCompany = async (lead) => {
     setIsGenerating(true);
     
     try {
-      const systemPrompt = `You are a B2B sales researcher specializing in e-commerce brands and their influencer/affiliate marketing strategies.
+      const systemPrompt = `You are an expert B2B sales researcher specializing in e-commerce brands and their influencer/affiliate marketing strategies.
 
-Focus your research on identifying:
-1. Whether they fit the ICP (Ideal Customer Profile) for Onsite Affiliate
-2. Signs they're already investing in creator/influencer programs
-3. Their tech stack and integration points
-4. Decision makers in key roles
+RESEARCH METHODOLOGY:
+1. Analyze the company's actual website and product offerings
+2. Verify their industry by examining what they sell (not company name)
+3. Look for signs of existing creator/influencer programs
+4. Identify their tech stack and existing marketing tools
+5. Research their social media presence and content strategy
+6. Be accurate and specific - no generic insights
 
-ICP CRITERIA:
-- Industry: Retail, Fashion, Apparel, Outdoor/Lifestyle, Home Goods
-- Size: Mid-Market to Enterprise
-- Signs: High SKU count, active social presence, UGC usage
-- Likely platforms: Impact, Rakuten, CJ (affiliates), CreatorIQ, Grin (creators)`;
+ICP CRITERIA FOR ONSITE AFFILIATE:
+✓ Industries: Fashion, Apparel, Outdoor, Lifestyle, Home Goods, Kitchenware, Beauty, Pet
+✓ Size: Mid-Market to Enterprise (100+ employees, $10M+ revenue)
+✓ Signals: High SKU count (100+), active social media, uses UGC
+✓ Existing Tools: Shopify/Salesforce, affiliate networks (Impact/Rakuten/CJ), creator platforms (CreatorIQ/Grin)
+
+DISQUALIFIERS (Mark as LOW FIT):
+✗ Pure B2B companies
+✗ Service businesses
+✗ Software/SaaS companies
+✗ Single-product brands
+✗ No e-commerce presence`;
       
-      const prompt = `Research this ecommerce company for Onsite Affiliate outreach:
+      const prompt = `Research this ecommerce company for Onsite Affiliate outreach qualification:
 
 Company: ${lead.website}
 Revenue: ${lead.revenue}
 Description: ${lead.description || 'eCommerce company'}
 
-Provide a qualification report:
+Provide a detailed qualification report with these exact sections:
 
-1. INDUSTRY/VERTICAL: (Fashion, Apparel, Outdoor, Home Goods, etc.)
+1. INDUSTRY/VERTICAL
+What do they actually sell? Be specific (e.g., "Premium kitchenware and cookware" not just "Home Goods")
 
-2. ICP FIT: (High/Medium/Low)
-   - Do they have high SKU count?
-   - Active on social media with UGC?
-   - Right industry and size?
+2. ICP FIT SCORE: HIGH / MEDIUM / LOW
+- HIGH: Perfect industry match + right size + visible UGC/creator activity
+- MEDIUM: Right industry + right size, but unclear creator activity
+- LOW: Wrong industry OR wrong size OR no e-commerce
 
-3. TECH STACK:
-   - E-commerce platform (Shopify, Salesforce, Magento)
-   - Likely affiliate networks
-   - Creator/influencer tools
+Justify your score:
+- Industry match? (Yes/No)
+- Company size? (Too small/Perfect/Too large)
+- Active social/UGC presence? (Yes/No/Unknown)
+- High SKU count (100+)? (Yes/No/Unknown)
 
-4. DECISION MAKERS TO TARGET:
-   - Director of Influencer Marketing
-   - VP of E-Commerce
-   - Director of Brand Marketing
-   - VP of Growth/Performance Marketing
-   (Note which roles they likely have based on company size)
+3. TECH STACK
+- E-commerce platform: (Verify from page source, Wappalyzer data, or visible indicators)
+- Likely affiliate networks: (Impact, Rakuten, CJ, ShareASale - based on company size)
+- Creator/influencer tools: (CreatorIQ, Grin, AspireIQ, #paid - look for "creator program" or "influencer" pages)
+- Email/marketing: (Klaviyo, Mailchimp, etc.)
 
-5. KEY PAIN POINTS THEY LIKELY FACE:
-   - Leaky bucket (social traffic not converting)
-   - Content ROI (short shelf-life)
-   - Attribution challenges
-   - Content fatigue
+4. DECISION MAKERS TO TARGET
+Based on company size and industry, which titles should we target?
+- Primary: (Most important buyer)
+- Secondary: (Technical/budget approver)
+- Tertiary: (Influencer if relevant)
 
-6. TALKING POINTS FOR OUTREACH:
-   - Specific use cases based on their products
-   - How they're currently handling creator content
-   - Integration points with their stack
+For mid-market (100-500 employees): Director-level titles
+For enterprise (500+ employees): VP/C-level titles
 
-Keep it concise, actionable, and focused on qualifying them for Onsite Affiliate.`;
+5. KEY PAIN POINTS THEY LIKELY FACE
+Be specific to their industry and business model:
+- Leaky bucket: (How does this apply to them specifically?)
+- Content ROI: (What's their creator content challenge?)
+- Attribution: (Why can't they prove influencer ROI?)
+- Catalog scale: (How many SKUs do they need content for?)
+
+6. TALKING POINTS FOR OUTREACH
+Reference their specific business:
+- Product category examples
+- SKU count estimates
+- Social channels they're active on
+- Creator content opportunities
+- Integration points with their tech stack
+
+Format: Be concise but specific. Each section should be 2-3 sentences maximum except ICP FIT which needs justification.`;
 
       const research = await callClaudeAPI(prompt, systemPrompt);
       
@@ -361,6 +453,7 @@ Keep it concise, actionable, and focused on qualifying them for Onsite Affiliate
 
     } catch (error) {
       console.error('Error researching company:', error);
+      alert(`Research failed: ${error.message}`);
     } finally {
       setIsGenerating(false);
     }
@@ -431,7 +524,7 @@ Keep it concise, actionable, and focused on qualifying them for Onsite Affiliate
     }
   };
 
-  // Enrich lead - automatically fill all columns from website (ICP-INFORMED)
+  // Enrich lead - automatically fill all columns from website (BULLETPROOF VERSION)
   const enrichLead = async (lead) => {
     if (!spreadsheetId || !lead.rowIndex) {
       alert('Google Sheets must be connected to enrich leads');
@@ -445,36 +538,78 @@ Keep it concise, actionable, and focused on qualifying them for Onsite Affiliate
 
       const systemPrompt = `You are a B2B sales researcher analyzing e-commerce companies for Onsite Affiliate qualification.
 
-IDEAL CUSTOMER PROFILE (ICP):
-- Industries: Retail, Fashion, Apparel, Outdoor/Lifestyle, Home Goods
-- Size: Mid-Market to Enterprise ($10M-$1B+ revenue)
-- Characteristics: High SKU count, active social presence, uses UGC/creator content
-- Likely tools: Impact/Rakuten/CJ (affiliates), CreatorIQ/Grin (creators)
+CRITICAL RESEARCH INSTRUCTIONS:
+1. You MUST research the actual website URL provided
+2. Verify what products they ACTUALLY sell by looking at their homepage and product pages
+3. Check their "About" page, product categories, and main navigation
+4. Do NOT guess based on company name alone - many companies have misleading names
+5. If you cannot determine something with confidence, mark it as "Unknown"
+6. Be CONSERVATIVE with ICP fit scoring - when in doubt, rate lower
 
-KEY DECISION MAKER ROLES:
-1. Director of Influencer Marketing / Head of Partnerships (PRIMARY)
-2. VP of E-Commerce / Director of E-Commerce (TECHNICAL)
-3. Director of Brand Marketing / Head of Social Media (CONTENT)
-4. VP of Growth / Director of Performance Marketing (ROI)
+IDEAL CUSTOMER PROFILE (ICP):
+Industries (HIGH FIT):
+- Fashion/Apparel (clothing, footwear, accessories)
+- Outdoor/Lifestyle (camping, hiking, sports gear)
+- Home Goods (furniture, decor, housewares)
+- Kitchenware (cookware, kitchen tools, dining)
+- Beauty/Personal Care (cosmetics, skincare)
+- Pet Products (pet supplies, accessories)
+
+Company Characteristics:
+- Size: Mid-Market to Enterprise ($10M-$1B+ revenue)
+- SKU Count: 100+ products (ideally 500+)
+- Social Presence: Active on Instagram/TikTok/YouTube with UGC
+- Creator Programs: Uses influencers, affiliates, or brand ambassadors
+- Tech Stack: Shopify, Salesforce Commerce, Magento, BigCommerce
+
+LOW FIT (Do NOT qualify as HIGH):
+- Pure B2B companies
+- Single-product brands
+- Service businesses
+- Software/SaaS companies
+- No ecommerce presence
+
+KEY DECISION MAKER ROLES BY COMPANY SIZE:
+Small (<100 employees): Director of Marketing, Head of E-Commerce
+Mid (100-500): Director of Influencer Marketing, VP E-Commerce, Director Brand Marketing
+Large (500+): VP Influencer Marketing, VP E-Commerce, Director Performance Marketing, VP Growth
 
 IMPORTANT: Your response must be valid JSON in this exact format:
 {
-  "revenue": "estimated revenue range - focus on $10M-$1B+ (e.g., $50M-$100M or $500M+)",
-  "description": "1-sentence description emphasizing product category (e.g., 'Fashion retailer specializing in women's activewear and lifestyle apparel')",
-  "industry": "specific vertical - Fashion/Apparel/Outdoor/Home Goods/Lifestyle",
-  "platform": "ecommerce platform - Shopify/Salesforce/Magento/etc",
-  "companySize": "employee count estimate",
-  "decisionMakers": "most relevant titles from ICP list above based on company size",
-  "painPoints": "their likely pain points - leaky bucket, content ROI, attribution, content fatigue, etc.",
-  "talkingPoints": "specific hooks for outreach - mention SKU count, social presence, creator strategy, etc.",
-  "icpFit": "HIGH/MEDIUM/LOW - based on industry, size, and signals of UGC/creator usage"
+  "revenue": "Estimated annual revenue range (e.g., '$50M-$100M', '$500M-$1B+', 'Unknown')",
+  "description": "One sentence describing what they ACTUALLY sell based on website analysis (e.g., 'Premium cookware and kitchenware retailer featuring chef-quality pots, pans, and kitchen essentials')",
+  "industry": "Primary industry - verify on website: Fashion/Apparel/Outdoor/Home Goods/Kitchenware/Beauty/Pet/Lifestyle/Unknown",
+  "platform": "E-commerce platform detected (Shopify/Salesforce Commerce/Magento/BigCommerce/WooCommerce/Custom/Unknown)",
+  "companySize": "Employee count estimate (e.g., '50-100', '500-1000', '1000+')",
+  "decisionMakers": "Relevant decision maker titles based on company size and industry (comma-separated)",
+  "painPoints": "3-4 specific pain points they likely face related to creator content, UGC, and conversion optimization",
+  "talkingPoints": "3-4 specific outreach hooks based on their ACTUAL products, catalog size, and social presence",
+  "icpFit": "HIGH (perfect fit) / MEDIUM (some fit) / LOW (poor fit) - Be conservative. HIGH requires: correct industry + right size + visible UGC/social presence"
 }
+
+ACCURACY VALIDATION CHECKLIST:
+Before responding, verify:
+✓ Industry matches what they actually sell (not company name)
+✓ Description is accurate to their homepage
+✓ ICP fit is conservative and justified
+✓ Decision makers match their company size
+✓ Pain points are relevant to their specific industry
+✓ Talking points reference their actual products/business
 
 Only return the JSON, no other text.`;
       
-      const prompt = `Research this ecommerce company: ${lead.website}
+      const prompt = `Research this ecommerce company and provide detailed qualification:
 
-Provide all information in JSON format as specified.`;
+Website: ${lead.website}
+
+IMPORTANT: 
+1. Visit this exact URL and analyze what they sell
+2. Look at their homepage, navigation menu, and product categories
+3. Check their About page if visible
+4. Be specific and accurate about their industry and products
+5. Only mark as HIGH ICP fit if they truly match all criteria
+
+Provide all information in the JSON format specified above.`;
 
       const researchText = await callClaudeAPI(prompt, systemPrompt);
       
@@ -489,7 +624,7 @@ Provide all information in JSON format as specified.`;
 
       // Get catalog size
       let catalogInfo = 'Unknown';
-      let platform = 'Unknown';
+      let platform = researchData.platform || 'Unknown';
       
       try {
         const catalogResponse = await fetch('/.netlify/functions/catalog-estimator', {
@@ -500,7 +635,7 @@ Provide all information in JSON format as specified.`;
 
         if (catalogResponse.ok) {
           const catalogData = await catalogResponse.json();
-          platform = catalogData.platform || 'Unknown';
+          platform = catalogData.platform || researchData.platform || 'Unknown';
           const productCount = catalogData.estimatedProducts || 'Unknown';
           catalogInfo = `${platform} | ${productCount} products`;
         }
@@ -512,9 +647,15 @@ Provide all information in JSON format as specified.`;
 Industry: ${researchData.industry}
 Platform: ${platform}
 Company Size: ${researchData.companySize}
-Decision Makers: ${researchData.decisionMakers}
-Pain Points: ${researchData.painPoints}
-Talking Points: ${researchData.talkingPoints}`;
+
+DECISION MAKERS:
+${researchData.decisionMakers}
+
+PAIN POINTS:
+${researchData.painPoints}
+
+TALKING POINTS:
+${researchData.talkingPoints}`;
 
       const rowData = [
         lead.website,
@@ -557,7 +698,7 @@ Talking Points: ${researchData.talkingPoints}`;
       setLeads(updatedLeads);
       setSelectedLead(updatedLeads.find(l => l.id === lead.id));
 
-      alert(`✅ Successfully enriched ${lead.website}!\nICP Fit: ${researchData.icpFit}`);
+      alert(`✅ Successfully enriched ${lead.website}!\n\nICP Fit: ${researchData.icpFit}\nIndustry: ${researchData.industry}\nRevenue: ${researchData.revenue}`);
 
     } catch (error) {
       console.error('Error enriching lead:', error);
@@ -676,48 +817,48 @@ Talking Points: ${researchData.talkingPoints}`;
     }
   };
 
-  // Add this function after selectContact
-const sendViaGmail = () => {
-  if (!selectedContact || !generatedEmail) {
-    alert('Please select a contact and generate an email first');
-    return;
-  }
-
-  // Parse subject and body from generated email
-  const subjectMatch = generatedEmail.match(/Subject:\s*(.+)/i);
-  const subject = subjectMatch ? subjectMatch[1].trim() : 'Onsite Affiliate Introduction';
-  
-  // Get body (everything after "Subject: ...")
-  const bodyStart = generatedEmail.indexOf('\n', generatedEmail.indexOf('Subject:'));
-  const body = bodyStart > -1 ? generatedEmail.substring(bodyStart).trim() : generatedEmail;
-
-  // Create Gmail compose URL
-  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(selectedContact.email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-  // Open Gmail in new tab
-  window.open(gmailUrl, '_blank');
-
-  // Mark lead as contacted
-  updateLeadStatus(selectedLead.id, 'contacted');
-
-  // Log sent email
-  const updatedLeads = leads.map(l => {
-    if (l.id === selectedLead.id) {
-      return {
-        ...l,
-        emails: [...(l.emails || []).map(e => 
-          e.timestamp === selectedLead.emails?.[selectedLead.emails.length - 1]?.timestamp 
-            ? { ...e, sent: true, sentAt: new Date().toISOString(), sentTo: selectedContact.email }
-            : e
-        )]
-      };
+  // Send via Gmail (Quick Link Option)
+  const sendViaGmail = () => {
+    if (!selectedContact || !generatedEmail) {
+      alert('Please select a contact and generate an email first');
+      return;
     }
-    return l;
-  });
-  setLeads(updatedLeads);
 
-  alert(`✅ Opening Gmail to send to ${selectedContact.name}!\n\nLead marked as "Contacted"`);
-};
+    // Parse subject and body from generated email
+    const subjectMatch = generatedEmail.match(/Subject:\s*(.+)/i);
+    const subject = subjectMatch ? subjectMatch[1].trim() : 'Onsite Affiliate Introduction';
+    
+    // Get body (everything after "Subject: ...")
+    const bodyStart = generatedEmail.indexOf('\n', generatedEmail.indexOf('Subject:'));
+    const body = bodyStart > -1 ? generatedEmail.substring(bodyStart).trim() : generatedEmail;
+
+    // Create Gmail compose URL
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(selectedContact.email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    // Open Gmail in new tab
+    window.open(gmailUrl, '_blank');
+
+    // Mark lead as contacted
+    updateLeadStatus(selectedLead.id, 'contacted');
+
+    // Log sent email
+    const updatedLeads = leads.map(l => {
+      if (l.id === selectedLead.id) {
+        return {
+          ...l,
+          emails: [...(l.emails || []).map(e => 
+            e.timestamp === selectedLead.emails?.[selectedLead.emails.length - 1]?.timestamp 
+              ? { ...e, sent: true, sentAt: new Date().toISOString(), sentTo: selectedContact.email }
+              : e
+          )]
+        };
+      }
+      return l;
+    });
+    setLeads(updatedLeads);
+
+    alert(`✅ Opening Gmail to send to ${selectedContact.name}!\n\nLead marked as "Contacted"`);
+  };
   
   // Update lead status (and sync to Google Sheets)
   const updateLeadStatus = (leadId, newStatus) => {
@@ -1163,27 +1304,29 @@ const sendViaGmail = () => {
                     </div>
                   )}
 
-{selectedContact && (
-  <div className="selected-contact-banner">
-    <p>
-      ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
-    </p>
-    <div className="button-group">
-      <button 
-        className="copy-email-address-btn"
-        onClick={() => navigator.clipboard.writeText(selectedContact.email)}
-      >
-        📋 Copy Email Address
-      </button>
-      <button 
-        className="send-gmail-btn"
-        onClick={sendViaGmail}
-      >
-        📧 Send via Gmail
-      </button>
-    </div>
-  </div>
-)}
+                  {selectedContact && (
+                    <div className="selected-contact-banner">
+                      <p>
+                        ✉️ Sending to: <strong>{selectedContact.name}</strong> ({selectedContact.email})
+                      </p>
+                      <div className="button-group">
+                        <button 
+                          className="copy-email-address-btn"
+                          onClick={() => navigator.clipboard.writeText(selectedContact.email)}
+                        >
+                          📋 Copy Email Address
+                        </button>
+                        <button 
+                          className="send-gmail-btn"
+                          onClick={sendViaGmail}
+                        >
+                          📧 Send via Gmail
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {selectedLead.emails?.length > 0 && (
                 <div className="email-history">
