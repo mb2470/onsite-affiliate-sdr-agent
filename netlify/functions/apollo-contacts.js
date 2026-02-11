@@ -1,5 +1,6 @@
 // FINAL CORRECT Apollo.io contacts function
 // Based on your successful API test showing api_search works
+// Replace /netlify/functions/apollo-contacts.js
 
 exports.handler = async (event, context) => {
   if (event.httpMethod !== 'POST') {
@@ -10,7 +11,7 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    const { website, titles } = JSON.parse(event.body);
+    const { website, titles, spreadsheetId, leadRowIndex } = JSON.parse(event.body);
 
     if (!process.env.APOLLO_API_KEY) {
       throw new Error('APOLLO_API_KEY environment variable not set');
@@ -70,22 +71,35 @@ exports.handler = async (event, context) => {
 
     console.log(`Found ${searchData.people.length} people, filtering for relevant titles...`);
 
-    // Filter for relevant titles (case-insensitive)
-    const relevantTitles = [
-      'director of influencer marketing',
-      'head of partnerships',
-      'vp influencer marketing',
-      'director of e-commerce',
-      'vp of e-commerce',
-      'director of brand marketing',
-      'head of social media',
-      'vp of growth',
-      'director of performance marketing',
-      'head of digital',
+    // Broader keyword-based filtering for better matches
+    const relevantKeywords = [
+      // PRIMARY: Influencer/Affiliate/Creator roles
+      'influencer',
+      'creator',
+      'affiliate',
+      'partnership',
+      'brand advocate',
+      
+      // SECONDARY: E-commerce roles
+      'ecommerce',
+      'e-commerce',
+      'digital commerce',
+      'online retail',
+      
+      // TERTIARY: Marketing roles (with qualifiers to avoid too broad)
+      'brand marketing',
+      'content marketing',
+      'social media',
+      'digital marketing',
+      'performance marketing',
+      'growth marketing',
+      
+      // QUATERNARY: Relevant C-suite/VP
+      'chief marketing',
       'vp marketing',
-      'director of marketing',
-      'manager influencer marketing',
-      'manager affiliate marketing'
+      'vp growth',
+      'vp digital',
+      'cmo'
     ];
 
     const filteredPeople = searchData.people.filter(person => {
@@ -93,8 +107,10 @@ exports.handler = async (event, context) => {
       if (!person.title) return false;
       
       const titleLower = person.title.toLowerCase();
-      return relevantTitles.some(relevantTitle => 
-        titleLower.includes(relevantTitle)
+      
+      // Check if title contains any relevant keywords
+      return relevantKeywords.some(keyword => 
+        titleLower.includes(keyword)
       );
     });
 
@@ -110,8 +126,8 @@ exports.handler = async (event, context) => {
     }
 
     const peopleToEnrich = filteredPeople.length > 0 
-      ? filteredPeople.slice(0, 5)  // Use filtered if we have them
-      : searchData.people.filter(p => p.has_email).slice(0, 5); // Otherwise use first 5 with emails
+      ? filteredPeople.slice(0, 10)  // Enrich up to 10 matches (broader search = more results)
+      : searchData.people.filter(p => p.has_email).slice(0, 5); // Fallback to first 5 with emails
 
     if (peopleToEnrich.length === 0) {
       return {
@@ -194,6 +210,60 @@ exports.handler = async (event, context) => {
 
     console.log(`Successfully enriched ${contacts.length} contacts with emails`);
 
+    // WRITE CONTACTS TO GOOGLE SHEETS (if spreadsheetId provided)
+    if (spreadsheetId && contacts.length > 0) {
+      try {
+        console.log(`Writing ${contacts.length} contacts to Google Sheets...`);
+        
+        // Prepare contact data for Contacts sheet
+        const contactRows = contacts.map(contact => [
+          website,                          // Company Website
+          contact.name,                     // Contact Name
+          contact.title,                    // Title
+          contact.email,                    // Email
+          contact.emailStatus,              // Email Status
+          contact.linkedinUrl || '',        // LinkedIn
+          contact.organization?.name || '', // Company Name
+          'New',                           // Status
+          new Date().toISOString().split('T')[0], // Date Found
+          ''                               // Notes
+        ]);
+
+        // Write to Contacts sheet (create if doesn't exist)
+        await fetch('/.netlify/functions/sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'append',
+            spreadsheetId: spreadsheetId,
+            range: 'Contacts!A:J',
+            values: contactRows
+          })
+        });
+
+        console.log(`Successfully wrote ${contacts.length} contacts to Contacts sheet`);
+
+        // Also update the main Lead sheet with contact count
+        if (leadRowIndex) {
+          const contactSummary = `${contacts.length} contacts found - see Contacts sheet`;
+          await fetch('/.netlify/functions/sheets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'write',
+              spreadsheetId: spreadsheetId,
+              range: `Sheet1!H${leadRowIndex}`,
+              values: [[contactSummary]]
+            })
+          });
+        }
+
+      } catch (sheetsError) {
+        console.error('Error writing contacts to Google Sheets:', sheetsError);
+        // Don't fail the whole request if Sheets write fails
+      }
+    }
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -202,7 +272,8 @@ exports.handler = async (event, context) => {
         contacts,
         total: searchData.people.length,
         enriched: contacts.length,
-        creditsUsed: 1 + contacts.length // 1 for search + 1 per enrichment
+        creditsUsed: 1 + contacts.length, // 1 for search + 1 per enrichment
+        savedToSheets: spreadsheetId ? true : false
       })
     };
 
