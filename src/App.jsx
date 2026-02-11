@@ -770,7 +770,7 @@ ${researchData.talkingPoints}`;
     try {
       console.log(`Finding contacts for: ${lead.website}`);
 
-      const response = await fetch('/.netlify/functions/apollo-contacts', {
+      const response = await fetch('/.netlify/functions/csv-contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
