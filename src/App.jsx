@@ -156,13 +156,13 @@ function App() {
     return data.content[0].text;
   };
 
-  // Generate personalized email with AI (BULLETPROOF VERSION)
-const generateEmail = async (lead, emailType = 'initial') => {
-  setIsGenerating(true);
-  setGeneratedEmail('');
+  // Generate personalized email with AI (BULLETPROOF VERSION with AMAZON proof point)
+  const generateEmail = async (lead, emailType = 'initial') => {
+    setIsGenerating(true);
+    setGeneratedEmail('');
 
-  try {
-    const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
+    try {
+      const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
 a revolutionary AI-powered platform that helps ecommerce brands monetize creator UGC content on their product pages.
 
 CRITICAL WRITING INSTRUCTIONS:
@@ -284,7 +284,7 @@ QUALITY CHECKLIST:
 ✓ Clear next step (CTA)?
 ✓ Would I respond to this email?`;
 
-    const prompt = `Write a ${emailType} outreach email for this lead:
+      const prompt = `Write a ${emailType} outreach email for this lead:
 
 Company: ${lead.website}
 Industry: ${lead.notes ? lead.notes.match(/Industry[:\s]+([^\n]+)/)?.[1] || 'eCommerce' : 'eCommerce'}
@@ -337,32 +337,32 @@ DO NOT:
 
 Write the email now:`;
 
-    const emailContent = await callClaudeAPI(prompt, systemPrompt);
-    setGeneratedEmail(emailContent);
+      const emailContent = await callClaudeAPI(prompt, systemPrompt);
+      setGeneratedEmail(emailContent);
 
-    const updatedLeads = leads.map(l => {
-      if (l.id === lead.id) {
-        return {
-          ...l,
-          emails: [...(l.emails || []), {
-            type: emailType,
-            content: emailContent,
-            timestamp: new Date().toISOString(),
-            sent: false
-          }]
-        };
-      }
-      return l;
-    });
-    setLeads(updatedLeads);
+      const updatedLeads = leads.map(l => {
+        if (l.id === lead.id) {
+          return {
+            ...l,
+            emails: [...(l.emails || []), {
+              type: emailType,
+              content: emailContent,
+              timestamp: new Date().toISOString(),
+              sent: false
+            }]
+          };
+        }
+        return l;
+      });
+      setLeads(updatedLeads);
 
-  } catch (error) {
-    console.error('Error generating email:', error);
-    setGeneratedEmail(`Error: ${error.message}. Please make sure your Anthropic API key is set in Netlify environment variables.`);
-  } finally {
-    setIsGenerating(false);
-  }
-};
+    } catch (error) {
+      console.error('Error generating email:', error);
+      setGeneratedEmail(`Error: ${error.message}. Please make sure your Anthropic API key is set in Netlify environment variables.`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   // Research company with AI (BULLETPROOF VERSION)
   const researchCompany = async (lead) => {
@@ -409,10 +409,10 @@ What do they actually sell? Be specific (e.g., "Premium kitchenware and cookware
 - LOW: Wrong industry OR wrong size OR no e-commerce
 
 Justify your score:
-- Industry match? (Yes/No)
-- Company size? (Too small/Perfect/Too large)
-- Active social/UGC presence? (Yes/No/Unknown)
-- High SKU count (100+)? (Yes/No/Unknown)
+• Industry match? (Yes/No)
+• Company size? (Too small/Perfect/Too large)
+• Active social/UGC presence? (Yes/No/Unknown)
+• High SKU count (100+)? (Yes/No/Unknown)
 
 3. TECH STACK
 - E-commerce platform: (Verify from page source, Wappalyzer data, or visible indicators)
@@ -431,18 +431,18 @@ For enterprise (500+ employees): VP/C-level titles
 
 5. KEY PAIN POINTS THEY LIKELY FACE
 Be specific to their industry and business model:
-- Leaky bucket: (How does this apply to them specifically?)
-- Content ROI: (What's their creator content challenge?)
-- Attribution: (Why can't they prove influencer ROI?)
-- Catalog scale: (How many SKUs do they need content for?)
+• Leaky bucket: (How does this apply to them specifically?)
+• Content ROI: (What's their creator content challenge?)
+• Attribution: (Why can't they prove influencer ROI?)
+• Catalog scale: (How many SKUs do they need content for?)
 
 6. TALKING POINTS FOR OUTREACH
 Reference their specific business:
-- Product category examples
-- SKU count estimates
-- Social channels they're active on
-- Creator content opportunities
-- Integration points with their tech stack
+• Product category examples
+• SKU count estimates
+• Social channels they're active on
+• Creator content opportunities
+• Integration points with their tech stack
 
 Format: Be concise but specific. Each section should be 2-3 sentences maximum except ICP FIT which needs justification.`;
 
@@ -762,7 +762,7 @@ ${researchData.talkingPoints}`;
     alert(`✅ Enriched ${unenrichedLeads.length} leads!`);
   };
 
-  // Find contacts using Apollo.io (ICP-INFORMED)
+  // Find contacts using CSV Database
   const findContacts = async (lead) => {
     setIsLoadingContacts(true);
     setContacts([]);
@@ -775,29 +775,24 @@ ${researchData.talkingPoints}`;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           website: lead.website,
+          spreadsheetId: spreadsheetId,
+          leadRowIndex: lead.rowIndex,
           titles: [
-            // PRIMARY: Influencer/Affiliate Leaders (most common buyer)
             'Director of Influencer Marketing',
             'Head of Partnerships',
             'Senior Manager of Affiliate Marketing',
             'Director of Brand Advocacy',
             'VP Influencer Marketing',
             'Manager Influencer Marketing',
-            
-            // SECONDARY: E-Commerce Leaders (technical buyer)
             'VP of E-Commerce',
             'Director of E-Commerce',
             'Head of Digital Product',
             'VP Ecommerce',
             'Director Ecommerce',
-            
-            // TERTIARY: Brand & Social Leaders (content buyer)
             'Director of Brand Marketing',
             'Head of Social Media',
             'Director of Content Strategy',
             'VP Brand Marketing',
-            
-            // QUATERNARY: Growth/Performance Leaders (ROI buyer)
             'VP of Growth',
             'Director of Performance Marketing',
             'Head of User Acquisition',
@@ -815,14 +810,21 @@ ${researchData.talkingPoints}`;
       
       if (data.contacts && data.contacts.length > 0) {
         setContacts(data.contacts);
-        console.log(`Found ${data.contacts.length} contacts`);
+        console.log(`Found ${data.contacts.length} contacts from CSV database`);
+        
+        // Show success message with database info
+        if (data.savedToSheets) {
+          alert(`✅ Found ${data.contacts.length} contacts in ${data.searchTime}ms!\n\n📊 Saved to "Contacts" sheet in Google Sheets\n💰 FREE - No credits used!\n⚡ Source: Your 500k CSV Database`);
+        } else {
+          alert(`✅ Found ${data.contacts.length} contacts in ${data.searchTime}ms!\n\n💰 FREE - No credits used!\n⚡ Source: Your 500k CSV Database`);
+        }
       } else {
-        alert('No contacts found with verified emails. Try a different search or check Apollo.io credits.');
+        alert(`No contacts found for ${lead.website} in the CSV database.\n\nThis company may not be in your 500k contact list, or no contacts match the ICP criteria.`);
       }
 
     } catch (error) {
       console.error('Error finding contacts:', error);
-      alert(`Failed to find contacts: ${error.message}. Make sure your Apollo API key is set in Netlify.`);
+      alert(`Failed to find contacts: ${error.message}\n\nMake sure CONTACTS_SPREADSHEET_ID is set in Netlify environment variables.`);
     } finally {
       setIsLoadingContacts(false);
     }
