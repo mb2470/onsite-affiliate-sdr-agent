@@ -1275,7 +1275,7 @@ ${researchData.talkingPoints}`;
                       onClick={() => findContacts(selectedLead)}
                       disabled={isLoadingContacts}
                     >
-                      {isLoadingContacts ? '🔍 Searching...' : '🔍 Find Contacts (Apollo.io)'}
+                      {isLoadingContacts ? '🔍 Searching 500k contacts...' : '🔍 Find Contacts (CSV Database)'}
                     </button>
                   </div>
 
