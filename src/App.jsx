@@ -190,9 +190,9 @@ GOOD (casual, direct, <90 words):
 
 Can you afford to pay creators $1k upfront for every post?
 
-Amazon Onsite Associates figured out how to fix this. No upfront costs - UGC creators get performance commissions after they drive sales.
+Amazon Onsite Associates figured out how to fix this. No upfront costs - creators get performance commissions after they drive sales.
 
-We can enable this same model for you and get 1000's of creators participating.
+Same model for D2C creator content on your PDPs.
 
 Worth a quick chat?
 
@@ -203,34 +203,34 @@ TARGET BUYER PERSONAS:
 1. DIRECTOR OF INFLUENCER MARKETING (PRIMARY)
 Real Pain: Can't afford $500-2k upfront per creator. Gifting products is a nightmare - tracking, hoping they post, chasing for content rights, no guarantee of results.
 What They Want: UGC content without upfront costs or gifting headaches
-Hook: Amazon's model - UGC performance commissions AFTER sales, no upfront costs
+Hook: Amazon's model - performance commissions AFTER sales, no upfront costs
 
 2. VP E-COMMERCE
-Real Pain: Need authentic UGC creator content but don't have budget for creator fees upfront
-What They Want: UGC at scale that pays for itself
-Hook: Zero upfront cost, Amazon proved it works and scales with creators
+Real Pain: Need authentic content but don't have budget for creator fees upfront
+What They Want: Content that pays for itself
+Hook: Zero upfront cost, Amazon proved it works at scale
 
 3. DIRECTOR BRAND MARKETING
 Real Pain: Studio content is expensive, creator content requires upfront payment they don't have
 What They Want: Scalable content without breaking budget
-Hook: High quality creator UGC with no upfront costs, Amazon's proven onsite commission model
+Hook: No upfront costs, Amazon's proven model
 
 4. VP GROWTH
 Real Pain: Can't prove ROI on upfront creator payments, need performance-based model
-What They Want: Pay for UGC results, not promises
-Hook: Scale creator UGC on performance commissions like Amazon, guaranteed sales incrementality
+What They Want: Pay for results, not promises
+Hook: Performance commissions like Amazon, guaranteed incrementality
 
 AMAZON SOCIAL PROOF (REQUIRED IN EVERY EMAIL):
 Focus on what Amazon figured out:
 ✓ "Amazon Onsite Associates - no upfront creator costs"
 ✓ "Amazon figured out how to do this without paying creators upfront"
-✓ "Same model Amazon uses - UGC pay for performance commissions, not onupfront fees"
-✓ "Amazon proved you can scale UGC without gifting products or paying upfront"
+✓ "Same model Amazon uses - performance commissions, not upfront fees"
+✓ "Amazon proved you don't need to gift products or pay upfront"
 
 KEY MESSAGES TO HIT:
 ✓ NO upfront creator costs ($500-2k per post)
-✓ NO gifting/seeding headaches (tracking orders, chasing updates, hoping for posts)
-✓ UGC performance commissions AFTER sales (Amazon's model)
+✓ NO gifting/seeding headaches (tracking, chasing, hoping)
+✓ Performance commissions AFTER sales (Amazon's model)
 ✓ Creators earn more long-term, brands pay nothing upfront
 ✓ All the logistics handled - no tracking shipments, no chasing content
 
@@ -261,67 +261,67 @@ Subject: [5-7 words referencing upfront costs or gifting pain]
 
 WORD COUNT ENFORCEMENT:
 - Count every word after the subject line
-- If you hit 90 words, STOP
+- If you hit 85 words, consider stopping
 - 90 words is the ABSOLUTE MAXIMUM
-- Shorter is better (aim for 50-60 words)
+- Shorter is better (aim for 60-80 words)
 
 EXAMPLES OF GOOD EMAILS:
 
-Example 1:
-Subject: Is budget limiting creator UGC?
+Example 1 (58 words):
+Subject: Can't afford $1k per creator post
 
 Sarah -
 
-Can you afford to pay creators $1k upfront for every UGC post?
+Can you afford to pay creators $1k upfront for every post?
 
-Amazon figured out how to fix this through an onsite commission program. No upfront costs - creators get UGC performance commissions after they drive sales.
+Amazon Onsite Associates figured out how to fix this. No upfront costs - creators get performance commissions after they drive sales.
 
-With one line of code we can enable Amazon's creator UGC model for your site.
+Same model for D2C creator content on your PDPs.
 
 Worth a quick chat?
 
 Mike
 
-Example 2:
+Example 2 (62 words):
 Subject: Gifting products for UGC is a nightmare
 
 Mike -
 
 Quick Q: How much time do you spend tracking gifted products, hoping creators post, then chasing them for content rights?
 
-Amazon figured out how to skip all that with an onsite commission program. Creator UGC performance commissions, no gifting, no tracking.
+Amazon figured out how to skip all that with Onsite Associates. Performance commissions, no gifting, no tracking.
 
-Our platform does the same for D2C brands like yours.
+We're doing the same for D2C brands.
 
 15 min to explain?
 
 Mike
 
-Example 3:
-Subject: Limited budget for upfront creator fees
+Example 3 (55 words):
+Subject: No budget for upfront creator fees
 
 Jessica -
 
-Most brands have limited budget for upfront pay per post campaigns.
+Most brands can't afford $500-2k upfront per creator post.
 
-Amazon's onsite commission program proved you don't need to pay upfront. The only pay for creator UGC after sales. No upfront costs, no gifting headaches.
+Amazon's Onsite program proved you don't need to. Performance commissions after sales. No upfront costs, no gifting headaches.
 
-We can launch Amazon's exact same creator UGC model for your site.
+Same model for your creator content on PDPs.
 
 Quick call?
 
 Mike
 
-Example 4:
-Subject: Stop paying creators upfront fees
+Example 4 (60 words):
+Subject: Stop paying creators upfront
 
 David -
 
-You're probably paying UGC content creators $500+ upfront or dealing with gifting/seeding nightmares.
+You're probably paying creators $500+ upfront or dealing with gifting/seeding nightmares.
 
-Amazon solved this with an onsite commission program. Creators earn after their UGC drives sales. No upfront costs, no logistics headaches.
+Amazon Onsite Associates solved this - performance commissions only. Creators earn after driving sales. No upfront costs, no logistics headaches.
 
-With one line of code we can luanch the same program for your site.
+Same model for D2C creator content.
 
 Worth discussing?
 
@@ -329,7 +329,7 @@ Mike
 
 QUALITY CHECKLIST:
 ✓ Under 90 words? (COUNT THEM)
-✓ Mentions Amazon Onsite Commissions?
+✓ Mentions Amazon Onsite Associates?
 ✓ References NO UPFRONT COSTS or GIFTING HEADACHES?
 ✓ Sounds casual, like Slack message?
 ✓ No formal greetings/sign-offs?
@@ -347,7 +347,7 @@ ICP Fit: ${lead.icpFit || lead.notes?.match(/ICP FIT[:\s]+([^\n]+)/)?.[1] || 'Un
 ${lead.notes ? `Research Insights:\n${lead.notes.substring(0, 500)}` : ''}
 
 ${emailType === 'followup' ? `
-FOLLOW-UP EMAIL (even shorter - 75 words max):
+FOLLOW-UP EMAIL (even shorter - 65 words max):
 - Reference you reached out before
 - New angle: mention Amazon's success
 - Create curiosity
@@ -355,7 +355,7 @@ FOLLOW-UP EMAIL (even shorter - 75 words max):
 ` : ''}
 
 ${emailType === 'breakup' ? `
-BREAKUP EMAIL (shortest - 40 words max):
+BREAKUP EMAIL (shortest - 50 words max):
 - Final attempt
 - Reference Amazon insight
 - Suggest moving on
@@ -383,7 +383,7 @@ Write the email now (COUNT to make sure it's under 90 words):`;
 7. Reference their industry: ${lead.description || 'eCommerce'}
 8. Simple question CTA at the end
 
-Write the email now (and COUNT to make sure it's under 90 words):`;
+Write the email now (and COUNT to make sure it's under 75 words):`;
 
       const emailContent = await callClaudeAPI(prompt, systemPrompt);
       setGeneratedEmail(emailContent);
