@@ -376,15 +376,6 @@ KEY MESSAGE: Amazon proved you don't need to pay creators upfront or deal with g
 
 Write the email now (COUNT to make sure it's under 90 words):`;
 
-3. Write like a casual Slack message to a coworker
-4. Start with just their first name (no "Hi" or "Dear")
-5. End with just your name (no "Best" or "Regards")
-6. Get straight to the point - no pleasantries
-7. Reference their industry: ${lead.description || 'eCommerce'}
-8. Simple question CTA at the end
-
-Write the email now (and COUNT to make sure it's under 75 words):`;
-
       const emailContent = await callClaudeAPI(prompt, systemPrompt);
       setGeneratedEmail(emailContent);
 
