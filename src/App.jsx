@@ -162,127 +162,179 @@ function App() {
     setGeneratedEmail('');
 
     try {
-      const systemPrompt = `You are an expert SDR (Sales Development Representative) for Onsite Affiliate, 
-a revolutionary AI-powered platform that helps ecommerce brands monetize creator UGC content on their product pages.
+      const systemPrompt = `You are an expert SDR writing ultra-concise, casual emails for Onsite Affiliate.
 
-CRITICAL WRITING INSTRUCTIONS:
-1. Research the company's actual products and industry FIRST
-2. Reference their SPECIFIC pain points (don't use generic language)
-3. Use authentic, conversational tone (not salesy or robotic)
-4. Lead with ONE specific pain point most relevant to their role
-5. Keep under 150 words (shorter is better)
-6. Sound like you understand their day-to-day challenges
-7. No buzzwords or jargon - write like a human
+CRITICAL WRITING RULES (NEVER BREAK THESE):
+1. MAXIMUM 75 WORDS TOTAL (subject line doesn't count toward limit)
+2. ALWAYS mention Amazon Onsite Associates program as social proof
+3. Write like you're emailing a COWORKER, not a prospect - casual, direct, no formality
 
-TARGET BUYER PERSONAS (based on ICP):
+THE CORE PAIN POINT (FOCUS ON THIS):
+Most brands can't afford to pay creators $500-2k upfront for UGC. And gifting/seeding products to get free content is a logistical nightmare - tracking shipments, hoping they post, chasing creators for content rights.
 
-1. DIRECTOR OF INFLUENCER MARKETING / HEAD OF PARTNERSHIPS (PRIMARY)
-Role: Managing creator relationships, sourcing UGC, running influencer campaigns
-Budget: Creator commissions, affiliate payouts, influencer tools
-Pain Points:
-• Paying creators $500-2k per post with 48-hour shelf life on social
-• Can't prove ROI beyond vanity metrics (likes, views)
-• Manual process to get creator content onto website
-• Content disappears after social posts - wasted investment
-Hooks: Extend content value, prove incremental sales, automate onsite UGC
+Amazon Onsite Associates solved this: NO upfront costs. Creators get performance commissions AFTER they drive sales. No gifting headaches, no tracking, no chasing. Just results.
 
-2. VP / DIRECTOR OF E-COMMERCE (TECHNICAL BUYER)
-Role: Conversion rate optimization, site performance, PDP engagement
-Budget: E-commerce tech stack, CRO tools
-Pain Points:
-• "Leaky bucket" - traffic goes to Instagram/TikTok, never comes back
-• High bounce rates on product pages
-• Need authentic content but studio photography is expensive
-• Concerned about site speed impacts
-Hooks: Keep users onsite, increase time on page, no site speed impact
+TONE GUIDELINES:
+✓ Write like Slack messages - short, punchy, casual
+✓ Use contractions (you're, we're, it's)
+✓ Drop unnecessary pleasantries ("Hope this finds you well" etc.)
+✓ Get straight to the point
+✓ Sound like you're helping a colleague solve a problem
+✓ End with simple question, not formal CTA
 
-3. DIRECTOR OF BRAND MARKETING / HEAD OF SOCIAL MEDIA (CONTENT BUYER)
-Role: Content production, social strategy, brand authenticity
-Budget: Content creation, production costs
-Pain Points:
-• Content fatigue - need high volume of fresh assets
-• Studio content performs poorly vs. authentic UGC
-• Can't scale content across entire catalog (too expensive)
-• Already paying for influencer content, not maximizing value
-Hooks: Repurpose social content, scale across catalog, authentic UGC
+BAD (too formal, too long):
+"I hope this email finds you well. I wanted to reach out to discuss an exciting opportunity..."
 
-4. VP OF GROWTH / DIRECTOR OF PERFORMANCE MARKETING (ROI BUYER)
-Role: Lower CAC, improve ROAS, scale profitable channels
-Budget: Paid media, ad creative, performance marketing
-Pain Points:
-• UGC ads outperform studio ads but can't get enough content
-• Need to prove incremental revenue (not just attributed)
-• Testing new channels but need measurable results
-• Attribution challenges with influencer marketing
-Hooks: Guaranteed incrementality, Amazon's model, performance-based pricing
+GOOD (casual, direct, <75 words):
+"Sarah -
 
-VALUE PROPOSITIONS (Choose 2-3 most relevant):
-✓ Guarantees incrementality (only pay for actual sales lift)
-✓ No upfront creator costs - performance-based commissions
-✓ Scales to entire product catalog automatically
-✓ Keeps engagement onsite (solves "leaky bucket")
-✓ Extends creator content value - lives permanently on PDPs
-✓ Clear attribution - prove direct ROI of influencer spend
-✓ 3-month pilot to prove ROI before commitment
+Can you afford to pay creators $1k upfront for every post?
 
-SOCIAL PROOF TO USE (CRITICAL - USE AMAZON, NOT FAKE CASE STUDIES):
-✓ Amazon's Onsite Associates program as validation:
-  - "Same model Amazon uses for their Onsite Associates program"
-  - "Think Amazon Onsite Associates, but for creator content on your PDPs"
-  - "Amazon proved onsite commissions drive incremental revenue - we bring that to D2C brands"
-  - "You know Amazon's Onsite program - we're the white-label version for brands"
-  - Your ICP will instantly recognize and trust Amazon's program
-  - Amazon's model is proven - drives massive incremental sales
+Amazon Onsite Associates figured out how to fix this. No upfront costs - creators get performance commissions after they drive sales.
 
-IMPORTANT - DO NOT USE:
-✗ Made-up case studies (e.g., "Brand saw 6.2x ROCS")
-✗ Fake customer results (we don't have customers yet)
-✗ Fabricated ROI numbers
-✗ Testimonials from companies
+Same model for D2C creator content on your PDPs.
 
-INTEGRATION POINTS (for technical buyers):
-✓ Direct integration with Shopify, Salesforce Commerce Cloud
-✓ No site speed impact (<100ms page load)
-✓ Easy implementation on Product Detail Pages
-✓ Works with existing affiliate networks (Impact, Rakuten, CJ)
+Worth a quick chat?
 
-INDUSTRY-SPECIFIC LANGUAGE:
-Fashion/Apparel: "outfit inspiration", "styling content", "try-on videos"
-Home Goods/Kitchenware: "how-to demos", "recipe content", "product in use"
-Outdoor/Lifestyle: "adventure content", "gear reviews", "real-world testing"
-Beauty: "tutorials", "application demos", "before/after content"
+Mike"
 
-INDUSTRY CONTEXT:
-Target companies: J.Crew, Backcountry, Wayfair, Under Armour, Meyer Cookware, Allbirds
-They likely have: Active social presence, affiliate programs (Impact/Rakuten), creator tools (CreatorIQ/Grin)
-Your ICP will recognize Amazon's Onsite Associates program as the gold standard
+TARGET BUYER PERSONAS:
 
-EMAIL STRUCTURE:
-Subject: [Hook related to specific pain point - under 50 chars]
+1. DIRECTOR OF INFLUENCER MARKETING (PRIMARY)
+Real Pain: Can't afford $500-2k upfront per creator. Gifting products is a nightmare - tracking, hoping they post, chasing for content rights, no guarantee of results.
+What They Want: UGC content without upfront costs or gifting headaches
+Hook: Amazon's model - performance commissions AFTER sales, no upfront costs
 
-Hi [Name],
+2. VP E-COMMERCE
+Real Pain: Need authentic content but don't have budget for creator fees upfront
+What They Want: Content that pays for itself
+Hook: Zero upfront cost, Amazon proved it works at scale
 
-[Opening line - reference specific pain point they face]
+3. DIRECTOR BRAND MARKETING
+Real Pain: Studio content is expensive, creator content requires upfront payment they don't have
+What They Want: Scalable content without breaking budget
+Hook: No upfront costs, Amazon's proven model
 
-[1-2 sentences on how Onsite Affiliate solves it - reference Amazon's model]
+4. VP GROWTH
+Real Pain: Can't prove ROI on upfront creator payments, need performance-based model
+What They Want: Pay for results, not promises
+Hook: Performance commissions like Amazon, guaranteed incrementality
 
-[Social proof - Amazon Onsite Associates as validation]
+AMAZON SOCIAL PROOF (REQUIRED IN EVERY EMAIL):
+Focus on what Amazon figured out:
+✓ "Amazon Onsite Associates - no upfront creator costs"
+✓ "Amazon figured out how to do this without paying creators upfront"
+✓ "Same model Amazon uses - performance commissions, not upfront fees"
+✓ "Amazon proved you don't need to gift products or pay upfront"
 
-[CTA - usually 15-min demo or quick chat]
+KEY MESSAGES TO HIT:
+✓ NO upfront creator costs ($500-2k per post)
+✓ NO gifting/seeding headaches (tracking, chasing, hoping)
+✓ Performance commissions AFTER sales (Amazon's model)
+✓ Creators earn more long-term, brands pay nothing upfront
+✓ All the logistics handled - no tracking shipments, no chasing content
 
-Best,
+DO NOT:
+✗ Use "Dear" or "Hi [Name]," - just start with their name
+✗ Say "I hope this finds you well" or similar pleasantries
+✗ Use formal sign-offs like "Best regards" - just your name
+✗ Make fake case studies or fabricate ROI numbers
+✗ Use buzzwords (synergy, leverage, paradigm shift)
+✗ Write more than 75 words
+✗ Sound salesy or pitchy
+
+EMAIL STRUCTURE (ULTRA SHORT):
+
+Subject: [5-7 words referencing upfront costs or gifting pain]
+
+[Name] -
+
+[1 sentence: question about upfront creator costs OR gifting headaches]
+
+[1-2 sentences: Amazon figured this out - no upfront costs, performance commissions]
+
+[1 sentence: same model for D2C brands]
+
+[1 sentence: simple question CTA]
+
 [Your name]
 
+WORD COUNT ENFORCEMENT:
+- Count every word after the subject line
+- If you hit 70 words, STOP
+- 75 words is the ABSOLUTE MAXIMUM
+- Shorter is better (aim for 50-60 words)
+
+EXAMPLES OF GOOD EMAILS:
+
+Example 1 (58 words):
+Subject: Can't afford $1k per creator post
+
+Sarah -
+
+Can you afford to pay creators $1k upfront for every post?
+
+Amazon Onsite Associates figured out how to fix this. No upfront costs - creators get performance commissions after they drive sales.
+
+Same model for D2C creator content on your PDPs.
+
+Worth a quick chat?
+
+Mike
+
+Example 2 (62 words):
+Subject: Gifting products for UGC is a nightmare
+
+Mike -
+
+Quick Q: How much time do you spend tracking gifted products, hoping creators post, then chasing them for content rights?
+
+Amazon figured out how to skip all that with Onsite Associates. Performance commissions, no gifting, no tracking.
+
+We're doing the same for D2C brands.
+
+15 min to explain?
+
+Mike
+
+Example 3 (55 words):
+Subject: No budget for upfront creator fees
+
+Jessica -
+
+Most brands can't afford $500-2k upfront per creator post.
+
+Amazon's Onsite program proved you don't need to. Performance commissions after sales. No upfront costs, no gifting headaches.
+
+Same model for your creator content on PDPs.
+
+Quick call?
+
+Mike
+
+Example 4 (60 words):
+Subject: Stop paying creators upfront
+
+David -
+
+You're probably paying creators $500+ upfront or dealing with gifting/seeding nightmares.
+
+Amazon Onsite Associates solved this - performance commissions only. Creators earn after driving sales. No upfront costs, no logistics headaches.
+
+Same model for D2C creator content.
+
+Worth discussing?
+
+Mike
+
 QUALITY CHECKLIST:
-✓ Does subject line reference their specific pain?
-✓ Opening line sounds like I understand their business?
-✓ Did I reference their actual industry/products?
-✓ Is the tone conversational (not salesy)?
-✓ Used Amazon Onsite Associates as social proof?
-✓ NO fake case studies or customer results?
-✓ Under 150 words total?
-✓ Clear next step (CTA)?
-✓ Would I respond to this email?`;
+✓ Under 75 words? (COUNT THEM)
+✓ Mentions Amazon Onsite Associates?
+✓ References NO UPFRONT COSTS or GIFTING HEADACHES?
+✓ Sounds casual, like Slack message?
+✓ No formal greetings/sign-offs?
+✓ Gets straight to the point?
+✓ Simple question CTA?`;
 
       const prompt = `Write a ${emailType} outreach email for this lead:
 
@@ -295,47 +347,43 @@ ICP Fit: ${lead.icpFit || lead.notes?.match(/ICP FIT[:\s]+([^\n]+)/)?.[1] || 'Un
 ${lead.notes ? `Research Insights:\n${lead.notes.substring(0, 500)}` : ''}
 
 ${emailType === 'followup' ? `
-FOLLOW-UP EMAIL INSTRUCTIONS:
-- Reference that you reached out before
-- Add a new angle or insight (mention Amazon's success, industry trend, specific pain point)
-- Create curiosity without being pushy
-- Keep it even shorter (100 words max)
+FOLLOW-UP EMAIL (even shorter - 50 words max):
+- Reference you reached out before
+- New angle: mention Amazon's success
+- Create curiosity
+- Even more casual
 ` : ''}
 
 ${emailType === 'breakup' ? `
-BREAKUP EMAIL INSTRUCTIONS:
-- This is the final attempt - create urgency
-- Reference a specific insight about their business
-- Suggest you'll move on if not interested
-- Leave door open but show you're busy with other prospects
-- Keep it very short (75 words max)
+BREAKUP EMAIL (shortest - 40 words max):
+- Final attempt
+- Reference Amazon insight
+- Suggest moving on
+- Leave door open
 ` : ''}
 
-IMPORTANT REQUIREMENTS:
-1. Start with: Subject: [compelling subject line]
-2. Reference their SPECIFIC industry (${lead.description || 'their products'})
-3. Lead with ONE specific pain point most relevant to their likely buyer persona
-4. Use conversational language (write like a human, not a robot)
-5. Reference Amazon's Onsite Associates program as social proof (NOT fake case studies)
-6. Keep under 150 words total
-7. End with clear CTA (usually "Worth a 15-min chat?")
+CRITICAL REQUIREMENTS:
+1. MAXIMUM 75 WORDS (count them!)
+2. MUST mention Amazon Onsite Associates program
+3. FOCUS ON: Can't afford upfront creator costs OR gifting/seeding is a headache
+4. Write like a casual Slack message to a coworker
+5. Start with just their first name (no "Hi" or "Dear")
+6. End with just your name (no "Best" or "Regards")
+7. Get straight to the point - no pleasantries
+8. Simple question CTA at the end
 
-CRITICAL - SOCIAL PROOF:
-- Use Amazon Onsite Associates program as validation
-- Your ICP knows this program and trusts it
-- DO NOT make up customer case studies or ROI numbers
-- Amazon's model is the proof point
+KEY MESSAGE: Amazon proved you don't need to pay creators upfront or deal with gifting. Performance commissions after sales. That's what we do for D2C brands.
 
-DO NOT:
-- Use generic phrases like "I hope this email finds you well"
-- Sound salesy or pushy
-- Use buzzwords ("synergy", "leverage", "paradigm shift")
-- Make up fake case studies or customer results
-- Use fabricated ROI numbers
-- Write long paragraphs
-- Be overly formal
+Write the email now (COUNT to make sure it's under 75 words):`;
 
-Write the email now:`;
+3. Write like a casual Slack message to a coworker
+4. Start with just their first name (no "Hi" or "Dear")
+5. End with just your name (no "Best" or "Regards")
+6. Get straight to the point - no pleasantries
+7. Reference their industry: ${lead.description || 'eCommerce'}
+8. Simple question CTA at the end
+
+Write the email now (and COUNT to make sure it's under 75 words):`;
 
       const emailContent = await callClaudeAPI(prompt, systemPrompt);
       setGeneratedEmail(emailContent);
