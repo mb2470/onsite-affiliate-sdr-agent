@@ -1,6 +1,7 @@
-// CSV Contact Matcher - GOOGLE SHEETS VERSION
-// Perfect for large CSVs (500k contacts)
-// Replace /netlify/functions/apollo-contacts.js with this file
+// CSV Contact Matcher - Standalone version that calls Google Sheets API directly
+// This avoids the complexity of calling another Netlify function
+
+const { google } = require('googleapis');
 
 // Normalize domain for fuzzy matching
 function normalizeDomain(url) {
@@ -55,10 +56,34 @@ function isRelevantTitle(title) {
   return relevantKeywords.some(keyword => titleLower.includes(keyword));
 }
 
+// Get Google Sheets client
+function getGoogleSheetsClient() {
+  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
+  
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
+  
+  return google.sheets({ version: 'v4', auth });
+}
+
 exports.handler = async (event, context) => {
+  // Add CORS headers
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Content-Type': 'application/json'
+  };
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
+      headers,
       body: JSON.stringify({ error: 'Method not allowed' })
     };
   }
@@ -66,36 +91,38 @@ exports.handler = async (event, context) => {
   try {
     const { website, spreadsheetId, leadRowIndex } = JSON.parse(event.body);
 
+    console.log('Request received:', { website, spreadsheetId, leadRowIndex });
+
     if (!website) {
       throw new Error('Website is required');
     }
 
     if (!process.env.CONTACTS_SPREADSHEET_ID) {
+      console.error('CONTACTS_SPREADSHEET_ID not set');
       throw new Error('CONTACTS_SPREADSHEET_ID environment variable not set. Upload your CSV to Google Sheets first.');
+    }
+
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
+      console.error('GOOGLE_SERVICE_ACCOUNT_KEY not set');
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY environment variable not set.');
     }
 
     console.log(`Searching contact database for: ${website}`);
     const startTime = Date.now();
 
+    // Get Google Sheets client
+    const sheets = getGoogleSheetsClient();
+
     // Load contacts from Google Sheets
-    const response = await fetch('/.netlify/functions/sheets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'read',
-        spreadsheetId: process.env.CONTACTS_SPREADSHEET_ID,
-        range: 'Sheet1!A:F'  // Assuming: website, account name, first name, last name, title, email
-      })
+    console.log(`Reading from spreadsheet: ${process.env.CONTACTS_SPREADSHEET_ID}`);
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.CONTACTS_SPREADSHEET_ID,
+      range: 'Sheet1!A:F'
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Failed to load contact database:', errorText);
-      throw new Error('Failed to load contact database from Google Sheets');
-    }
-
-    const data = await response.json();
-    const rows = data.values || [];
+    const rows = response.data.values || [];
+    console.log(`Loaded ${rows.length} total rows from sheet`);
 
     if (rows.length === 0) {
       throw new Error('Contact database is empty');
@@ -111,7 +138,7 @@ exports.handler = async (event, context) => {
       email: row[5] || ''
     }));
 
-    console.log(`Loaded ${allContacts.length} contacts from database in ${Date.now() - startTime}ms`);
+    console.log(`Parsed ${allContacts.length} contacts from database`);
 
     // Filter contacts for this domain
     const matchingContacts = allContacts.filter(contact => {
@@ -126,7 +153,7 @@ exports.handler = async (event, context) => {
     if (matchingContacts.length === 0) {
       return {
         statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           success: true,
           contacts: [],
@@ -157,6 +184,7 @@ exports.handler = async (event, context) => {
     console.log(`Returning ${contacts.length} contacts in ${Date.now() - startTime}ms`);
 
     // WRITE CONTACTS TO USER'S GOOGLE SHEETS (if spreadsheetId provided)
+    let savedToSheets = false;
     if (spreadsheetId && contacts.length > 0) {
       try {
         console.log(`Writing ${contacts.length} contacts to user's Google Sheets...`);
@@ -174,31 +202,28 @@ exports.handler = async (event, context) => {
           ''
         ]);
 
-        await fetch('/.netlify/functions/sheets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'append',
-            spreadsheetId: spreadsheetId,
-            range: 'Contacts!A:J',
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: spreadsheetId,
+          range: 'Contacts!A:J',
+          valueInputOption: 'RAW',
+          resource: {
             values: contactRows
-          })
+          }
         });
 
         console.log(`Successfully wrote ${contacts.length} contacts to Contacts sheet`);
+        savedToSheets = true;
 
         // Update lead row with contact count
         if (leadRowIndex) {
           const contactSummary = `${contacts.length} contacts found - see Contacts sheet`;
-          await fetch('/.netlify/functions/sheets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'write',
-              spreadsheetId: spreadsheetId,
-              range: `Sheet1!H${leadRowIndex}`,
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: spreadsheetId,
+            range: `Sheet1!H${leadRowIndex}`,
+            valueInputOption: 'RAW',
+            resource: {
               values: [[contactSummary]]
-            })
+            }
           });
         }
 
@@ -209,25 +234,27 @@ exports.handler = async (event, context) => {
 
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         success: true,
         contacts,
         total: matchingContacts.length,
         source: 'CSV Database',
-        savedToSheets: spreadsheetId ? true : false,
+        savedToSheets,
         searchTime: Date.now() - startTime
       })
     };
 
   } catch (error) {
     console.error('CSV contact search error:', error);
+    console.error('Error stack:', error.stack);
     return {
       statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ 
         success: false,
-        error: error.message || 'Failed to search contacts'
+        error: error.message || 'Failed to search contacts',
+        details: error.stack
       })
     };
   }
