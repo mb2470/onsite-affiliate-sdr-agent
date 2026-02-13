@@ -848,18 +848,7 @@ ${researchData.talkingPoints}`;
         
         console.log(`Found ${data.contacts.length} contacts (${data.total} total available)`);
         
-        // Show success message (only on first batch)
-        if (offset === 0) {
-          const recommendedInfo = data.recommendedTitles && data.recommendedTitles.length > 0
-            ? `\n🎯 Matched based on research: ${data.recommendedTitles.slice(0, 2).join(', ')}`
-            : '';
-          
-          if (data.savedToSheets) {
-            alert(`✅ Found ${data.total} total contacts in ${data.searchTime}ms!\n\n📊 Showing top 3 best matches (scored by research)\n💰 FREE - No credits used!\n⚡ Source: Your 500k CSV Database${recommendedInfo}`);
-          } else {
-            alert(`✅ Found ${data.total} total contacts in ${data.searchTime}ms!\n\n📊 Showing top 3 best matches (scored by research)\n💰 FREE - No credits used!${recommendedInfo}`);
-          }
-        }
+        // No alert - contacts just appear silently
       } else {
         setHasMoreContacts(false);
         if (offset === 0) {
