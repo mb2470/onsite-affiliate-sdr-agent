@@ -350,10 +350,62 @@ exports.handler = async (event, context) => {
     // Filter and score contacts
     const matchingContacts = allContacts
       .filter(contact => {
+        // Must match the company domain
         if (!domainsMatch(website, contact.website)) return false;
+        
+        // Must have email
         if (!contact.email || contact.email.trim() === '') return false;
+        
+        // Must have title
         if (!contact.title || contact.title.trim() === '') return false;
-        return true;
+        
+        // MATCHING LOGIC: Contact must match in either EMAIL DOMAIN or ACCOUNT NAME
+        
+        // Extract search company name from domain (e.g., "temu" from "temu.com")
+        const searchDomain = normalizeDomain(website);
+        const searchCompanyName = searchDomain.replace(/\.(com|co\.uk|net|org|io|ai|app)$/, '').toLowerCase();
+        
+        // Check 1: Email domain matches
+        const emailDomain = contact.email.toLowerCase().split('@')[1];
+        if (emailDomain) {
+          const normalizedEmailDomain = normalizeDomain(emailDomain);
+          const emailBase = normalizedEmailDomain.replace(/\.(com|co\.uk|net|org|io|ai|app)$/, '');
+          
+          // If email domain matches, it's a match!
+          if (normalizedEmailDomain === searchDomain || emailBase === searchCompanyName) {
+            return true;
+          }
+        }
+        
+        // Check 2: Account Name contains company name
+        if (contact.accountName && contact.accountName.trim()) {
+          const accountNameLower = contact.accountName.toLowerCase();
+          
+          // Check if search company name appears in account name
+          // For "temu.com" search, check if "temu" appears in account name
+          if (accountNameLower.includes(searchCompanyName)) {
+            return true;
+          }
+          
+          // Also check if account name appears in search domain
+          // For searching "J.Crew", account name "JCrew" should match
+          const normalizedAccountName = accountNameLower
+            .replace(/[^a-z0-9]/g, '') // Remove special chars
+            .trim();
+          
+          const normalizedSearchName = searchCompanyName
+            .replace(/[^a-z0-9]/g, '');
+          
+          if (normalizedAccountName && normalizedSearchName) {
+            if (normalizedAccountName.includes(normalizedSearchName) || 
+                normalizedSearchName.includes(normalizedAccountName)) {
+              return true;
+            }
+          }
+        }
+        
+        // No match found
+        return false;
       })
       .map(contact => {
         const score = scoreContact(contact, recommendedTitles);
