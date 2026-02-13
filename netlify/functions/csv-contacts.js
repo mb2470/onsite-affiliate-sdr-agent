@@ -1,5 +1,5 @@
-// CSV Contact Matcher - Standalone version that calls Google Sheets API directly
-// This avoids the complexity of calling another Netlify function
+// CSV Contact Matcher - SMART VERSION with AI-powered scoring
+// Scores contacts based on research insights and shows best matches first
 
 const { google } = require('googleapis');
 
@@ -38,22 +38,204 @@ function domainsMatch(searchDomain, contactDomain) {
   return false;
 }
 
-// Filter contacts by relevant titles (ICP-focused)
-function isRelevantTitle(title) {
-  if (!title) return false;
+// Extract recommended decision maker titles from research notes
+function extractRecommendedTitles(researchNotes) {
+  if (!researchNotes) return [];
   
-  const titleLower = title.toLowerCase();
+  // Look for DECISION MAKERS section in research
+  const decisionMakersMatch = researchNotes.match(/DECISION MAKERS[:\s]+([^\n]+(?:\n(?![\n])[^\n]+)*)/i);
   
-  const relevantKeywords = [
-    'influencer', 'creator', 'affiliate', 'partnership', 'brand advocate', 'community',
-    'ecommerce', 'e-commerce', 'digital commerce', 'online retail',
-    'brand marketing', 'content marketing', 'social media', 'digital marketing',
-    'performance marketing', 'growth marketing',
-    'chief marketing', 'vp marketing', 'vp growth', 'vp digital', 'cmo',
-    'vp brand', 'vp ecommerce', 'vp e-commerce'
+  if (!decisionMakersMatch) return [];
+  
+  const decisionMakersText = decisionMakersMatch[1];
+  
+  // Extract titles from the text
+  const titles = [];
+  
+  // Common patterns for decision maker titles
+  const titlePatterns = [
+    /Director of Influencer Marketing/gi,
+    /VP Influencer Marketing/gi,
+    /Head of Influencer/gi,
+    /Director of Brand Marketing/gi,
+    /VP Brand Marketing/gi,
+    /Head of Brand/gi,
+    /Director of E-?Commerce/gi,
+    /VP E-?Commerce/gi,
+    /Head of E-?Commerce/gi,
+    /Director of Partnerships/gi,
+    /VP Partnerships/gi,
+    /Head of Partnerships/gi,
+    /Director of Growth/gi,
+    /VP Growth/gi,
+    /Head of Growth/gi,
+    /Director of Performance Marketing/gi,
+    /VP Performance Marketing/gi,
+    /Chief Marketing Officer/gi,
+    /CMO/gi,
+    /VP Marketing/gi,
+    /Director of Marketing/gi,
+    /Head of Marketing/gi
   ];
   
-  return relevantKeywords.some(keyword => titleLower.includes(keyword));
+  titlePatterns.forEach(pattern => {
+    const matches = decisionMakersText.match(pattern);
+    if (matches) {
+      matches.forEach(match => titles.push(match.toLowerCase()));
+    }
+  });
+  
+  return [...new Set(titles)]; // Remove duplicates
+}
+
+// Score a contact based on how well their title matches research recommendations
+function scoreContact(contact, recommendedTitles) {
+  if (!contact.title) return 0;
+  
+  const contactTitle = contact.title.toLowerCase();
+  let score = 0;
+  
+  // If we have specific recommendations from research, score based on those
+  if (recommendedTitles && recommendedTitles.length > 0) {
+    // Exact match with recommended title = 100 points
+    if (recommendedTitles.some(rec => contactTitle === rec)) {
+      score += 100;
+    }
+    
+    // Partial match with recommended title = 50 points
+    else if (recommendedTitles.some(rec => contactTitle.includes(rec.replace(/^(director|vp|head|chief) of /i, '')) || 
+                                            rec.includes(contactTitle.replace(/^(director|vp|head|chief) of /i, '')))) {
+      score += 50;
+    }
+  }
+  
+  // Score based on seniority level (higher = better)
+  if (contactTitle.includes('chief') || contactTitle.includes('cmo')) {
+    score += 40;
+  } else if (contactTitle.includes('vp') || contactTitle.includes('vice president')) {
+    score += 35;
+  } else if (contactTitle.includes('head of')) {
+    score += 30;
+  } else if (contactTitle.includes('director')) {
+    score += 25;
+  } else if (contactTitle.includes('senior')) {
+    score += 15;
+  } else if (contactTitle.includes('manager')) {
+    score += 10;
+  }
+  
+  // Score based on ICP-relevant keywords
+  const icpKeywords = [
+    { keyword: 'influencer', points: 30 },
+    { keyword: 'creator', points: 30 },
+    { keyword: 'affiliate', points: 25 },
+    { keyword: 'partnership', points: 25 },
+    { keyword: 'brand marketing', points: 20 },
+    { keyword: 'ecommerce', points: 20 },
+    { keyword: 'e-commerce', points: 20 },
+    { keyword: 'growth', points: 15 },
+    { keyword: 'performance marketing', points: 15 },
+    { keyword: 'digital marketing', points: 10 },
+    { keyword: 'content marketing', points: 10 },
+    { keyword: 'social media', points: 10 }
+  ];
+  
+  icpKeywords.forEach(({ keyword, points }) => {
+    if (contactTitle.includes(keyword)) {
+      score += points;
+    }
+  });
+  
+  // Bonus for having an email
+  if (contact.email && contact.email.trim()) {
+    score += 5;
+  }
+  
+  return score;
+}
+
+// Get reason for the score (to display to user)
+function getMatchReason(contact, recommendedTitles, score) {
+  if (!contact.title) return 'Has contact info';
+  
+  const contactTitle = contact.title.toLowerCase();
+  const reasons = [];
+  
+  // Check if matches research recommendation
+  if (recommendedTitles && recommendedTitles.length > 0) {
+    const exactMatch = recommendedTitles.find(rec => contactTitle === rec);
+    if (exactMatch) {
+      reasons.push('🎯 Exact match from research');
+    } else {
+      const partialMatch = recommendedTitles.find(rec => 
+        contactTitle.includes(rec.replace(/^(director|vp|head|chief) of /i, '')) || 
+        rec.includes(contactTitle.replace(/^(director|vp|head|chief) of /i, ''))
+      );
+      if (partialMatch) {
+        reasons.push('✓ Similar to research recommendation');
+      }
+    }
+  }
+  
+  // Add seniority indicator
+  if (contactTitle.includes('chief') || contactTitle.includes('cmo')) {
+    reasons.push('C-level');
+  } else if (contactTitle.includes('vp')) {
+    reasons.push('VP-level');
+  } else if (contactTitle.includes('head of')) {
+    reasons.push('Head-level');
+  } else if (contactTitle.includes('director')) {
+    reasons.push('Director-level');
+  }
+  
+  // Add ICP match
+  const icpMatches = [];
+  if (contactTitle.includes('influencer')) icpMatches.push('Influencer');
+  if (contactTitle.includes('creator')) icpMatches.push('Creator');
+  if (contactTitle.includes('affiliate')) icpMatches.push('Affiliate');
+  if (contactTitle.includes('partnership')) icpMatches.push('Partnership');
+  if (contactTitle.includes('brand marketing')) icpMatches.push('Brand Marketing');
+  if (contactTitle.includes('ecommerce') || contactTitle.includes('e-commerce')) icpMatches.push('E-Commerce');
+  if (contactTitle.includes('growth')) icpMatches.push('Growth');
+  
+  if (icpMatches.length > 0) {
+    reasons.push(icpMatches.join(' + '));
+  }
+  
+  return reasons.length > 0 ? reasons.join(' • ') : 'Relevant contact';
+}
+
+// Get user-friendly match level badge based on score
+function getMatchLevel(score) {
+  if (score >= 120) {
+    return {
+      level: 'Best Match',
+      emoji: '🎯',
+      class: 'match-best',
+      description: 'Exact or very close match from research'
+    };
+  } else if (score >= 70) {
+    return {
+      level: 'Great Match',
+      emoji: '⭐',
+      class: 'match-great',
+      description: 'Strong fit for ICP and seniority'
+    };
+  } else if (score >= 40) {
+    return {
+      level: 'Good Match',
+      emoji: '✓',
+      class: 'match-good',
+      description: 'Relevant role and seniority'
+    };
+  } else {
+    return {
+      level: 'Possible Match',
+      emoji: '•',
+      class: 'match-possible',
+      description: 'May be relevant'
+    };
+  }
 }
 
 // Get Google Sheets client
@@ -89,9 +271,9 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    const { website, spreadsheetId, leadRowIndex } = JSON.parse(event.body);
+    const { website, spreadsheetId, leadRowIndex, researchNotes, offset = 0 } = JSON.parse(event.body);
 
-    console.log('Request received:', { website, spreadsheetId, leadRowIndex });
+    console.log('Request received:', { website, spreadsheetId, leadRowIndex, offset });
 
     if (!website) {
       throw new Error('Website is required');
@@ -99,7 +281,7 @@ exports.handler = async (event, context) => {
 
     if (!process.env.CONTACTS_SPREADSHEET_ID) {
       console.error('CONTACTS_SPREADSHEET_ID not set');
-      throw new Error('CONTACTS_SPREADSHEET_ID environment variable not set. Upload your CSV to Google Sheets first.');
+      throw new Error('CONTACTS_SPREADSHEET_ID environment variable not set.');
     }
 
     if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
@@ -109,6 +291,10 @@ exports.handler = async (event, context) => {
 
     console.log(`Searching contact database for: ${website}`);
     const startTime = Date.now();
+
+    // Extract recommended decision maker titles from research
+    const recommendedTitles = extractRecommendedTitles(researchNotes);
+    console.log('Recommended titles from research:', recommendedTitles);
 
     // Get Google Sheets client
     const sheets = getGoogleSheetsClient();
@@ -140,15 +326,23 @@ exports.handler = async (event, context) => {
 
     console.log(`Parsed ${allContacts.length} contacts from database`);
 
-    // Filter contacts for this domain
-    const matchingContacts = allContacts.filter(contact => {
-      if (!domainsMatch(website, contact.website)) return false;
-      if (!contact.email || contact.email.trim() === '') return false;
-      if (!isRelevantTitle(contact.title)) return false;
-      return true;
-    });
+    // Filter and score contacts
+    const matchingContacts = allContacts
+      .filter(contact => {
+        if (!domainsMatch(website, contact.website)) return false;
+        if (!contact.email || contact.email.trim() === '') return false;
+        if (!contact.title || contact.title.trim() === '') return false;
+        return true;
+      })
+      .map(contact => ({
+        ...contact,
+        score: scoreContact(contact, recommendedTitles),
+        matchReason: getMatchReason(contact, recommendedTitles, 0)
+      }))
+      // Sort by score (highest first)
+      .sort((a, b) => b.score - a.score);
 
-    console.log(`Found ${matchingContacts.length} matching contacts with relevant titles`);
+    console.log(`Found ${matchingContacts.length} matching contacts`);
 
     if (matchingContacts.length === 0) {
       return {
@@ -158,36 +352,51 @@ exports.handler = async (event, context) => {
           success: true,
           contacts: [],
           total: 0,
+          hasMore: false,
           message: `No contacts found for ${website} in database`,
           searchTime: Date.now() - startTime
         })
       };
     }
 
-    // Transform to standard format and limit to 15 contacts
-    const contacts = matchingContacts.slice(0, 15).map((contact, index) => ({
-      id: `csv-${Date.now()}-${index}`,
-      name: `${contact.firstName} ${contact.lastName}`.trim() || contact.accountName || 'Unknown',
-      firstName: contact.firstName,
-      lastName: contact.lastName,
-      title: contact.title || 'Unknown Title',
-      email: contact.email,
-      emailStatus: 'database',
-      linkedinUrl: null,
-      photoUrl: null,
-      organization: {
-        name: contact.accountName,
-        website: contact.website || website
-      }
-    }));
+    // Get the next 3 contacts based on offset
+    const BATCH_SIZE = 3;
+    const paginatedContacts = matchingContacts.slice(offset, offset + BATCH_SIZE);
+    const hasMore = matchingContacts.length > (offset + BATCH_SIZE);
 
-    console.log(`Returning ${contacts.length} contacts in ${Date.now() - startTime}ms`);
+    // Transform to standard format
+    const contacts = paginatedContacts.map((contact, index) => {
+      const matchLevel = getMatchLevel(contact.score);
+      return {
+        id: `csv-${Date.now()}-${offset + index}`,
+        name: `${contact.firstName} ${contact.lastName}`.trim() || contact.accountName || 'Unknown',
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+        title: contact.title,
+        email: contact.email,
+        emailStatus: 'database',
+        linkedinUrl: null,
+        photoUrl: null,
+        organization: {
+          name: contact.accountName,
+          website: contact.website || website
+        },
+        score: contact.score,
+        matchReason: contact.matchReason,
+        matchLevel: matchLevel.level,
+        matchEmoji: matchLevel.emoji,
+        matchClass: matchLevel.class,
+        matchDescription: matchLevel.description
+      };
+    });
 
-    // WRITE CONTACTS TO USER'S GOOGLE SHEETS (if spreadsheetId provided)
+    console.log(`Returning ${contacts.length} contacts (offset ${offset}) in ${Date.now() - startTime}ms`);
+
+    // WRITE CONTACTS TO USER'S GOOGLE SHEETS (only on first batch)
     let savedToSheets = false;
-    if (spreadsheetId && contacts.length > 0) {
+    if (spreadsheetId && offset === 0 && contacts.length > 0) {
       try {
-        console.log(`Writing ${contacts.length} contacts to user's Google Sheets...`);
+        console.log(`Writing top ${contacts.length} contacts to user's Google Sheets...`);
         
         const contactRows = contacts.map(contact => [
           website,
@@ -195,11 +404,11 @@ exports.handler = async (event, context) => {
           contact.title,
           contact.email,
           'CSV Database',
-          '',
+          contact.matchReason,
           contact.organization?.name || '',
           'New',
           new Date().toISOString().split('T')[0],
-          ''
+          `Score: ${contact.score}`
         ]);
 
         await sheets.spreadsheets.values.append({
@@ -216,7 +425,7 @@ exports.handler = async (event, context) => {
 
         // Update lead row with contact count
         if (leadRowIndex) {
-          const contactSummary = `${contacts.length} contacts found - see Contacts sheet`;
+          const contactSummary = `${matchingContacts.length} contacts found - top ${contacts.length} saved`;
           await sheets.spreadsheets.values.update({
             spreadsheetId: spreadsheetId,
             range: `Sheet1!H${leadRowIndex}`,
@@ -239,9 +448,12 @@ exports.handler = async (event, context) => {
         success: true,
         contacts,
         total: matchingContacts.length,
-        source: 'CSV Database',
+        offset,
+        hasMore,
+        source: 'CSV Database (Smart Match)',
         savedToSheets,
-        searchTime: Date.now() - startTime
+        searchTime: Date.now() - startTime,
+        recommendedTitles: recommendedTitles.length > 0 ? recommendedTitles : null
       })
     };
 
