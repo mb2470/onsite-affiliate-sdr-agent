@@ -1,5 +1,5 @@
-// CSV Contact Matcher - SMART VERSION with AI-powered scoring
-// Scores contacts based on research insights and shows best matches first
+// CSV Contact Matcher - PRODUCTION VERSION
+// Optimized for large datasets with timeout protection
 
 const { google } = require('googleapis');
 
@@ -42,50 +42,55 @@ function domainsMatch(searchDomain, contactDomain) {
 function extractRecommendedTitles(researchNotes) {
   if (!researchNotes) return [];
   
-  // Look for DECISION MAKERS section in research
-  const decisionMakersMatch = researchNotes.match(/DECISION MAKERS[:\s]+([^\n]+(?:\n(?![\n])[^\n]+)*)/i);
-  
-  if (!decisionMakersMatch) return [];
-  
-  const decisionMakersText = decisionMakersMatch[1];
-  
-  // Extract titles from the text
-  const titles = [];
-  
-  // Common patterns for decision maker titles
-  const titlePatterns = [
-    /Director of Influencer Marketing/gi,
-    /VP Influencer Marketing/gi,
-    /Head of Influencer/gi,
-    /Director of Brand Marketing/gi,
-    /VP Brand Marketing/gi,
-    /Head of Brand/gi,
-    /Director of E-?Commerce/gi,
-    /VP E-?Commerce/gi,
-    /Head of E-?Commerce/gi,
-    /Director of Partnerships/gi,
-    /VP Partnerships/gi,
-    /Head of Partnerships/gi,
-    /Director of Growth/gi,
-    /VP Growth/gi,
-    /Head of Growth/gi,
-    /Director of Performance Marketing/gi,
-    /VP Performance Marketing/gi,
-    /Chief Marketing Officer/gi,
-    /CMO/gi,
-    /VP Marketing/gi,
-    /Director of Marketing/gi,
-    /Head of Marketing/gi
-  ];
-  
-  titlePatterns.forEach(pattern => {
-    const matches = decisionMakersText.match(pattern);
-    if (matches) {
-      matches.forEach(match => titles.push(match.toLowerCase()));
-    }
-  });
-  
-  return [...new Set(titles)]; // Remove duplicates
+  try {
+    // Look for DECISION MAKERS section in research
+    const decisionMakersMatch = researchNotes.match(/DECISION MAKERS[:\s]+([^\n]+(?:\n(?![\n])[^\n]+)*)/i);
+    
+    if (!decisionMakersMatch) return [];
+    
+    const decisionMakersText = decisionMakersMatch[1];
+    
+    // Extract titles from the text
+    const titles = [];
+    
+    // Common patterns for decision maker titles
+    const titlePatterns = [
+      /Director of Influencer Marketing/gi,
+      /VP Influencer Marketing/gi,
+      /Head of Influencer/gi,
+      /Director of Brand Marketing/gi,
+      /VP Brand Marketing/gi,
+      /Head of Brand/gi,
+      /Director of E-?Commerce/gi,
+      /VP E-?Commerce/gi,
+      /Head of E-?Commerce/gi,
+      /Director of Partnerships/gi,
+      /VP Partnerships/gi,
+      /Head of Partnerships/gi,
+      /Director of Growth/gi,
+      /VP Growth/gi,
+      /Head of Growth/gi,
+      /Director of Performance Marketing/gi,
+      /VP Performance Marketing/gi,
+      /Chief Marketing Officer/gi,
+      /CMO/gi,
+      /VP Marketing/gi,
+      /Director of Marketing/gi,
+      /Head of Marketing/gi
+    ];
+    
+    titlePatterns.forEach(pattern => {
+      const matches = decisionMakersText.match(pattern);
+      if (matches) {
+        matches.forEach(match => titles.push(match.toLowerCase()));
+      }
+    });
+    
+    return [...new Set(titles)]; // Remove duplicates
+  } catch (error) {
+    console.error('Error extracting recommended titles:', error);
+    return [];
+  }
 }
 
 // Score a contact based on how well their title matches research recommendations
@@ -101,15 +106,17 @@ function scoreContact(contact, recommendedTitles) {
     if (recommendedTitles.some(rec => contactTitle === rec)) {
       score += 100;
     }
-    
     // Partial match with recommended title = 50 points
-    else if (recommendedTitles.some(rec => contactTitle.includes(rec.replace(/^(director|vp|head|chief) of /i, '')) || 
-                                            rec.includes(contactTitle.replace(/^(director|vp|head|chief) of /i, '')))) {
+    else if (recommendedTitles.some(rec => {
+      const recBase = rec.replace(/^(director|vp|head|chief) of /i, '');
+      const titleBase = contactTitle.replace(/^(director|vp|head|chief) of /i, '');
+      return contactTitle.includes(recBase) || rec.includes(titleBase);
+    })) {
       score += 50;
     }
   }
   
-  // Score based on seniority level (higher = better)
+  // Score based on seniority level
   if (contactTitle.includes('chief') || contactTitle.includes('cmo')) {
     score += 40;
   } else if (contactTitle.includes('vp') || contactTitle.includes('vice president')) {
@@ -155,7 +162,7 @@ function scoreContact(contact, recommendedTitles) {
 }
 
 // Get reason for the score (to display to user)
-function getMatchReason(contact, recommendedTitles, score) {
+function getMatchReason(contact, recommendedTitles) {
   if (!contact.title) return 'Has contact info';
   
   const contactTitle = contact.title.toLowerCase();
@@ -167,10 +174,11 @@ function getMatchReason(contact, recommendedTitles, score) {
     if (exactMatch) {
       reasons.push('🎯 Exact match from research');
     } else {
-      const partialMatch = recommendedTitles.find(rec => 
-        contactTitle.includes(rec.replace(/^(director|vp|head|chief) of /i, '')) || 
-        rec.includes(contactTitle.replace(/^(director|vp|head|chief) of /i, ''))
-      );
+      const partialMatch = recommendedTitles.find(rec => {
+        const recBase = rec.replace(/^(director|vp|head|chief) of /i, '');
+        const titleBase = contactTitle.replace(/^(director|vp|head|chief) of /i, '');
+        return contactTitle.includes(recBase) || rec.includes(titleBase);
+      });
       if (partialMatch) {
         reasons.push('✓ Similar to research recommendation');
       }
@@ -240,17 +248,25 @@ function getMatchLevel(score) {
 
 // Get Google Sheets client
 function getGoogleSheetsClient() {
-  const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
-  
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets']
-  });
-  
-  return google.sheets({ version: 'v4', auth });
+  try {
+    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
+    
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+    
+    return google.sheets({ version: 'v4', auth });
+  } catch (error) {
+    console.error('Error creating Google Sheets client:', error);
+    throw new Error('Failed to create Google Sheets client. Check GOOGLE_SERVICE_ACCOUNT_KEY.');
+  }
 }
 
 exports.handler = async (event, context) => {
+  // Set timeout to 25 seconds (Netlify functions have 26s limit)
+  context.callbackWaitsForEmptyEventLoop = false;
+  
   // Add CORS headers
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -273,7 +289,10 @@ exports.handler = async (event, context) => {
   try {
     const { website, spreadsheetId, leadRowIndex, researchNotes, offset = 0 } = JSON.parse(event.body);
 
-    console.log('Request received:', { website, spreadsheetId, leadRowIndex, offset });
+    console.log('=== CSV Contact Search Request ===');
+    console.log('Website:', website);
+    console.log('Offset:', offset);
+    console.log('Has research notes:', !!researchNotes);
 
     if (!website) {
       throw new Error('Website is required');
@@ -281,15 +300,14 @@ exports.handler = async (event, context) => {
 
     if (!process.env.CONTACTS_SPREADSHEET_ID) {
       console.error('CONTACTS_SPREADSHEET_ID not set');
-      throw new Error('CONTACTS_SPREADSHEET_ID environment variable not set.');
+      throw new Error('CONTACTS_SPREADSHEET_ID not set in environment variables');
     }
 
     if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
       console.error('GOOGLE_SERVICE_ACCOUNT_KEY not set');
-      throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY environment variable not set.');
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY not set in environment variables');
     }
 
-    console.log(`Searching contact database for: ${website}`);
     const startTime = Date.now();
 
     // Extract recommended decision maker titles from research
@@ -297,6 +315,7 @@ exports.handler = async (event, context) => {
     console.log('Recommended titles from research:', recommendedTitles);
 
     // Get Google Sheets client
+    console.log('Creating Google Sheets client...');
     const sheets = getGoogleSheetsClient();
 
     // Load contacts from Google Sheets
@@ -308,21 +327,23 @@ exports.handler = async (event, context) => {
     });
 
     const rows = response.data.values || [];
-    console.log(`Loaded ${rows.length} total rows from sheet`);
+    console.log(`Loaded ${rows.length} total rows (including header)`);
 
-    if (rows.length === 0) {
-      throw new Error('Contact database is empty');
+    if (rows.length <= 1) {
+      throw new Error('Contact database is empty or only has headers');
     }
 
-    // Parse rows directly (skip header row)
-    const allContacts = rows.slice(1).map(row => ({
-      website: row[0] || '',
-      accountName: row[1] || '',
-      firstName: row[2] || '',
-      lastName: row[3] || '',
-      title: row[4] || '',
-      email: row[5] || ''
-    }));
+    // Parse rows (skip header row)
+    const allContacts = rows.slice(1)
+      .filter(row => row && row.length >= 5) // Must have at least 5 columns
+      .map(row => ({
+        website: (row[0] || '').trim(),
+        accountName: (row[1] || '').trim(),
+        firstName: (row[2] || '').trim(),
+        lastName: (row[3] || '').trim(),
+        title: (row[4] || '').trim(),
+        email: (row[5] || '').trim()
+      }));
 
     console.log(`Parsed ${allContacts.length} contacts from database`);
 
@@ -334,15 +355,20 @@ exports.handler = async (event, context) => {
         if (!contact.title || contact.title.trim() === '') return false;
         return true;
       })
-      .map(contact => ({
-        ...contact,
-        score: scoreContact(contact, recommendedTitles),
-        matchReason: getMatchReason(contact, recommendedTitles, 0)
-      }))
+      .map(contact => {
+        const score = scoreContact(contact, recommendedTitles);
+        const matchReason = getMatchReason(contact, recommendedTitles);
+        return {
+          ...contact,
+          score,
+          matchReason
+        };
+      })
       // Sort by score (highest first)
       .sort((a, b) => b.score - a.score);
 
     console.log(`Found ${matchingContacts.length} matching contacts`);
+    console.log(`Time elapsed: ${Date.now() - startTime}ms`);
 
     if (matchingContacts.length === 0) {
       return {
@@ -353,7 +379,7 @@ exports.handler = async (event, context) => {
           contacts: [],
           total: 0,
           hasMore: false,
-          message: `No contacts found for ${website} in database`,
+          message: `No contacts found for ${website}`,
           searchTime: Date.now() - startTime
         })
       };
@@ -390,13 +416,14 @@ exports.handler = async (event, context) => {
       };
     });
 
-    console.log(`Returning ${contacts.length} contacts (offset ${offset}) in ${Date.now() - startTime}ms`);
+    console.log(`Returning ${contacts.length} contacts (offset ${offset})`);
+    console.log(`Total search time: ${Date.now() - startTime}ms`);
 
     // WRITE CONTACTS TO USER'S GOOGLE SHEETS (only on first batch)
     let savedToSheets = false;
     if (spreadsheetId && offset === 0 && contacts.length > 0) {
       try {
-        console.log(`Writing top ${contacts.length} contacts to user's Google Sheets...`);
+        console.log(`Writing top ${contacts.length} contacts to user's Contacts sheet...`);
         
         const contactRows = contacts.map(contact => [
           website,
@@ -408,7 +435,7 @@ exports.handler = async (event, context) => {
           contact.organization?.name || '',
           'New',
           new Date().toISOString().split('T')[0],
-          `Score: ${contact.score}`
+          `${contact.matchLevel} (${contact.score})`
         ]);
 
         await sheets.spreadsheets.values.append({
@@ -425,7 +452,7 @@ exports.handler = async (event, context) => {
 
         // Update lead row with contact count
         if (leadRowIndex) {
-          const contactSummary = `${matchingContacts.length} contacts found - top ${contacts.length} saved`;
+          const contactSummary = `${matchingContacts.length} contacts - top ${contacts.length} saved`;
           await sheets.spreadsheets.values.update({
             spreadsheetId: spreadsheetId,
             range: `Sheet1!H${leadRowIndex}`,
@@ -438,6 +465,7 @@ exports.handler = async (event, context) => {
 
       } catch (sheetsError) {
         console.error('Error writing contacts to Google Sheets:', sheetsError);
+        // Don't throw - just log and continue
       }
     }
 
@@ -458,15 +486,17 @@ exports.handler = async (event, context) => {
     };
 
   } catch (error) {
-    console.error('CSV contact search error:', error);
+    console.error('=== ERROR ===');
+    console.error('Error message:', error.message);
     console.error('Error stack:', error.stack);
+    
     return {
       statusCode: 500,
       headers,
       body: JSON.stringify({ 
         success: false,
         error: error.message || 'Failed to search contacts',
-        details: error.stack
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
       })
     };
   }
