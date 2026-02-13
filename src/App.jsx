@@ -801,13 +801,19 @@ ${researchData.talkingPoints}`;
     alert(`✅ Enriched ${unenrichedLeads.length} leads!`);
   };
 
-  // Find contacts using CSV Database
-  const findContacts = async (lead) => {
+  // Find contacts using CSV Database (SMART VERSION with scoring)
+  const [contactOffset, setContactOffset] = useState(0);
+  const [hasMoreContacts, setHasMoreContacts] = useState(false);
+  const [totalContacts, setTotalContacts] = useState(0);
+
+  const findContacts = async (lead, offset = 0) => {
     setIsLoadingContacts(true);
-    setContacts([]);
+    if (offset === 0) {
+      setContacts([]); // Clear contacts when starting fresh search
+    }
     
     try {
-      console.log(`Finding contacts for: ${lead.website}`);
+      console.log(`Finding contacts for: ${lead.website} (offset: ${offset})`);
 
       const response = await fetch('/.netlify/functions/csv-contacts', {
         method: 'POST',
@@ -816,27 +822,8 @@ ${researchData.talkingPoints}`;
           website: lead.website,
           spreadsheetId: spreadsheetId,
           leadRowIndex: lead.rowIndex,
-          titles: [
-            'Director of Influencer Marketing',
-            'Head of Partnerships',
-            'Senior Manager of Affiliate Marketing',
-            'Director of Brand Advocacy',
-            'VP Influencer Marketing',
-            'Manager Influencer Marketing',
-            'VP of E-Commerce',
-            'Director of E-Commerce',
-            'Head of Digital Product',
-            'VP Ecommerce',
-            'Director Ecommerce',
-            'Director of Brand Marketing',
-            'Head of Social Media',
-            'Director of Content Strategy',
-            'VP Brand Marketing',
-            'VP of Growth',
-            'Director of Performance Marketing',
-            'Head of User Acquisition',
-            'VP Growth Marketing'
-          ]
+          researchNotes: lead.notes, // Pass research for smart matching
+          offset: offset
         })
       });
 
@@ -848,17 +835,36 @@ ${researchData.talkingPoints}`;
       const data = await response.json();
       
       if (data.contacts && data.contacts.length > 0) {
-        setContacts(data.contacts);
-        console.log(`Found ${data.contacts.length} contacts from CSV database`);
-        
-        // Show success message with database info
-        if (data.savedToSheets) {
-          alert(`✅ Found ${data.contacts.length} contacts in ${data.searchTime}ms!\n\n📊 Saved to "Contacts" sheet in Google Sheets\n💰 FREE - No credits used!\n⚡ Source: Your 500k CSV Database`);
+        // If offset > 0, append to existing contacts; otherwise replace
+        if (offset > 0) {
+          setContacts(prev => [...prev, ...data.contacts]);
         } else {
-          alert(`✅ Found ${data.contacts.length} contacts in ${data.searchTime}ms!\n\n💰 FREE - No credits used!\n⚡ Source: Your 500k CSV Database`);
+          setContacts(data.contacts);
+        }
+        
+        setContactOffset(offset);
+        setHasMoreContacts(data.hasMore || false);
+        setTotalContacts(data.total || 0);
+        
+        console.log(`Found ${data.contacts.length} contacts (${data.total} total available)`);
+        
+        // Show success message (only on first batch)
+        if (offset === 0) {
+          const recommendedInfo = data.recommendedTitles && data.recommendedTitles.length > 0
+            ? `\n🎯 Matched based on research: ${data.recommendedTitles.slice(0, 2).join(', ')}`
+            : '';
+          
+          if (data.savedToSheets) {
+            alert(`✅ Found ${data.total} total contacts in ${data.searchTime}ms!\n\n📊 Showing top 3 best matches (scored by research)\n💰 FREE - No credits used!\n⚡ Source: Your 500k CSV Database${recommendedInfo}`);
+          } else {
+            alert(`✅ Found ${data.total} total contacts in ${data.searchTime}ms!\n\n📊 Showing top 3 best matches (scored by research)\n💰 FREE - No credits used!${recommendedInfo}`);
+          }
         }
       } else {
-        alert(`No contacts found for ${lead.website} in the CSV database.\n\nThis company may not be in your 500k contact list, or no contacts match the ICP criteria.`);
+        setHasMoreContacts(false);
+        if (offset === 0) {
+          alert(`No contacts found for ${lead.website} in the CSV database.\n\nThis company may not be in your 500k contact list.`);
+        }
       }
 
     } catch (error) {
@@ -866,6 +872,13 @@ ${researchData.talkingPoints}`;
       alert(`Failed to find contacts: ${error.message}\n\nMake sure CONTACTS_SPREADSHEET_ID is set in Netlify environment variables.`);
     } finally {
       setIsLoadingContacts(false);
+    }
+  };
+
+  // Load next 3 contacts
+  const loadMoreContacts = () => {
+    if (hasMoreContacts && selectedLead) {
+      findContacts(selectedLead, contactOffset + 3);
     }
   };
 
@@ -1322,8 +1335,10 @@ ${researchData.talkingPoints}`;
 
                   {contacts.length > 0 && (
                     <div className="contacts-list">
-                      <p className="contacts-count">Found {contacts.length} decision makers:</p>
-                      {contacts.map((contact) => (
+                      <p className="contacts-count">
+                        Showing {contacts.length} of {totalContacts} contacts (sorted by best match):
+                      </p>
+                      {contacts.map((contact, index) => (
                         <div 
                           key={contact.id} 
                           className={`contact-card ${selectedContact?.id === contact.id ? 'selected' : ''}`}
@@ -1337,8 +1352,21 @@ ${researchData.talkingPoints}`;
                               />
                             )}
                             <div className="contact-details">
-                              <h4>{contact.name}</h4>
+                              <div className="contact-header">
+                                <h4>{contact.name}</h4>
+                                {contact.matchLevel && (
+                                  <span 
+                                    className={`contact-match-badge ${contact.matchClass}`}
+                                    title={contact.matchDescription}
+                                  >
+                                    {contact.matchEmoji} {contact.matchLevel}
+                                  </span>
+                                )}
+                              </div>
                               <p className="contact-title">{contact.title}</p>
+                              {contact.matchReason && (
+                                <p className="contact-match-reason">{contact.matchReason}</p>
+                              )}
                               <div className="contact-meta">
                                 <span className="contact-email">
                                   ✉️ {contact.email}
@@ -1367,6 +1395,21 @@ ${researchData.talkingPoints}`;
                           </button>
                         </div>
                       ))}
+                      
+                      {hasMoreContacts && (
+                        <div className="load-more-section">
+                          <p className="load-more-info">
+                            Not seeing the right person? {totalContacts - contacts.length} more contacts available.
+                          </p>
+                          <button 
+                            className="load-more-btn"
+                            onClick={loadMoreContacts}
+                            disabled={isLoadingContacts}
+                          >
+                            {isLoadingContacts ? '⏳ Loading...' : '📋 Show Next 3 Contacts'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
