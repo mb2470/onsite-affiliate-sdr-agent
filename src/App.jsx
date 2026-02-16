@@ -839,98 +839,178 @@ timbuk2.com</pre>
                 </div>
               </div>
 
-              <div className="agent-settings">
-                <div className="settings-card">
-                  <h3>Email Limits</h3>
-                  <div className="setting-item">
-                    <label>Max Emails Per Day</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.max_emails_per_day || 50}
-                      onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
-                    />
-                  </div>
-                  <div className="setting-item">
-                    <label>Minutes Between Emails</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.min_minutes_between_emails || 15}
-                      onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
-                    />
-                  </div>
-                </div>
+             <div className="agent-settings">
+  {/* Email Limits */}
+  <div className="settings-card">
+    <h3>Email Limits</h3>
+    <div className="setting-item">
+      <label>Max Emails Per Day</label>
+      <input
+        type="number"
+        value={agentSettings?.max_emails_per_day || 50}
+        onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
+      />
+    </div>
+    <div className="setting-item">
+      <label>Minutes Between Emails</label>
+      <input
+        type="number"
+        value={agentSettings?.min_minutes_between_emails || 15}
+        onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
+      />
+    </div>
+    <div className="setting-item">
+      <label>Send Hours (EST)</label>
+      <div className="hours-input">
+        <input
+          type="number"
+          min="0"
+          max="23"
+          value={agentSettings?.send_hours_start || 9}
+          onChange={(e) => updateAgentSettings({ send_hours_start: parseInt(e.target.value) })}
+          style={{ width: '80px' }}
+        />
+        <span>to</span>
+        <input
+          type="number"
+          min="0"
+          max="23"
+          value={agentSettings?.send_hours_end || 17}
+          onChange={(e) => updateAgentSettings({ send_hours_end: parseInt(e.target.value) })}
+          style={{ width: '80px' }}
+        />
+      </div>
+    </div>
+  </div>
 
-                <div className="settings-card">
-                  <h3>Contact Limits</h3>
-                  <div className="setting-item">
-                    <label>Max Contacts Per Lead</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.max_contacts_per_lead || 3}
-                      onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
-                    />
-                  </div>
-                  <div className="setting-item">
-                    <label>Max Per Company Per Day</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.max_contacts_per_company_per_day || 1}
-                      onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
-                    />
-                  </div>
-                </div>
+  {/* Contact Limits */}
+  <div className="settings-card">
+    <h3>Contact Limits</h3>
+    <div className="setting-item">
+      <label>Max Contacts Per Lead</label>
+      <input
+        type="number"
+        value={agentSettings?.max_contacts_per_lead || 3}
+        onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
+      />
+      <p className="setting-hint">
+        Maximum number of people to contact at each company
+      </p>
+    </div>
+    <div className="setting-item">
+      <label>Max Per Company Per Day</label>
+      <input
+        type="number"
+        value={agentSettings?.max_contacts_per_company_per_day || 1}
+        onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
+      />
+      <p className="setting-hint">
+        Prevents spamming multiple people at the same company in one day
+      </p>
+    </div>
+  </div>
 
-                <div className="settings-card">
-                  <h3>ICP Fit Filter</h3>
-                  <div className="checkbox-group">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
-                        onChange={(e) => {
-                          const fits = agentSettings?.allowed_icp_fits || [];
-                          const newFits = e.target.checked
-                            ? [...fits, 'HIGH']
-                            : fits.filter(f => f !== 'HIGH');
-                          updateAgentSettings({ allowed_icp_fits: newFits });
-                        }}
-                      />
-                      HIGH Only
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
-                        onChange={(e) => {
-                          const fits = agentSettings?.allowed_icp_fits || [];
-                          const newFits = e.target.checked
-                            ? [...fits, 'MEDIUM']
-                            : fits.filter(f => f !== 'MEDIUM');
-                          updateAgentSettings({ allowed_icp_fits: newFits });
-                        }}
-                      />
-                      Include MEDIUM
-                    </label>
-                  </div>
-                </div>
+  {/* Contact Quality - THIS WAS MISSING */}
+  <div className="settings-card">
+    <h3>Contact Quality</h3>
+    <div className="setting-item">
+      <label>Minimum Match Level</label>
+      <select
+        value={agentSettings?.min_match_level || 'Good Match'}
+        onChange={(e) => updateAgentSettings({ min_match_level: e.target.value })}
+      >
+        <option value="Best Match">Best Match Only</option>
+        <option value="Great Match">Great Match or Better</option>
+        <option value="Good Match">Good Match or Better</option>
+        <option value="Possible Match">All Matches</option>
+      </select>
+      <p className="setting-hint">
+        Only contact decision makers that meet this quality threshold
+      </p>
+    </div>
+    <div className="setting-item">
+      <label>Minimum Match Score</label>
+      <input
+        type="number"
+        value={agentSettings?.min_match_score || 40}
+        onChange={(e) => updateAgentSettings({ min_match_score: parseInt(e.target.value) })}
+      />
+      <p className="setting-hint">
+        Minimum scoring threshold (0-200+). Higher scores = better title match.
+      </p>
+    </div>
+  </div>
 
-                <div className="settings-card">
-                  <h3>Approval Mode</h3>
-                  <label className="toggle-label">
-                    <input
-                      type="checkbox"
-                      checked={agentSettings?.auto_send || false}
-                      onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
-                    />
-                    <span>Auto-send emails</span>
-                  </label>
-                  <p className="setting-hint">
-                    {agentSettings?.auto_send
-                      ? '⚠️ Emails will send automatically'
-                      : '✅ Emails require your approval'}
-                  </p>
-                </div>
-              </div>
+  {/* ICP Fit Filter */}
+  <div className="settings-card">
+    <h3>ICP Fit Filter</h3>
+    <div className="checkbox-group">
+      <label>
+        <input
+          type="checkbox"
+          checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
+          onChange={(e) => {
+            const fits = agentSettings?.allowed_icp_fits || [];
+            const newFits = e.target.checked
+              ? [...fits, 'HIGH']
+              : fits.filter(f => f !== 'HIGH');
+            updateAgentSettings({ allowed_icp_fits: newFits });
+          }}
+        />
+        HIGH Only
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
+          onChange={(e) => {
+            const fits = agentSettings?.allowed_icp_fits || [];
+            const newFits = e.target.checked
+              ? [...fits, 'MEDIUM']
+              : fits.filter(f => f !== 'MEDIUM');
+            updateAgentSettings({ allowed_icp_fits: newFits });
+          }}
+        />
+        Include MEDIUM
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={agentSettings?.allowed_icp_fits?.includes('LOW')}
+          onChange={(e) => {
+            const fits = agentSettings?.allowed_icp_fits || [];
+            const newFits = e.target.checked
+              ? [...fits, 'LOW']
+              : fits.filter(f => f !== 'LOW');
+            updateAgentSettings({ allowed_icp_fits: newFits });
+          }}
+        />
+        Include LOW
+      </label>
+    </div>
+    <p className="setting-hint">
+      Agent will only work on leads that match selected ICP fit levels
+    </p>
+  </div>
+
+  {/* Approval Mode */}
+  <div className="settings-card">
+    <h3>Approval Mode</h3>
+    <label className="toggle-label">
+      <input
+        type="checkbox"
+        checked={agentSettings?.auto_send || false}
+        onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
+      />
+      <span>Auto-send emails (no manual approval)</span>
+    </label>
+    <p className="setting-hint">
+      {agentSettings?.auto_send
+        ? '⚠️ Emails will send automatically'
+        : '✅ Emails require your approval'}
+    </p>
+  </div>
+</div>
 
               <div className="activity-section">
                 <h3>Recent Activity</h3>
