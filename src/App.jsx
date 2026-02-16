@@ -25,7 +25,7 @@ function App() {
 
   // Load data on mount
   useEffect(() => {
-    loadLeads();
+    loadLeadsFromSupabase();
     loadAgentSettings();
     loadStats();
     loadActivity();
@@ -141,7 +141,7 @@ const loadLeadsFromSupabase = async () => {
       }
 
       setNewWebsite('');
-      await loadLeads();
+      await loadLeadsFromSupabase();
       alert('✅ Lead added successfully!');
     } catch (error) {
       console.error('Error adding lead:', error);
@@ -184,7 +184,7 @@ const loadLeadsFromSupabase = async () => {
       if (error) throw error;
 
       setBulkWebsites('');
-      await loadLeads();
+      await loadLeadsFromSupabase();
       alert(`✅ Added ${newWebsites.length} new leads!\nSkipped ${websites.length - newWebsites.length} duplicates.`);
     } catch (error) {
       console.error('Error bulk adding:', error);
@@ -235,7 +235,7 @@ const loadLeadsFromSupabase = async () => {
 
         if (error) throw error;
 
-        await loadLeads();
+        await loadLeadsFromSupabase();
         alert(`✅ Imported ${newWebsites.length} new leads!\nSkipped ${websites.length - newWebsites.length} duplicates.`);
       } catch (error) {
         console.error('Error importing CSV:', error);
@@ -348,7 +348,7 @@ Be concise and specific.`,
 
   setIsEnriching(false);
   setSelectedLeads([]);
-  await loadLeads();
+  await loadLeadsFromSupabase();
   await loadActivity();
   alert('✅ Enrichment complete!');
 };
