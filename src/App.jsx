@@ -5,11 +5,11 @@ import { createClient } from '@supabase/supabase-js';
 // Initialize Supabase
 const supabase = createClient(
   'https://vzghstujcvjmcqndtchb.supabase.co',
-  'sb_publishable_nwh0eacZN-nC07uDEYmU7w_LRiviIZT'
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6Z2hzdHVqY3ZqbWNxbmR0Y2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzc1NzMxOTQsImV4cCI6MjA1MzE0OTE5NH0.rzIU7qCIuyAWTPmeJ4rC3WLiGXEGRuW_uV3c7DD1394'
 );
 
 function App() {
-  const [activeView, setActiveView] = useState('add'); // add, enrich, agent, pipeline
+  const [activeView, setActiveView] = useState('add');
   const [leads, setLeads] = useState([]);
   const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -22,57 +22,41 @@ function App() {
   const [activityLog, setActivityLog] = useState([]);
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Manual outreach state
+  const [selectedLeadForManual, setSelectedLeadForManual] = useState(null);
+  const [manualEmail, setManualEmail] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [manualContacts, setManualContacts] = useState([]);
+  const [isLoadingManualContacts, setIsLoadingManualContacts] = useState(false);
+  const [selectedManualContacts, setSelectedManualContacts] = useState([]);
 
   // Load data on mount
   useEffect(() => {
-    loadLeadsFromSupabase();
+    loadLeads();
     loadAgentSettings();
     loadStats();
     loadActivity();
   }, []);
 
-// Load leads from Supabase with pagination
-const loadLeadsFromSupabase = async () => {
-  setIsLoadingLeads(true);
-  try {
-    let allLeads = [];
-    let from = 0;
-    const pageSize = 1000;
-    let hasMore = true;
-
-    while (hasMore) {
+  // Load leads from Supabase
+  const loadLeads = async () => {
+    setIsLoadingLeads(true);
+    try {
       const { data, error } = await supabase
         .from('leads')
         .select('*')
         .order('created_at', { ascending: false })
-        .range(from, from + pageSize - 1);
+        .limit(10000);
 
       if (error) throw error;
-
-      if (data && data.length > 0) {
-        allLeads = [...allLeads, ...data];
-        from += pageSize;
-        
-        console.log(`Loaded ${allLeads.length} leads so far...`);
-        
-        // Stop if we got less than a full page
-        if (data.length < pageSize) {
-          hasMore = false;
-        }
-      } else {
-        hasMore = false;
-      }
+      setLeads(data || []);
+    } catch (error) {
+      console.error('Error loading leads:', error);
+    } finally {
+      setIsLoadingLeads(false);
     }
-
-    console.log(`✅ Loaded ${allLeads.length} total leads`);
-    setLeads(allLeads);
-  } catch (error) {
-    console.error('Error loading leads:', error);
-    alert('Failed to load leads from database');
-  } finally {
-    setIsLoadingLeads(false);
-  }
-};
+  };
 
   // Load agent settings
   const loadAgentSettings = async () => {
@@ -141,7 +125,7 @@ const loadLeadsFromSupabase = async () => {
       }
 
       setNewWebsite('');
-      await loadLeadsFromSupabase();
+      await loadLeads();
       alert('✅ Lead added successfully!');
     } catch (error) {
       console.error('Error adding lead:', error);
@@ -161,7 +145,6 @@ const loadLeadsFromSupabase = async () => {
     if (websites.length === 0) return;
 
     try {
-      // Check for existing
       const { data: existing } = await supabase
         .from('leads')
         .select('website')
@@ -184,7 +167,7 @@ const loadLeadsFromSupabase = async () => {
       if (error) throw error;
 
       setBulkWebsites('');
-      await loadLeadsFromSupabase();
+      await loadLeads();
       alert(`✅ Added ${newWebsites.length} new leads!\nSkipped ${websites.length - newWebsites.length} duplicates.`);
     } catch (error) {
       console.error('Error bulk adding:', error);
@@ -235,7 +218,7 @@ const loadLeadsFromSupabase = async () => {
 
         if (error) throw error;
 
-        await loadLeadsFromSupabase();
+        await loadLeads();
         alert(`✅ Imported ${newWebsites.length} new leads!\nSkipped ${websites.length - newWebsites.length} duplicates.`);
       } catch (error) {
         console.error('Error importing CSV:', error);
@@ -247,30 +230,29 @@ const loadLeadsFromSupabase = async () => {
     reader.readAsText(file);
   };
 
-// Enrich selected leads
-const enrichSelectedLeads = async () => {
-  if (selectedLeads.length === 0) {
-    alert('Please select leads to enrich');
-    return;
-  }
+  // Enrich selected leads
+  const enrichSelectedLeads = async () => {
+    if (selectedLeads.length === 0) {
+      alert('Please select leads to enrich');
+      return;
+    }
 
-  if (!confirm(`Enrich ${selectedLeads.length} lead(s)?`)) return;
+    if (!confirm(`Enrich ${selectedLeads.length} lead(s)?`)) return;
 
-  setIsEnriching(true);
+    setIsEnriching(true);
 
-  for (const leadId of selectedLeads) {
-    const lead = leads.find(l => l.id === leadId);
-    if (!lead) continue;
+    for (const leadId of selectedLeads) {
+      const lead = leads.find(l => l.id === leadId);
+      if (!lead) continue;
 
-    try {
-      console.log(`Enriching ${lead.website}...`);
+      try {
+        console.log(`Enriching ${lead.website}...`);
 
-      // Call enrichment function
-      const response = await fetch('/.netlify/functions/claude', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: `Research ${lead.website} for B2B sales qualification.
+        const response = await fetch('/.netlify/functions/claude', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: `Research ${lead.website} for B2B sales qualification.
 
 Provide in this EXACT format (return ONLY the text, no markdown code fences):
 
@@ -280,78 +262,73 @@ Decision Makers: [comma-separated titles]
 Pain Points: [3-4 pain points]
 
 Be concise and specific.`,
-          systemPrompt: 'You are a B2B sales researcher. Return ONLY plain text, no markdown formatting, no code fences.'
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      // Extract the text content
-      let research = '';
-      if (data.content && Array.isArray(data.content)) {
-        research = data.content[0]?.text || '';
-      } else if (typeof data === 'string') {
-        research = data;
-      } else {
-        research = JSON.stringify(data);
-      }
-
-      console.log('Research result:', research);
-
-      // Extract ICP fit from research
-      const icpMatch = research.match(/ICP Fit:\s*(HIGH|MEDIUM|LOW)/i);
-      const icpFit = icpMatch ? icpMatch[1].toUpperCase() : null;
-
-      // Update in Supabase
-      await supabase
-        .from('leads')
-        .update({
-          research_notes: research,
-          icp_fit: icpFit,
-          status: 'enriched',
-          enrichment_status: 'completed'
-        })
-        .eq('id', leadId);
-
-      // Log activity
-      await supabase
-        .from('activity_log')
-        .insert({
-          activity_type: 'lead_enriched',
-          lead_id: leadId,
-          summary: `Enriched ${lead.website} - ICP: ${icpFit || 'Unknown'}`,
-          status: 'success'
+            systemPrompt: 'You are a B2B sales researcher. Return ONLY plain text, no markdown formatting, no code fences.'
+          })
         });
 
-      console.log(`✅ Successfully enriched ${lead.website}`);
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
+        }
 
-    } catch (error) {
-      console.error(`❌ Error enriching ${lead.website}:`, error);
-      
-      await supabase
-        .from('activity_log')
-        .insert({
-          activity_type: 'lead_enriched',
-          lead_id: leadId,
-          summary: `Failed to enrich ${lead.website}: ${error.message}`,
-          status: 'failed'
-        });
+        const data = await response.json();
+        
+        let research = '';
+        if (data.content && Array.isArray(data.content)) {
+          research = data.content[0]?.text || '';
+        } else if (typeof data === 'string') {
+          research = data;
+        } else {
+          research = JSON.stringify(data);
+        }
+
+        console.log('Research result:', research);
+
+        const icpMatch = research.match(/ICP Fit:\s*(HIGH|MEDIUM|LOW)/i);
+        const icpFit = icpMatch ? icpMatch[1].toUpperCase() : null;
+
+        await supabase
+          .from('leads')
+          .update({
+            research_notes: research,
+            icp_fit: icpFit,
+            status: 'enriched',
+            enrichment_status: 'completed'
+          })
+          .eq('id', leadId);
+
+        await supabase
+          .from('activity_log')
+          .insert({
+            activity_type: 'lead_enriched',
+            lead_id: leadId,
+            summary: `Enriched ${lead.website} - ICP: ${icpFit || 'Unknown'}`,
+            status: 'success'
+          });
+
+        console.log(`✅ Successfully enriched ${lead.website}`);
+
+      } catch (error) {
+        console.error(`❌ Error enriching ${lead.website}:`, error);
+        
+        await supabase
+          .from('activity_log')
+          .insert({
+            activity_type: 'lead_enriched',
+            lead_id: leadId,
+            summary: `Failed to enrich ${lead.website}: ${error.message}`,
+            status: 'failed'
+          });
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    // Wait between requests to avoid rate limits
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-
-  setIsEnriching(false);
-  setSelectedLeads([]);
-  await loadLeadsFromSupabase();
-  await loadActivity();
-  alert('✅ Enrichment complete!');
-};
+    setIsEnriching(false);
+    setSelectedLeads([]);
+    await loadLeads();
+    await loadActivity();
+    alert('✅ Enrichment complete!');
+  };
 
   // Toggle lead selection
   const toggleLeadSelection = (leadId) => {
@@ -368,6 +345,111 @@ Be concise and specific.`,
       .filter(l => l.status === 'new' || !l.research_notes)
       .map(l => l.id);
     setSelectedLeads(unenriched);
+  };
+
+  // Generate email for manual outreach
+  const generateManualEmail = async (lead) => {
+    setIsGenerating(true);
+    try {
+      const response = await fetch('/.netlify/functions/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `Write a casual outreach email for ${lead.website}. 
+
+${lead.research_notes ? `Context: ${lead.research_notes.substring(0, 300)}` : ''}
+
+Requirements:
+- Under 90 words
+- Mention Amazon Onsite Commissions
+- Focus on: no upfront creator costs
+- Casual tone (like Slack message)
+- Include subject line
+
+Format:
+Subject: [subject]
+
+[body]`,
+          systemPrompt: 'You are an expert SDR writing concise, casual emails for Onsite Affiliate. Write under 90 words, mention Amazon Influencer program, focus on upfront cost pain.'
+        })
+      });
+
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+
+      const data = await response.json();
+      const email = data.content[0]?.text || '';
+      setManualEmail(email);
+    } catch (error) {
+      console.error('Error generating email:', error);
+      alert('Failed to generate email: ' + error.message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Find contacts for manual outreach
+  const findManualContacts = async (lead) => {
+    setIsLoadingManualContacts(true);
+    try {
+      const response = await fetch('/.netlify/functions/csv-contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          website: lead.website,
+          researchNotes: lead.research_notes,
+          offset: 0
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to find contacts');
+
+      const data = await response.json();
+      setManualContacts(data.contacts || []);
+      
+      if (!data.contacts || data.contacts.length === 0) {
+        alert(`No contacts found for ${lead.website}`);
+      }
+    } catch (error) {
+      console.error('Error finding contacts:', error);
+      alert('Failed to find contacts: ' + error.message);
+    } finally {
+      setIsLoadingManualContacts(false);
+    }
+  };
+
+  // Toggle contact selection
+  const toggleManualContact = (contactEmail) => {
+    setSelectedManualContacts(prev =>
+      prev.includes(contactEmail)
+        ? prev.filter(e => e !== contactEmail)
+        : [...prev, contactEmail]
+    );
+  };
+
+  // Export selected contacts to Gmail
+  const exportToGmail = () => {
+    if (selectedManualContacts.length === 0) {
+      alert('Please select at least one contact');
+      return;
+    }
+
+    if (!manualEmail) {
+      alert('Please generate an email first');
+      return;
+    }
+
+    const subjectMatch = manualEmail.match(/Subject:\s*(.+)/i);
+    const subject = subjectMatch ? subjectMatch[1].trim() : 'Onsite Affiliate Introduction';
+    
+    const bodyStart = manualEmail.indexOf('\n', manualEmail.indexOf('Subject:'));
+    const body = bodyStart > -1 ? manualEmail.substring(bodyStart).trim() : manualEmail;
+
+    const bccEmails = selectedManualContacts.join(',');
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bccEmails)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    window.open(gmailUrl, '_blank');
+
+    alert(`✅ Opening Gmail with ${selectedManualContacts.length} contact(s) in BCC!`);
   };
 
   // Update agent settings
@@ -429,10 +511,6 @@ Be concise and specific.`,
             <span className="stat-value">{stats?.emails_sent || 0}</span>
             <span className="stat-label">Emails Sent</span>
           </div>
-          <div className="stat">
-            <span className="stat-value">{leads.length}</span>
-            <span className="stat-label">Total Leads Loaded</span>
-          </div>
         </div>
       </header>
 
@@ -453,6 +531,14 @@ Be concise and specific.`,
           >
             <span className="btn-icon">🔬</span>
             <span className="btn-label">Enrich Leads</span>
+          </button>
+
+          <button
+            className={`sidebar-btn ${activeView === 'manual' ? 'active' : ''}`}
+            onClick={() => setActiveView('manual')}
+          >
+            <span className="btn-icon">✉️</span>
+            <span className="btn-label">Manual Outreach</span>
           </button>
           
           <button
@@ -480,7 +566,6 @@ Be concise and specific.`,
               <h2>➕ Add New Leads</h2>
               
               <div className="add-methods">
-                {/* Single Website */}
                 <div className="add-method-card">
                   <h3>Add Single Website</h3>
                   <div className="input-group">
@@ -497,7 +582,6 @@ Be concise and specific.`,
                   </div>
                 </div>
 
-                {/* Bulk Add */}
                 <div className="add-method-card">
                   <h3>Bulk Add Websites</h3>
                   <p>Enter one website per line</p>
@@ -512,7 +596,6 @@ Be concise and specific.`,
                   </button>
                 </div>
 
-                {/* CSV Upload */}
                 <div className="add-method-card">
                   <h3>Upload CSV</h3>
                   <p>CSV Format: website column with one website per row</p>
@@ -593,6 +676,151 @@ timbuk2.com</pre>
             </div>
           )}
 
+          {/* MANUAL OUTREACH VIEW */}
+          {activeView === 'manual' && (
+            <div className="view-container">
+              <h2>✉️ Manual Outreach</h2>
+              <p>Create personalized emails and export contacts to Gmail for hands-on outreach</p>
+
+              <div className="manual-outreach-layout">
+                <div className="manual-section">
+                  <div className="section-card">
+                    <h3>Step 1: Select Lead</h3>
+                    <div className="lead-selector">
+                      <select
+                        value={selectedLeadForManual?.id || ''}
+                        onChange={(e) => {
+                          const lead = leads.find(l => l.id === e.target.value);
+                          setSelectedLeadForManual(lead);
+                          setManualEmail('');
+                          setManualContacts([]);
+                          setSelectedManualContacts([]);
+                        }}
+                      >
+                        <option value="">Choose a lead...</option>
+                        {leads
+                          .filter(l => l.status === 'enriched' || l.research_notes)
+                          .map(lead => (
+                            <option key={lead.id} value={lead.id}>
+                              {lead.website} {lead.icp_fit ? `(${lead.icp_fit})` : ''}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+
+                    {selectedLeadForManual && (
+                      <div className="selected-lead-info">
+                        <h4>{selectedLeadForManual.website}</h4>
+                        {selectedLeadForManual.icp_fit && (
+                          <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`}>
+                            {selectedLeadForManual.icp_fit}
+                          </span>
+                        )}
+                        {selectedLeadForManual.research_notes && (
+                          <div className="lead-research-preview">
+                            <p><strong>Research:</strong></p>
+                            <pre>{selectedLeadForManual.research_notes.substring(0, 200)}...</pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedLeadForManual && (
+                    <div className="section-card">
+                      <h3>Step 2: Generate Email</h3>
+                      <button
+                        className="primary-btn"
+                        onClick={() => generateManualEmail(selectedLeadForManual)}
+                        disabled={isGenerating}
+                      >
+                        {isGenerating ? '⏳ Generating...' : '✨ Generate Email with AI'}
+                      </button>
+
+                      {manualEmail && (
+                        <div className="email-preview">
+                          <div className="email-header">
+                            <strong>Generated Email:</strong>
+                            <button
+                              className="secondary-btn"
+                              onClick={() => navigator.clipboard.writeText(manualEmail)}
+                            >
+                              📋 Copy
+                            </button>
+                          </div>
+                          <pre>{manualEmail}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {selectedLeadForManual && manualEmail && (
+                  <div className="manual-section">
+                    <div className="section-card">
+                      <h3>Step 3: Find Contacts</h3>
+                      <button
+                        className="primary-btn"
+                        onClick={() => findManualContacts(selectedLeadForManual)}
+                        disabled={isLoadingManualContacts}
+                      >
+                        {isLoadingManualContacts ? '🔍 Searching...' : '🔍 Find Contacts'}
+                      </button>
+
+                      {manualContacts.length > 0 && (
+                        <>
+                          <div className="contacts-found">
+                            <p><strong>{manualContacts.length} contacts found</strong></p>
+                            <p className="text-muted">Select contacts to export to Gmail</p>
+                          </div>
+
+                          <div className="manual-contacts-list">
+                            {manualContacts.map(contact => (
+                              <div
+                                key={contact.email}
+                                className={`manual-contact-card ${selectedManualContacts.includes(contact.email) ? 'selected' : ''}`}
+                                onClick={() => toggleManualContact(contact.email)}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedManualContacts.includes(contact.email)}
+                                  onChange={() => toggleManualContact(contact.email)}
+                                />
+                                <div className="contact-details">
+                                  <strong>{contact.name}</strong>
+                                  <p className="contact-title">{contact.title}</p>
+                                  <p className="contact-email">{contact.email}</p>
+                                  {contact.matchLevel && (
+                                    <span className={`match-badge ${contact.matchClass}`}>
+                                      {contact.matchEmoji} {contact.matchLevel}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="export-actions">
+                            <button
+                              className="primary-btn"
+                              onClick={exportToGmail}
+                              disabled={selectedManualContacts.length === 0}
+                            >
+                              📧 Export {selectedManualContacts.length} Contact(s) to Gmail
+                            </button>
+                            <p className="text-muted">
+                              Opens Gmail with selected contacts in BCC
+                            </p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* AGENT MANAGER VIEW */}
           {activeView === 'agent' && (
             <div className="view-container">
@@ -612,172 +840,97 @@ timbuk2.com</pre>
               </div>
 
               <div className="agent-settings">
-  <div className="settings-card">
-    <h3>Email Limits</h3>
-    <div className="setting-item">
-      <label>Max Emails Per Day</label>
-      <input
-        type="number"
-        value={agentSettings?.max_emails_per_day || 50}
-        onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
-      />
-    </div>
-    <div className="setting-item">
-      <label>Minutes Between Emails</label>
-      <input
-        type="number"
-        value={agentSettings?.min_minutes_between_emails || 15}
-        onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
-      />
-    </div>
-    <div className="setting-item">
-      <label>Send Hours (EST)</label>
-      <div className="hours-input">
-        <input
-          type="number"
-          min="0"
-          max="23"
-          value={agentSettings?.send_hours_start || 9}
-          onChange={(e) => updateAgentSettings({ send_hours_start: parseInt(e.target.value) })}
-          style={{ width: '80px' }}
-        />
-        <span>to</span>
-        <input
-          type="number"
-          min="0"
-          max="23"
-          value={agentSettings?.send_hours_end || 17}
-          onChange={(e) => updateAgentSettings({ send_hours_end: parseInt(e.target.value) })}
-          style={{ width: '80px' }}
-        />
-      </div>
-    </div>
-  </div>
+                <div className="settings-card">
+                  <h3>Email Limits</h3>
+                  <div className="setting-item">
+                    <label>Max Emails Per Day</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.max_emails_per_day || 50}
+                      onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
+                    />
+                  </div>
+                  <div className="setting-item">
+                    <label>Minutes Between Emails</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.min_minutes_between_emails || 15}
+                      onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
+                    />
+                  </div>
+                </div>
 
-  <div className="settings-card">
-    <h3>Contact Limits</h3>
-    <div className="setting-item">
-      <label>Max Contacts Per Lead</label>
-      <input
-        type="number"
-        value={agentSettings?.max_contacts_per_lead || 3}
-        onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
-      />
-      <p className="setting-hint">
-        Maximum number of people to contact at each company
-      </p>
-    </div>
-    <div className="setting-item">
-      <label>Max Contacts Per Company Per Day</label>
-      <input
-        type="number"
-        value={agentSettings?.max_contacts_per_company_per_day || 1}
-        onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
-      />
-      <p className="setting-hint">
-        Prevents spamming multiple people at the same company in one day
-      </p>
-    </div>
-  </div>
+                <div className="settings-card">
+                  <h3>Contact Limits</h3>
+                  <div className="setting-item">
+                    <label>Max Contacts Per Lead</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.max_contacts_per_lead || 3}
+                      onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
+                    />
+                  </div>
+                  <div className="setting-item">
+                    <label>Max Per Company Per Day</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.max_contacts_per_company_per_day || 1}
+                      onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
+                    />
+                  </div>
+                </div>
 
-  <div className="settings-card">
-    <h3>Contact Quality</h3>
-    <div className="setting-item">
-      <label>Minimum Match Level</label>
-      <select
-        value={agentSettings?.min_match_level || 'Good Match'}
-        onChange={(e) => updateAgentSettings({ min_match_level: e.target.value })}
-      >
-        <option value="Best Match">Best Match Only</option>
-        <option value="Great Match">Great Match or Better</option>
-        <option value="Good Match">Good Match or Better</option>
-        <option value="Possible Match">All Matches</option>
-      </select>
-      <p className="setting-hint">
-        Only contact decision makers that meet this quality threshold
-      </p>
-    </div>
-    <div className="setting-item">
-      <label>Minimum Match Score</label>
-      <input
-        type="number"
-        value={agentSettings?.min_match_score || 40}
-        onChange={(e) => updateAgentSettings({ min_match_score: parseInt(e.target.value) })}
-      />
-      <p className="setting-hint">
-        Minimum scoring threshold (0-200+)
-      </p>
-    </div>
-  </div>
+                <div className="settings-card">
+                  <h3>ICP Fit Filter</h3>
+                  <div className="checkbox-group">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
+                        onChange={(e) => {
+                          const fits = agentSettings?.allowed_icp_fits || [];
+                          const newFits = e.target.checked
+                            ? [...fits, 'HIGH']
+                            : fits.filter(f => f !== 'HIGH');
+                          updateAgentSettings({ allowed_icp_fits: newFits });
+                        }}
+                      />
+                      HIGH Only
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
+                        onChange={(e) => {
+                          const fits = agentSettings?.allowed_icp_fits || [];
+                          const newFits = e.target.checked
+                            ? [...fits, 'MEDIUM']
+                            : fits.filter(f => f !== 'MEDIUM');
+                          updateAgentSettings({ allowed_icp_fits: newFits });
+                        }}
+                      />
+                      Include MEDIUM
+                    </label>
+                  </div>
+                </div>
 
-  <div className="settings-card">
-    <h3>ICP Fit Filter</h3>
-    <div className="checkbox-group">
-      <label>
-        <input
-          type="checkbox"
-          checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
-          onChange={(e) => {
-            const fits = agentSettings?.allowed_icp_fits || [];
-            const newFits = e.target.checked
-              ? [...fits, 'HIGH']
-              : fits.filter(f => f !== 'HIGH');
-            updateAgentSettings({ allowed_icp_fits: newFits });
-          }}
-        />
-        HIGH Only
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
-          onChange={(e) => {
-            const fits = agentSettings?.allowed_icp_fits || [];
-            const newFits = e.target.checked
-              ? [...fits, 'MEDIUM']
-              : fits.filter(f => f !== 'MEDIUM');
-            updateAgentSettings({ allowed_icp_fits: newFits });
-          }}
-        />
-        Include MEDIUM
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          checked={agentSettings?.allowed_icp_fits?.includes('LOW')}
-          onChange={(e) => {
-            const fits = agentSettings?.allowed_icp_fits || [];
-            const newFits = e.target.checked
-              ? [...fits, 'LOW']
-              : fits.filter(f => f !== 'LOW');
-            updateAgentSettings({ allowed_icp_fits: newFits });
-          }}
-        />
-        Include LOW
-      </label>
-    </div>
-    <p className="setting-hint">
-      Agent will only work on leads that match selected ICP fit levels
-    </p>
-  </div>
-
-  <div className="settings-card">
-    <h3>Approval Mode</h3>
-    <label className="toggle-label">
-      <input
-        type="checkbox"
-        checked={agentSettings?.auto_send || false}
-        onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
-      />
-      <span>Auto-send emails (no manual approval)</span>
-    </label>
-    <p className="setting-hint">
-      {agentSettings?.auto_send
-        ? '⚠️ Emails will send automatically'
-        : '✅ Emails require your approval'}
-    </p>
-  </div>
-</div>
+                <div className="settings-card">
+                  <h3>Approval Mode</h3>
+                  <label className="toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={agentSettings?.auto_send || false}
+                      onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
+                    />
+                    <span>Auto-send emails</span>
+                  </label>
+                  <p className="setting-hint">
+                    {agentSettings?.auto_send
+                      ? '⚠️ Emails will send automatically'
+                      : '✅ Emails require your approval'}
+                  </p>
+                </div>
+              </div>
 
               <div className="activity-section">
                 <h3>Recent Activity</h3>
