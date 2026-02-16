@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 // Initialize Supabase
 const supabase = createClient(
   'https://vzghstujcvjmcqndtchb.supabase.co',
-  'sb_publishable_nwh0eacZN-nC07uDEYmU7w_LRiviIZT'
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6Z2hzdHVqY3ZqbWNxbmR0Y2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzc1NzMxOTQsImV4cCI6MjA1MzE0OTE5NH0.rzIU7qCIuyAWTPmeJ4rC3WLiGXEGRuW_uV3c7DD1394'
 );
 
 function App() {
@@ -39,50 +39,24 @@ function App() {
     loadActivity();
   }, []);
 
-  // Load ALL leads from Supabase with pagination
-const loadLeads = async () => {
-  setIsLoadingLeads(true);
-  try {
-    let allLeads = [];
-    let from = 0;
-    const pageSize = 1000;
-    let hasMore = true;
-
-    console.log('Loading all leads...');
-
-    while (hasMore) {
+  // Load leads from Supabase
+  const loadLeads = async () => {
+    setIsLoadingLeads(true);
+    try {
       const { data, error } = await supabase
         .from('leads')
         .select('*')
         .order('created_at', { ascending: false })
-        .range(from, from + pageSize - 1);
+        .limit(10000);
 
       if (error) throw error;
-
-      if (data && data.length > 0) {
-        allLeads = [...allLeads, ...data];
-        console.log(`Loaded ${allLeads.length} leads so far...`);
-        
-        // If we got less than a full page, we're done
-        if (data.length < pageSize) {
-          hasMore = false;
-        } else {
-          from += pageSize;
-        }
-      } else {
-        hasMore = false;
-      }
+      setLeads(data || []);
+    } catch (error) {
+      console.error('Error loading leads:', error);
+    } finally {
+      setIsLoadingLeads(false);
     }
-
-    console.log(`✅ Loaded ${allLeads.length} total leads`);
-    setLeads(allLeads);
-  } catch (error) {
-    console.error('Error loading leads:', error);
-    alert('Failed to load leads from database');
-  } finally {
-    setIsLoadingLeads(false);
-  }
-};
+  };
 
   // Load agent settings
   const loadAgentSettings = async () => {
@@ -288,77 +262,7 @@ Decision Makers: [comma-separated titles]
 Pain Points: [3-4 pain points]
 
 Be concise and specific.`,
-            systemPrompt: `You are an expert SDR writing ultra-concise, casual emails for Onsite Affiliate.
-
-CRITICAL: WHAT WE ACTUALLY DO
-We enable D2C brands to copy Amazon's Influencer Onsite Commission program for their own website.
-
-THE ACTUAL OFFER:
-- Brands implement the same commission structure Amazon uses on their own site
-- UGC creators promote the brand's products and earn performance commissions AFTER driving sales
-- NO upfront costs to the brand (no gifting, no retainers, no content fees)
-- Creators earn MORE long-term through performance commissions vs one-time payments
-- Brand gets authentic UGC video content that converts
-
-WE ARE NOT:
-- An influencer network
-- A marketplace connecting brands to Amazon creators
-- Offering access to Amazon's creators
-- A middleman between brands and influencers
-
-WE ARE:
-- Enabling brands to build their own version of Amazon Influencer program
-- Providing the technology/platform to run performance-based creator programs
-- Helping brands eliminate upfront creator costs by switching to commission model
-
-THE CORE PAIN POINT:
-Brands are paying $500-2k upfront per UGC post OR dealing with gifting/seeding logistics nightmares. Amazon proved you don't need upfront costs - performance commissions work better for everyone.
-
-CORRECT MESSAGING:
-✓ "Copy Amazon's Influencer Onsite Commission model for your site"
-✓ "We help you build what Amazon built - performance commissions, no upfront costs"
-✓ "Same model Amazon uses, but for your brand"
-✓ "Turn your creator program into performance commissions like Amazon"
-
-WRONG MESSAGING (NEVER SAY THIS):
-✗ "Access to Amazon creators"
-✗ "Work with Amazon influencers"
-✗ "Our network of Amazon creators"
-✗ "Tap into Amazon's creators"
-
-EMAIL STRUCTURE (Under 90 words):
-[Name] -
-
-[Question about upfront creator costs OR gifting headaches]
-
-[Amazon proved performance commissions work - no upfront costs, creators earn after sales]
-
-[We help you copy that exact model for your brand's site]
-
-[Simple question CTA]
-
-[Your name]
-
-TONE: Casual, direct, like a Slack message. No formality.`
-```
-
----
-
-## 📧 Example of CORRECT Email
-
-**Good Example:**
-```
-Sarah -
-
-Still paying creators $1k upfront for every UGC post?
-
-Amazon figured out how to eliminate that with Influencer Onsite Commissions. Creators promote products, earn performance commissions after driving sales. No upfront costs, no gifting logistics.
-
-We help D2C brands copy that exact model for their own site. Same commission structure Amazon uses, but for your products.
-
-Worth a quick call to see how this works?
-
-Mike
+            systemPrompt: 'You are a B2B sales researcher. Return ONLY plain text, no markdown formatting, no code fences.'
           })
         });
 
@@ -466,77 +370,7 @@ Format:
 Subject: [subject]
 
 [body]`,
-          systemPrompt: `You are an expert SDR writing ultra-concise, casual emails for Onsite Affiliate.
-
-CRITICAL: WHAT WE ACTUALLY DO
-We enable D2C brands to copy Amazon's Influencer Onsite Commission program for their own website.
-
-THE ACTUAL OFFER:
-- Brands implement the same commission structure Amazon uses on their own site
-- UGC creators promote the brand's products and earn performance commissions AFTER driving sales
-- NO upfront costs to the brand (no gifting, no retainers, no content fees)
-- Creators earn MORE long-term through performance commissions vs one-time payments
-- Brand gets authentic UGC video content that converts
-
-WE ARE NOT:
-- An influencer network
-- A marketplace connecting brands to Amazon creators
-- Offering access to Amazon's creators
-- A middleman between brands and influencers
-
-WE ARE:
-- Enabling brands to build their own version of Amazon Influencer program
-- Providing the technology/platform to run performance-based creator programs
-- Helping brands eliminate upfront creator costs by switching to commission model
-
-THE CORE PAIN POINT:
-Brands are paying $500-2k upfront per UGC post OR dealing with gifting/seeding logistics nightmares. Amazon proved you don't need upfront costs - performance commissions work better for everyone.
-
-CORRECT MESSAGING:
-✓ "Copy Amazon's Influencer Onsite Commission model for your site"
-✓ "We help you build what Amazon built - performance commissions, no upfront costs"
-✓ "Same model Amazon uses, but for your brand"
-✓ "Turn your creator program into performance commissions like Amazon"
-
-WRONG MESSAGING (NEVER SAY THIS):
-✗ "Access to Amazon creators"
-✗ "Work with Amazon influencers"
-✗ "Our network of Amazon creators"
-✗ "Tap into Amazon's creators"
-
-EMAIL STRUCTURE (Under 90 words):
-[Name] -
-
-[Question about upfront creator costs OR gifting headaches]
-
-[Amazon proved performance commissions work - no upfront costs, creators earn after sales]
-
-[We help you copy that exact model for your brand's site]
-
-[Simple question CTA]
-
-[Your name]
-
-TONE: Casual, direct, like a Slack message. No formality.`
-```
-
----
-
-## 📧 Example of CORRECT Email
-
-**Good Example:**
-```
-Sarah -
-
-Still paying creators $1k upfront for every UGC post?
-
-Amazon figured out how to eliminate that with Influencer Onsite Commissions. Creators promote products, earn performance commissions after driving sales. No upfront costs, no gifting logistics.
-
-We help D2C brands copy that exact model for their own site. Same commission structure Amazon uses, but for your products.
-
-Worth a quick call to see how this works?
-
-Mike
+          systemPrompt: 'You are an expert SDR writing concise, casual emails for Onsite Affiliate. Write under 90 words, mention Amazon Influencer program, focus on upfront cost pain.'
         })
       });
 
@@ -1004,178 +838,99 @@ timbuk2.com</pre>
                   </button>
                 </div>
               </div>
-<div className="agent-settings">
-  {/* Email Limits */}
-  <div className="settings-card">
-    <h3>Email Limits</h3>
-    <div className="setting-item">
-      <label>Max Emails Per Day</label>
-      <input
-        type="number"
-        value={agentSettings?.max_emails_per_day || 50}
-        onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
-      />
-    </div>
-    <div className="setting-item">
-      <label>Minutes Between Emails</label>
-      <input
-        type="number"
-        value={agentSettings?.min_minutes_between_emails || 15}
-        onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
-      />
-    </div>
-    <div className="setting-item">
-      <label>Send Hours (EST)</label>
-      <div className="hours-input">
-        <input
-          type="number"
-          min="0"
-          max="23"
-          value={agentSettings?.send_hours_start || 9}
-          onChange={(e) => updateAgentSettings({ send_hours_start: parseInt(e.target.value) })}
-          style={{ width: '80px' }}
-        />
-        <span>to</span>
-        <input
-          type="number"
-          min="0"
-          max="23"
-          value={agentSettings?.send_hours_end || 17}
-          onChange={(e) => updateAgentSettings({ send_hours_end: parseInt(e.target.value) })}
-          style={{ width: '80px' }}
-        />
-      </div>
-    </div>
-  </div>
 
-  {/* Contact Limits */}
-  <div className="settings-card">
-    <h3>Contact Limits</h3>
-    <div className="setting-item">
-      <label>Max Contacts Per Lead</label>
-      <input
-        type="number"
-        value={agentSettings?.max_contacts_per_lead || 3}
-        onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
-      />
-      <p className="setting-hint">
-        Maximum number of people to contact at each company
-      </p>
-    </div>
-    <div className="setting-item">
-      <label>Max Per Company Per Day</label>
-      <input
-        type="number"
-        value={agentSettings?.max_contacts_per_company_per_day || 1}
-        onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
-      />
-      <p className="setting-hint">
-        Prevents spamming multiple people at the same company in one day
-      </p>
-    </div>
-  </div>
+              <div className="agent-settings">
+                <div className="settings-card">
+                  <h3>Email Limits</h3>
+                  <div className="setting-item">
+                    <label>Max Emails Per Day</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.max_emails_per_day || 50}
+                      onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
+                    />
+                  </div>
+                  <div className="setting-item">
+                    <label>Minutes Between Emails</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.min_minutes_between_emails || 15}
+                      onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
+                    />
+                  </div>
+                </div>
 
-  {/* Contact Quality - THIS WAS MISSING */}
-  <div className="settings-card">
-    <h3>Contact Quality</h3>
-    <div className="setting-item">
-      <label>Minimum Match Level</label>
-      <select
-        value={agentSettings?.min_match_level || 'Good Match'}
-        onChange={(e) => updateAgentSettings({ min_match_level: e.target.value })}
-      >
-        <option value="Best Match">Best Match Only</option>
-        <option value="Great Match">Great Match or Better</option>
-        <option value="Good Match">Good Match or Better</option>
-        <option value="Possible Match">All Matches</option>
-      </select>
-      <p className="setting-hint">
-        Only contact decision makers that meet this quality threshold
-      </p>
-    </div>
-    <div className="setting-item">
-      <label>Minimum Match Score</label>
-      <input
-        type="number"
-        value={agentSettings?.min_match_score || 40}
-        onChange={(e) => updateAgentSettings({ min_match_score: parseInt(e.target.value) })}
-      />
-      <p className="setting-hint">
-        Minimum scoring threshold (0-200+). Higher scores = better title match.
-      </p>
-    </div>
-  </div>
+                <div className="settings-card">
+                  <h3>Contact Limits</h3>
+                  <div className="setting-item">
+                    <label>Max Contacts Per Lead</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.max_contacts_per_lead || 3}
+                      onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
+                    />
+                  </div>
+                  <div className="setting-item">
+                    <label>Max Per Company Per Day</label>
+                    <input
+                      type="number"
+                      value={agentSettings?.max_contacts_per_company_per_day || 1}
+                      onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
+                    />
+                  </div>
+                </div>
 
-  {/* ICP Fit Filter */}
-  <div className="settings-card">
-    <h3>ICP Fit Filter</h3>
-    <div className="checkbox-group">
-      <label>
-        <input
-          type="checkbox"
-          checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
-          onChange={(e) => {
-            const fits = agentSettings?.allowed_icp_fits || [];
-            const newFits = e.target.checked
-              ? [...fits, 'HIGH']
-              : fits.filter(f => f !== 'HIGH');
-            updateAgentSettings({ allowed_icp_fits: newFits });
-          }}
-        />
-        HIGH Only
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
-          onChange={(e) => {
-            const fits = agentSettings?.allowed_icp_fits || [];
-            const newFits = e.target.checked
-              ? [...fits, 'MEDIUM']
-              : fits.filter(f => f !== 'MEDIUM');
-            updateAgentSettings({ allowed_icp_fits: newFits });
-          }}
-        />
-        Include MEDIUM
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          checked={agentSettings?.allowed_icp_fits?.includes('LOW')}
-          onChange={(e) => {
-            const fits = agentSettings?.allowed_icp_fits || [];
-            const newFits = e.target.checked
-              ? [...fits, 'LOW']
-              : fits.filter(f => f !== 'LOW');
-            updateAgentSettings({ allowed_icp_fits: newFits });
-          }}
-        />
-        Include LOW
-      </label>
-    </div>
-    <p className="setting-hint">
-      Agent will only work on leads that match selected ICP fit levels
-    </p>
-  </div>
+                <div className="settings-card">
+                  <h3>ICP Fit Filter</h3>
+                  <div className="checkbox-group">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
+                        onChange={(e) => {
+                          const fits = agentSettings?.allowed_icp_fits || [];
+                          const newFits = e.target.checked
+                            ? [...fits, 'HIGH']
+                            : fits.filter(f => f !== 'HIGH');
+                          updateAgentSettings({ allowed_icp_fits: newFits });
+                        }}
+                      />
+                      HIGH Only
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
+                        onChange={(e) => {
+                          const fits = agentSettings?.allowed_icp_fits || [];
+                          const newFits = e.target.checked
+                            ? [...fits, 'MEDIUM']
+                            : fits.filter(f => f !== 'MEDIUM');
+                          updateAgentSettings({ allowed_icp_fits: newFits });
+                        }}
+                      />
+                      Include MEDIUM
+                    </label>
+                  </div>
+                </div>
 
-  {/* Approval Mode */}
-  <div className="settings-card">
-    <h3>Approval Mode</h3>
-    <label className="toggle-label">
-      <input
-        type="checkbox"
-        checked={agentSettings?.auto_send || false}
-        onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
-      />
-      <span>Auto-send emails (no manual approval)</span>
-    </label>
-    <p className="setting-hint">
-      {agentSettings?.auto_send
-        ? '⚠️ Emails will send automatically'
-        : '✅ Emails require your approval'}
-    </p>
-  </div>
-</div>
+                <div className="settings-card">
+                  <h3>Approval Mode</h3>
+                  <label className="toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={agentSettings?.auto_send || false}
+                      onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
+                    />
+                    <span>Auto-send emails</span>
+                  </label>
+                  <p className="setting-hint">
+                    {agentSettings?.auto_send
+                      ? '⚠️ Emails will send automatically'
+                      : '✅ Emails require your approval'}
+                  </p>
+                </div>
+              </div>
 
               <div className="activity-section">
                 <h3>Recent Activity</h3>
