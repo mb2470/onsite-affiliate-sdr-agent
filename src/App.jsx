@@ -31,23 +31,48 @@ function App() {
     loadActivity();
   }, []);
 
-  // Load leads from Supabase
-  const loadLeads = async () => {
-    setIsLoadingLeads(true);
-    try {
+// Load leads from Supabase with pagination
+const loadLeadsFromSupabase = async () => {
+  setIsLoadingLeads(true);
+  try {
+    let allLeads = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
       const { data, error } = await supabase
         .from('leads')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(from, from + pageSize - 1);
 
       if (error) throw error;
-      setLeads(data || []);
-    } catch (error) {
-      console.error('Error loading leads:', error);
-    } finally {
-      setIsLoadingLeads(false);
+
+      if (data && data.length > 0) {
+        allLeads = [...allLeads, ...data];
+        from += pageSize;
+        
+        console.log(`Loaded ${allLeads.length} leads so far...`);
+        
+        // Stop if we got less than a full page
+        if (data.length < pageSize) {
+          hasMore = false;
+        }
+      } else {
+        hasMore = false;
+      }
     }
-  };
+
+    console.log(`✅ Loaded ${allLeads.length} total leads`);
+    setLeads(allLeads);
+  } catch (error) {
+    console.error('Error loading leads:', error);
+    alert('Failed to load leads from database');
+  } finally {
+    setIsLoadingLeads(false);
+  }
+};
 
   // Load agent settings
   const loadAgentSettings = async () => {
@@ -403,6 +428,10 @@ Be concise and specific.`,
           <div className="stat">
             <span className="stat-value">{stats?.emails_sent || 0}</span>
             <span className="stat-label">Emails Sent</span>
+          </div>
+          <div className="stat">
+            <span className="stat-value">{leads.length}</span>
+            <span className="stat-label">Total Leads Loaded</span>
           </div>
         </div>
       </header>
