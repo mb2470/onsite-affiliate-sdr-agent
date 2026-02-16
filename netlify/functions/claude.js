@@ -1,58 +1,68 @@
-// Netlify serverless function to handle Claude API calls
-// This keeps your API key secure on the server side
+const Anthropic = require('@anthropic-ai/sdk');
 
-exports.handler = async (event, context) => {
-  // Only allow POST requests
+exports.handler = async (event) => {
+  // CORS headers
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  };
+
+  // Handle preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
-      body: JSON.stringify({ error: 'Method not allowed' })
+      headers,
+      body: JSON.stringify({ error: 'Method not allowed' }),
     };
   }
 
   try {
     const { prompt, systemPrompt } = JSON.parse(event.body);
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        system: systemPrompt || undefined
-      })
+    if (!prompt) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Prompt is required' }),
+      };
+    }
+
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
     });
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error?.message || 'API request failed');
-    }
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      system: systemPrompt || 'You are a helpful AI assistant.',
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    });
 
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      headers,
+      body: JSON.stringify({
+        content: message.content,
+      }),
     };
-
   } catch (error) {
-    console.error('Error calling Claude API:', error);
+    console.error('Claude API Error:', error);
     return {
       statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        error: error.message || 'Internal server error' 
-      })
+      headers,
+      body: JSON.stringify({
+        error: error.message || 'Failed to call Claude API',
+      }),
     };
   }
 };
