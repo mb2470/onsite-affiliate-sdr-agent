@@ -602,8 +602,8 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
       <div className="main-layout">
         <aside className="vertical-sidebar">
           <button
-            className={`sidebar-btn ${ === 'add' ? 'active' : ''}`}
-            onClick={() => set('add')}
+            className={`sidebar-btn ${activeView === 'add' ? 'active' : ''}`}
+            onClick={() => setActiveView('add')}
           >
             <span className="btn-icon">➕</span>
             <span className="btn-label">Add Leads</span>
