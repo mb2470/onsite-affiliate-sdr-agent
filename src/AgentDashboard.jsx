@@ -1,12 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import './AgentDashboard.css';
-
-// Initialize Supabase - REPLACE WITH YOUR ACTUAL PUBLISHABLE KEY
-const supabase = createClient(
-  'https://vzghstujcvjmcqndtchb.supabase.co',
-  'sb_publishable_nwh0eacZN-nC07uDEYmU7w_LRiviIZT'
-);
+import { supabase } from './supabaseClient';
 
 function AgentDashboard() {
   const [settings, setSettings] = useState(null);
