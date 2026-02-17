@@ -36,45 +36,48 @@ function App() {
   }, []);
 
   // Load ALL leads from Supabase with pagination - FIXED
-  const loadLeads = async () => {
-    setIsLoadingLeads(true);
-    try {
-      let allLeads = [];
-      let from = 0;
-      const pageSize = 1000;
-      let hasMore = true;
+const loadLeads = async () => {
+  setIsLoadingLeads(true);
+  try {
+    let allLeads = [];
+    let from = 0;
+    const pageSize = 200; // Reduced from 1000 for better stability
+    let keepFetching = true;
 
-      console.log('🔄 Starting to load all leads...');
+    console.log('🔄 Starting optimized lead load...');
 
-      while (hasMore) {
-        console.log(`Fetching leads ${from} to ${from + pageSize - 1}...`);
+    while (keepFetching) {
+      const { data, error, count } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact' }) // Asks Supabase for the total row count
+        .order('created_at', { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allLeads = [...allLeads, ...data];
+        from += pageSize;
         
-        const { data, error } = await supabase
-          .from('leads')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .range(from, from + pageSize - 1);
-
-        if (error) {
-          console.error('❌ Error loading page:', error);
-          throw error;
+        // Stop if we've reached the total count or received a partial page
+        if (allLeads.length >= count || data.length < pageSize) {
+          keepFetching = false;
         }
-
-        if (data && data.length > 0) {
-          allLeads = [...allLeads, ...data];
-          console.log(`✅ Loaded ${allLeads.length} leads so far...`);
-          
-          if (data.length < pageSize) {
-            hasMore = false;
-            console.log('📦 Got less than full page, stopping...');
-          } else {
-            from += pageSize;
-          }
-        } else {
-          hasMore = false;
-          console.log('🏁 No more data, stopping...');
-        }
+      } else {
+        keepFetching = false;
       }
+    }
+
+    setLeads(allLeads);
+    console.log(`🎉 Success! Total loaded: ${allLeads.length}`);
+  } catch (error) {
+    console.error('💥 Fetch failed:', error.message);
+    // This alert will tell you EXACTLY what column or permission is missing
+    alert('Database Error: ' + error.message); 
+  } finally {
+    setIsLoadingLeads(false);
+  }
+};
 
       console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
       setLeads(allLeads);
