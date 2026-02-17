@@ -2,12 +2,7 @@ import { useState, useEffect } from 'react';
 import './App.css';
 import { createClient } from '@supabase/supabase-js';
 import AgentMonitor from './AgentMonitor'; 
-
-// Initialize Supabase
-const supabase = createClient(
-  'https://vzghstujcvjmcqndtchb.supabase.co',
-  'sb_publishable_nwh0eacZN-nC07uDEYmU7w_LRiviIZT'
-);
+import { supabase } from './supabaseClient';
 
 function App() {
   const [activeView, setActiveView] = useState('add');
