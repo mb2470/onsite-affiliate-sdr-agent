@@ -601,46 +601,46 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
 
       <div className="main-layout">
         <aside className="vertical-sidebar">
-          <button
-            className={`sidebar-btn ${activeView === 'add' ? 'active' : ''}`}
-            onClick={() => setActiveView('add')}
-          >
-            <span className="btn-icon">➕</span>
-            <span className="btn-label">Add Leads</span>
-          </button>
-          
-          <button
-            className={`sidebar-btn ${ === 'enrich' ? 'active' : ''}`}
-            onClick={() => set('enrich')}
-          >
-            <span className="btn-icon">🔬</span>
-            <span className="btn-label">Enrich Leads</span>
-          </button>
+  <button
+    className={`sidebar-btn ${activeView === 'add' ? 'active' : ''}`}
+    onClick={() => setActiveView('add')}
+  >
+    <span className="btn-icon">➕</span>
+    <span className="btn-label">Add Leads</span>
+  </button>
+  
+  <button
+    className={`sidebar-btn ${activeView === 'enrich' ? 'active' : ''}`}
+    onClick={() => setActiveView('enrich')}
+  >
+    <span className="btn-icon">🔬</span>
+    <span className="btn-label">Enrich Leads</span>
+  </button>
 
-          <button
-            className={`sidebar-btn ${ === 'manual' ? 'active' : ''}`}
-            onClick={() => set('manual')}
-          >
-            <span className="btn-icon">✉️</span>
-            <span className="btn-label">Manual Outreach</span>
-          </button>
-          
-          <button
-            className={`sidebar-btn ${activeView === 'agent' ? 'active' : ''}`}
-            onClick={() => setActiveView('agent')}
-          >
-            <span className="btn-icon">🤖</span>
-            <span className="btn-label">Manage Agent</span>
-          </button>
-          
-          <button
-            className={`sidebar-btn ${activeView === 'pipeline' ? 'active' : ''}`}
-            onClick={() => setActiveView('pipeline')}
-          >
-            <span className="btn-icon">📊</span>
-            <span className="btn-label">Pipeline</span>
-          </button>
-        </aside>
+  <button
+    className={`sidebar-btn ${activeView === 'manual' ? 'active' : ''}`}
+    onClick={() => setActiveView('manual')}
+  >
+    <span className="btn-icon">✉️</span>
+    <span className="btn-label">Manual Outreach</span>
+  </button>
+  
+  <button
+    className={`sidebar-btn ${activeView === 'agent' ? 'active' : ''}`}
+    onClick={() => setActiveView('agent')}
+  >
+    <span className="btn-icon">🤖</span>
+    <span className="btn-label">Manage Agent</span>
+  </button>
+  
+  <button
+    className={`sidebar-btn ${activeView === 'pipeline' ? 'active' : ''}`}
+    onClick={() => setActiveView('pipeline')}
+  >
+    <span className="btn-icon">📊</span>
+    <span className="btn-label">Pipeline</span>
+  </button>
+</aside>
 
         <main className="main-content">
           {activeView === 'add' && (
