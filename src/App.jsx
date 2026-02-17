@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 import { createClient } from '@supabase/supabase-js';
+import AgentMonitor from './AgentMonitor'; 
 
 // Initialize Supabase
 const supabase = createClient(
@@ -601,24 +602,24 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
       <div className="main-layout">
         <aside className="vertical-sidebar">
           <button
-            className={`sidebar-btn ${activeView === 'add' ? 'active' : ''}`}
-            onClick={() => setActiveView('add')}
+            className={`sidebar-btn ${ === 'add' ? 'active' : ''}`}
+            onClick={() => set('add')}
           >
             <span className="btn-icon">➕</span>
             <span className="btn-label">Add Leads</span>
           </button>
           
           <button
-            className={`sidebar-btn ${activeView === 'enrich' ? 'active' : ''}`}
-            onClick={() => setActiveView('enrich')}
+            className={`sidebar-btn ${ === 'enrich' ? 'active' : ''}`}
+            onClick={() => set('enrich')}
           >
             <span className="btn-icon">🔬</span>
             <span className="btn-label">Enrich Leads</span>
           </button>
 
           <button
-            className={`sidebar-btn ${activeView === 'manual' ? 'active' : ''}`}
-            onClick={() => setActiveView('manual')}
+            className={`sidebar-btn ${ === 'manual' ? 'active' : ''}`}
+            onClick={() => set('manual')}
           >
             <span className="btn-icon">✉️</span>
             <span className="btn-label">Manual Outreach</span>
@@ -916,7 +917,7 @@ timbuk2.com</pre>
                   </button>
                 </div>
               </div>
-
+             <AgentMonitor />
               <div className="agent-settings">
                 <div className="settings-card">
                   <h3>Email Limits</h3>
