@@ -41,15 +41,15 @@ const loadLeads = async () => {
   try {
     let allLeads = [];
     let from = 0;
-    const pageSize = 200; // Reduced from 1000 for better stability
-    let keepFetching = true;
+    const pageSize = 500; // stable middle ground
+    let hasMore = true;
 
-    console.log('🔄 Starting optimized lead load...');
+    console.log('🔄 Loading leads...');
 
-    while (keepFetching) {
-      const { data, error, count } = await supabase
+    while (hasMore) {
+      const { data, error } = await supabase
         .from('leads')
-        .select('*', { count: 'exact' }) // Asks Supabase for the total row count
+        .select('*')
         .order('created_at', { ascending: false })
         .range(from, from + pageSize - 1);
 
@@ -57,28 +57,26 @@ const loadLeads = async () => {
 
       if (data && data.length > 0) {
         allLeads = [...allLeads, ...data];
-        from += pageSize;
-        
-        // Stop if we've reached the total count or received a partial page
-        if (allLeads.length >= count || data.length < pageSize) {
-          keepFetching = false;
+        if (data.length < pageSize) {
+          hasMore = false; // We reached the end
+        } else {
+          from += pageSize;
         }
       } else {
-        keepFetching = false;
+        hasMore = false;
       }
     }
 
     setLeads(allLeads);
-    console.log(`🎉 Success! Total loaded: ${allLeads.length}`);
+    console.log(`✅ Success: ${allLeads.length} leads loaded`);
   } catch (error) {
-    console.error('💥 Fetch failed:', error.message);
-    // This alert will tell you EXACTLY what column or permission is missing
-    alert('Database Error: ' + error.message); 
+    console.error('💥 Fetch Error:', error.message);
+    // This alert will show the SPECIFIC error from Supabase
+    alert('Supabase says: ' + error.message);
   } finally {
     setIsLoadingLeads(false);
   }
 };
-
       console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
       setLeads(allLeads);
     } catch (error) {
