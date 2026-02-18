@@ -24,6 +24,8 @@ function App() {
   const [enrichFilterStatus, setEnrichFilterStatus] = useState('all');
   const [enrichFilterICP, setEnrichFilterICP] = useState('all');
   const [enrichFilterCountry, setEnrichFilterCountry] = useState('all');
+  const [enrichPage, setEnrichPage] = useState(0);
+  const ENRICH_PAGE_SIZE = 100;
 
   // Manual outreach state
   const [selectedLeadForManual, setSelectedLeadForManual] = useState(null);
@@ -745,7 +747,17 @@ timbuk2.com</pre>
             </div>
           )}
 
-          {activeView === 'enrich' && (
+          {activeView === 'enrich' && (() => {
+            const filteredLeads = getEnrichFilteredLeads();
+            const totalPages = Math.ceil(filteredLeads.length / ENRICH_PAGE_SIZE);
+            const paginatedLeads = filteredLeads.slice(
+              enrichPage * ENRICH_PAGE_SIZE, 
+              (enrichPage + 1) * ENRICH_PAGE_SIZE
+            );
+            const startItem = enrichPage * ENRICH_PAGE_SIZE + 1;
+            const endItem = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, filteredLeads.length);
+
+            return (
             <div className="view-container">
               <div className="view-header">
                 <h2>🔬 Enrich Leads with AI</h2>
@@ -775,7 +787,7 @@ timbuk2.com</pre>
                   type="text"
                   placeholder="🔍 Search by website, notes, or ICP..."
                   value={enrichSearchTerm}
-                  onChange={(e) => setEnrichSearchTerm(e.target.value)}
+                  onChange={(e) => { setEnrichSearchTerm(e.target.value); setEnrichPage(0); }}
                   style={{
                     flex: '1',
                     minWidth: '250px',
@@ -789,7 +801,7 @@ timbuk2.com</pre>
                 />
                 <select
                   value={enrichFilterStatus}
-                  onChange={(e) => setEnrichFilterStatus(e.target.value)}
+                  onChange={(e) => { setEnrichFilterStatus(e.target.value); setEnrichPage(0); }}
                   style={{
                     padding: '10px 14px',
                     borderRadius: '8px',
@@ -806,7 +818,7 @@ timbuk2.com</pre>
                 </select>
                 <select
                   value={enrichFilterICP}
-                  onChange={(e) => setEnrichFilterICP(e.target.value)}
+                  onChange={(e) => { setEnrichFilterICP(e.target.value); setEnrichPage(0); }}
                   style={{
                     padding: '10px 14px',
                     borderRadius: '8px',
@@ -823,7 +835,7 @@ timbuk2.com</pre>
                 </select>
                 <select
                   value={enrichFilterCountry}
-                  onChange={(e) => setEnrichFilterCountry(e.target.value)}
+                  onChange={(e) => { setEnrichFilterCountry(e.target.value); setEnrichPage(0); }}
                   style={{
                     padding: '10px 14px',
                     borderRadius: '8px',
@@ -851,6 +863,7 @@ timbuk2.com</pre>
                       setEnrichFilterStatus('all');
                       setEnrichFilterICP('all');
                       setEnrichFilterCountry('all');
+                      setEnrichPage(0);
                     }}
                     style={{
                       padding: '10px 14px',
@@ -866,12 +879,12 @@ timbuk2.com</pre>
                   </button>
                 )}
                 <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
-                  Showing {getEnrichFilteredLeads().length} of {leads.length} leads
+                  Showing {filteredLeads.length > 0 ? `${startItem}–${endItem}` : '0'} of {filteredLeads.length} leads
                 </span>
               </div>
 
               <div className="leads-grid">
-                {getEnrichFilteredLeads().map(lead => (
+                {paginatedLeads.map(lead => (
                   <div
                     key={lead.id}
                     className={`lead-enrich-card ${selectedLeads.includes(lead.id) ? 'selected' : ''}`}
@@ -931,8 +944,85 @@ timbuk2.com</pre>
                   </div>
                 ))}
               </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  gap: '12px',
+                  marginTop: '24px',
+                  paddingBottom: '20px'
+                }}>
+                  <button
+                    onClick={() => setEnrichPage(0)}
+                    disabled={enrichPage === 0}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: enrichPage === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
+                      color: enrichPage === 0 ? 'rgba(255,255,255,0.3)' : 'inherit',
+                      cursor: enrichPage === 0 ? 'default' : 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >
+                    ⟨⟨ First
+                  </button>
+                  <button
+                    onClick={() => setEnrichPage(p => Math.max(0, p - 1))}
+                    disabled={enrichPage === 0}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: enrichPage === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
+                      color: enrichPage === 0 ? 'rgba(255,255,255,0.3)' : 'inherit',
+                      cursor: enrichPage === 0 ? 'default' : 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >
+                    ⟨ Prev
+                  </button>
+                  <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', fontWeight: '600' }}>
+                    Page {enrichPage + 1} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setEnrichPage(p => Math.min(totalPages - 1, p + 1))}
+                    disabled={enrichPage >= totalPages - 1}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
+                      color: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
+                      cursor: enrichPage >= totalPages - 1 ? 'default' : 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >
+                    Next ⟩
+                  </button>
+                  <button
+                    onClick={() => setEnrichPage(totalPages - 1)}
+                    disabled={enrichPage >= totalPages - 1}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
+                      color: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
+                      cursor: enrichPage >= totalPages - 1 ? 'default' : 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >
+                    Last ⟩⟩
+                  </button>
+                </div>
+              )}
             </div>
-          )}
+            );
+          })()}
 
           {activeView === 'manual' && (
             <div className="view-container">
