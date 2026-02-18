@@ -22,7 +22,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { prompt, systemPrompt } = JSON.parse(event.body);
+    const { prompt, systemPrompt, useWebSearch } = JSON.parse(event.body);
 
     if (!prompt) {
       return {
@@ -36,9 +36,10 @@ exports.handler = async (event) => {
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
 
-    const message = await anthropic.messages.create({
+    // Build request params
+    const params = {
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
+      max_tokens: 4096,
       system: systemPrompt || 'You are a helpful AI assistant.',
       messages: [
         {
@@ -46,13 +47,32 @@ exports.handler = async (event) => {
           content: prompt,
         },
       ],
-    });
+    };
+
+    // Add web search tool if requested
+    if (useWebSearch) {
+      params.tools = [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+        },
+      ];
+    }
+
+    const message = await anthropic.messages.create(params);
+
+    // Extract all text blocks from response (skips tool_use and search_result blocks)
+    const textContent = message.content
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n');
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
         content: message.content,
+        text: textContent,
       }),
     };
   } catch (error) {
