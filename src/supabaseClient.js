@@ -6,5 +6,5 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
-
+console.log("Checking Client Init:", supabaseUrl ? "URL Found" : "URL MISSING", supabaseAnonKey ? "Key Found" : "KEY MISSING");
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
