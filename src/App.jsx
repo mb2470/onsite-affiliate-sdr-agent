@@ -36,47 +36,56 @@ function App() {
   }, []);
 
   // Load ALL leads from Supabase with pagination - FIXED
-const loadLeads = async () => {
-  setIsLoadingLeads(true);
-  try {
-    let allLeads = [];
-    let from = 0;
-    const pageSize = 500; // stable middle ground
-    let hasMore = true;
+// Load ALL leads from Supabase with pagination
+  const loadLeads = async () => {
+    setIsLoadingLeads(true);
+    try {
+      let allLeads = [];
+      let from = 0;
+      const pageSize = 500; 
+      let hasMore = true;
 
-    console.log('🔄 Loading leads...');
+      console.log('🔄 Starting to load all leads...');
 
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .range(from, from + pageSize - 1);
+      while (hasMore) {
+        console.log(`Fetching leads ${from} to ${from + pageSize - 1}...`);
+        
+        const { data, error } = await supabase
+          .from('leads')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(from, from + pageSize - 1);
 
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        allLeads = [...allLeads, ...data];
-        if (data.length < pageSize) {
-          hasMore = false; // We reached the end
-        } else {
-          from += pageSize;
+        if (error) {
+          console.error('❌ Error loading page:', error);
+          throw error;
         }
-      } else {
-        hasMore = false;
-      }
-    }
 
-    setLeads(allLeads);
-    console.log(`✅ Success: ${allLeads.length} leads loaded`);
-  } catch (error) {
-    console.error('💥 Fetch Error:', error.message);
-    // This alert will show the SPECIFIC error from Supabase
-    alert('Supabase says: ' + error.message);
-  } finally {
-    setIsLoadingLeads(false);
-  }
-};
+        if (data && data.length > 0) {
+          allLeads = [...allLeads, ...data];
+          console.log(`✅ Loaded ${allLeads.length} leads so far...`);
+          
+          if (data.length < pageSize) {
+            hasMore = false;
+            console.log('📦 Got less than full page, stopping...');
+          } else {
+            from += pageSize;
+          }
+        } else {
+          hasMore = false;
+          console.log('🏁 No more data, stopping...');
+        }
+      } // End of while loop
+
+      console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
+      setLeads(allLeads);
+    } catch (error) {
+      console.error('💥 Error loading leads:', error);
+      alert('Failed to load leads: ' + error.message);
+    } finally {
+      setIsLoadingLeads(false);
+    }
+  };
       console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
       setLeads(allLeads);
     } catch (error) {
