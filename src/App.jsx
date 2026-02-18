@@ -39,6 +39,14 @@ function App() {
   const [manualContacts, setManualContacts] = useState([]);
   const [isLoadingManualContacts, setIsLoadingManualContacts] = useState(false);
   const [selectedManualContacts, setSelectedManualContacts] = useState([]);
+  const [manualStep, setManualStep] = useState(1);
+  const [manualSearchTerm, setManualSearchTerm] = useState('');
+  const [manualLeads, setManualLeads] = useState([]);
+  const [manualTotalCount, setManualTotalCount] = useState(0);
+  const [isLoadingManualLeads, setIsLoadingManualLeads] = useState(false);
+  const [manualPage, setManualPage] = useState(0);
+  const MANUAL_PAGE_SIZE = 50;
+  const manualSearchTimerRef = useRef(null);
 
   // Load data on mount
   useEffect(() => {
@@ -156,6 +164,54 @@ function App() {
   useEffect(() => {
     searchEnrichLeads('', 'all', 'all', 'all', 0);
   }, []);
+
+  // Server-side search for Manual Outreach page (enriched leads only)
+  const searchManualLeads = async (search, page) => {
+    setIsLoadingManualLeads(true);
+    try {
+      let query = supabase
+        .from('leads')
+        .select('*', { count: 'exact' })
+        .eq('status', 'enriched');
+
+      if (search && search.trim()) {
+        query = query.or(
+          `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry.ilike.%${search.trim()}%`
+        );
+      }
+
+      const from = page * MANUAL_PAGE_SIZE;
+      const to = from + MANUAL_PAGE_SIZE - 1;
+
+      query = query
+        .order('icp_fit', { ascending: true })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      const { data, error, count } = await query;
+      if (error) throw error;
+
+      setManualLeads(data || []);
+      setManualTotalCount(count || 0);
+    } catch (error) {
+      console.error('❌ Error searching manual leads:', error);
+    } finally {
+      setIsLoadingManualLeads(false);
+    }
+  };
+
+  const debouncedManualSearch = (search) => {
+    if (manualSearchTimerRef.current) clearTimeout(manualSearchTimerRef.current);
+    manualSearchTimerRef.current = setTimeout(() => {
+      searchManualLeads(search, 0);
+      setManualPage(0);
+    }, 400);
+  };
+
+  // Load manual leads on mount and page change
+  useEffect(() => {
+    searchManualLeads(manualSearchTerm, manualPage);
+  }, [manualPage]);
 
   // Load agent settings
   const loadAgentSettings = async () => {
@@ -630,15 +686,7 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
 
   // Export selected contacts to Gmail
   const exportToGmail = () => {
-    if (selectedManualContacts.length === 0) {
-      alert('Please select at least one contact');
-      return;
-    }
-
-    if (!manualEmail) {
-      alert('Please generate an email first');
-      return;
-    }
+    if (selectedManualContacts.length === 0 || !manualEmail) return;
 
     const subjectMatch = manualEmail.match(/Subject:\s*(.+)/i);
     const subject = subjectMatch ? subjectMatch[1].trim() : 'Onsite Affiliate Introduction';
@@ -650,8 +698,6 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
     const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bccEmails)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
     window.open(gmailUrl, '_blank');
-
-    alert(`✅ Opening Gmail with ${selectedManualContacts.length} contact(s) in BCC!`);
   };
 
   // Update agent settings
@@ -1106,144 +1152,413 @@ timbuk2.com</pre>
           {activeView === 'manual' && (
             <div className="view-container">
               <h2>✉️ Manual Outreach</h2>
-              <p>Create personalized emails and export contacts to Gmail for hands-on outreach</p>
 
-              <div className="manual-outreach-layout">
-                <div className="manual-section">
-                  <div className="section-card">
-                    <h3>Step 1: Select Lead</h3>
-                    <div className="lead-selector">
-                      <select
-                        value={selectedLeadForManual?.id || ''}
-                        onChange={(e) => {
-                          const lead = leads.find(l => l.id === e.target.value);
+              {/* Step indicator */}
+              <div style={{
+                display: 'flex',
+                gap: '4px',
+                marginBottom: '24px',
+                alignItems: 'center'
+              }}>
+                {[
+                  { num: 1, label: 'Select Lead' },
+                  { num: 2, label: 'Generate Email' },
+                  { num: 3, label: 'Find Contacts' },
+                  { num: 4, label: 'Export to Gmail' }
+                ].map((s, i) => (
+                  <div key={s.num} style={{ display: 'flex', alignItems: 'center' }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 16px',
+                      borderRadius: '20px',
+                      backgroundColor: manualStep === s.num ? 'rgba(139,92,246,0.3)' : 
+                                       manualStep > s.num ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
+                      border: manualStep === s.num ? '1px solid rgba(139,92,246,0.6)' : '1px solid rgba(255,255,255,0.1)',
+                      color: manualStep > s.num ? '#4ade80' : manualStep === s.num ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+                      fontSize: '13px',
+                      fontWeight: manualStep === s.num ? '600' : '400'
+                    }}>
+                      <span>{manualStep > s.num ? '✓' : s.num}</span>
+                      <span>{s.label}</span>
+                    </div>
+                    {i < 3 && <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 4px' }}>→</span>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Step 1: Select Lead - tile grid with search */}
+              {manualStep === 1 && (
+                <>
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      placeholder="🔍 Search enriched leads by website, industry..."
+                      value={manualSearchTerm}
+                      onChange={(e) => { setManualSearchTerm(e.target.value); debouncedManualSearch(e.target.value); }}
+                      style={{
+                        flex: '1',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        backgroundColor: 'rgba(255,255,255,0.05)',
+                        color: 'inherit',
+                        fontSize: '14px'
+                      }}
+                    />
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                      {isLoadingManualLeads ? '⏳' : `${manualTotalCount} enriched leads`}
+                    </span>
+                  </div>
+
+                  <div className="leads-grid">
+                    {manualLeads.map(lead => (
+                      <div
+                        key={lead.id}
+                        className={`lead-enrich-card ${selectedLeadForManual?.id === lead.id ? 'selected' : ''}`}
+                        onClick={() => {
                           setSelectedLeadForManual(lead);
                           setManualEmail('');
                           setManualContacts([]);
                           setSelectedManualContacts([]);
                         }}
+                        style={{ cursor: 'pointer' }}
                       >
-                        <option value="">Choose a lead...</option>
-                        {leads
-                          .filter(l => l.status === 'enriched' || l.research_notes)
-                          .map(lead => (
-                            <option key={lead.id} value={lead.id}>
-                              {lead.website} {lead.icp_fit ? `(${lead.icp_fit})` : ''}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
+                        <div className="lead-info">
+                          <h4>{lead.website}</h4>
+                          {lead.icp_fit && (
+                            <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>
+                              {lead.icp_fit}
+                            </span>
+                          )}
+                          {lead.country && (
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: '600',
+                              backgroundColor: 'rgba(255,255,255,0.1)',
+                              color: 'rgba(255,255,255,0.6)'
+                            }}>
+                              {lead.country === 'US (assumed)' ? '🇺🇸 US' : 
+                               lead.country === 'Canada' ? '🇨🇦 CA' : lead.country}
+                            </span>
+                          )}
+                        </div>
+                        {lead.industry && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry}</div>}
+                        {lead.fit_reason && <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.fit_reason}</div>}
+                      </div>
+                    ))}
+                  </div>
 
-                    {selectedLeadForManual && (
-                      <div className="selected-lead-info">
-                        <h4>{selectedLeadForManual.website}</h4>
+                  {/* Manual pagination */}
+                  {manualTotalCount > MANUAL_PAGE_SIZE && (
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '20px' }}>
+                      <button
+                        onClick={() => setManualPage(p => Math.max(0, p - 1))}
+                        disabled={manualPage === 0}
+                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}
+                      >⟨ Prev</button>
+                      <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>
+                        Page {manualPage + 1} of {Math.ceil(manualTotalCount / MANUAL_PAGE_SIZE)}
+                      </span>
+                      <button
+                        onClick={() => setManualPage(p => p + 1)}
+                        disabled={(manualPage + 1) * MANUAL_PAGE_SIZE >= manualTotalCount}
+                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}
+                      >Next ⟩</button>
+                    </div>
+                  )}
+
+                  {/* Selected lead + proceed button */}
+                  {selectedLeadForManual && (
+                    <div style={{
+                      position: 'sticky',
+                      bottom: '0',
+                      marginTop: '20px',
+                      padding: '16px',
+                      borderRadius: '12px',
+                      backgroundColor: 'rgba(139,92,246,0.15)',
+                      border: '1px solid rgba(139,92,246,0.4)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <div>
+                        <strong>{selectedLeadForManual.website}</strong>
                         {selectedLeadForManual.icp_fit && (
-                          <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`}>
+                          <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>
                             {selectedLeadForManual.icp_fit}
                           </span>
                         )}
-                        {selectedLeadForManual.research_notes && (
-                          <div className="lead-research-preview">
-                            <p><strong>Research:</strong></p>
-                            <pre>{selectedLeadForManual.research_notes.substring(0, 200)}...</pre>
-                          </div>
+                        {selectedLeadForManual.industry && (
+                          <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>
                         )}
                       </div>
-                    )}
-                  </div>
-
-                  {selectedLeadForManual && (
-                    <div className="section-card">
-                      <h3>Step 2: Generate Email</h3>
                       <button
                         className="primary-btn"
-                        onClick={() => generateManualEmail(selectedLeadForManual)}
-                        disabled={isGenerating}
+                        onClick={() => setManualStep(2)}
                       >
-                        {isGenerating ? '⏳ Generating...' : '✨ Generate Email with AI'}
+                        Next: Generate Email →
                       </button>
-
-                      {manualEmail && (
-                        <div className="email-preview">
-                          <div className="email-header">
-                            <strong>Generated Email:</strong>
-                            <button
-                              className="secondary-btn"
-                              onClick={() => navigator.clipboard.writeText(manualEmail)}
-                            >
-                              📋 Copy
-                            </button>
-                          </div>
-                          <pre>{manualEmail}</pre>
-                        </div>
-                      )}
                     </div>
                   )}
-                </div>
+                </>
+              )}
 
-                {selectedLeadForManual && manualEmail && (
-                  <div className="manual-section">
-                    <div className="section-card">
-                      <h3>Step 3: Find Contacts</h3>
+              {/* Step 2: Generate Email */}
+              {manualStep === 2 && selectedLeadForManual && (
+                <div style={{
+                  maxWidth: '700px',
+                  margin: '0 auto',
+                  padding: '24px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.1)'
+                }}>
+                  <div style={{ marginBottom: '20px' }}>
+                    <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
+                    <span style={{ opacity: 0.6, fontSize: '13px' }}>{selectedLeadForManual.industry} · {selectedLeadForManual.icp_fit} fit</span>
+                  </div>
+
+                  {!manualEmail ? (
+                    <button
+                      className="primary-btn"
+                      onClick={() => generateManualEmail(selectedLeadForManual)}
+                      disabled={isGenerating}
+                      style={{ width: '100%', padding: '14px' }}
+                    >
+                      {isGenerating ? '⏳ Generating with AI...' : '✨ Generate Personalized Email'}
+                    </button>
+                  ) : (
+                    <>
+                      <div style={{
+                        backgroundColor: 'rgba(0,0,0,0.3)',
+                        borderRadius: '8px',
+                        padding: '16px',
+                        marginBottom: '16px',
+                        position: 'relative'
+                      }}>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(manualEmail)}
+                          style={{
+                            position: 'absolute',
+                            top: '8px',
+                            right: '8px',
+                            padding: '4px 10px',
+                            borderRadius: '4px',
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            backgroundColor: 'transparent',
+                            color: 'rgba(255,255,255,0.6)',
+                            cursor: 'pointer',
+                            fontSize: '12px'
+                          }}
+                        >📋 Copy</button>
+                        <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: '13px', lineHeight: '1.5' }}>{manualEmail}</pre>
+                      </div>
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <button
+                          className="secondary-btn"
+                          onClick={() => generateManualEmail(selectedLeadForManual)}
+                          disabled={isGenerating}
+                        >
+                          🔄 Regenerate
+                        </button>
+                        <button
+                          className="primary-btn"
+                          onClick={() => {
+                            setManualStep(3);
+                            findManualContacts(selectedLeadForManual);
+                          }}
+                          style={{ flex: 1 }}
+                        >
+                          Next: Find Contacts →
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  <button
+                    onClick={() => setManualStep(1)}
+                    style={{
+                      marginTop: '16px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'rgba(255,255,255,0.4)',
+                      cursor: 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >← Back to lead selection</button>
+                </div>
+              )}
+
+              {/* Step 3: Find Contacts */}
+              {manualStep === 3 && selectedLeadForManual && (
+                <div style={{
+                  maxWidth: '700px',
+                  margin: '0 auto',
+                  padding: '24px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.1)'
+                }}>
+                  <div style={{ marginBottom: '20px' }}>
+                    <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
+                    <span style={{ opacity: 0.6, fontSize: '13px' }}>Select contacts to reach out to</span>
+                  </div>
+
+                  {isLoadingManualContacts ? (
+                    <div style={{ textAlign: 'center', padding: '40px', opacity: 0.6 }}>
+                      🔍 Searching for contacts at {selectedLeadForManual.website}...
+                    </div>
+                  ) : manualContacts.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '40px' }}>
+                      <p style={{ opacity: 0.6 }}>No contacts found for {selectedLeadForManual.website}</p>
+                      <button
+                        className="secondary-btn"
+                        onClick={() => findManualContacts(selectedLeadForManual)}
+                      >🔄 Try Again</button>
+                    </div>
+                  ) : (
+                    <>
+                      <p style={{ marginBottom: '12px', opacity: 0.7 }}><strong>{manualContacts.length}</strong> contacts found — select who to email:</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+                        {manualContacts.map(contact => (
+                          <div
+                            key={contact.email}
+                            onClick={() => toggleManualContact(contact.email)}
+                            style={{
+                              padding: '12px 16px',
+                              borderRadius: '8px',
+                              border: selectedManualContacts.includes(contact.email) 
+                                ? '1px solid rgba(139,92,246,0.6)' 
+                                : '1px solid rgba(255,255,255,0.1)',
+                              backgroundColor: selectedManualContacts.includes(contact.email)
+                                ? 'rgba(139,92,246,0.15)'
+                                : 'rgba(255,255,255,0.03)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '12px'
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedManualContacts.includes(contact.email)}
+                              onChange={() => toggleManualContact(contact.email)}
+                            />
+                            <div style={{ flex: 1 }}>
+                              <strong>{contact.name}</strong>
+                              <div style={{ fontSize: '12px', opacity: 0.7 }}>{contact.title}</div>
+                              <div style={{ fontSize: '12px', opacity: 0.5 }}>{contact.email}</div>
+                            </div>
+                            {contact.matchLevel && (
+                              <span className={`match-badge ${contact.matchClass}`}>
+                                {contact.matchEmoji} {contact.matchLevel}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
                       <button
                         className="primary-btn"
-                        onClick={() => findManualContacts(selectedLeadForManual)}
-                        disabled={isLoadingManualContacts}
+                        onClick={() => setManualStep(4)}
+                        disabled={selectedManualContacts.length === 0}
+                        style={{ width: '100%', padding: '14px' }}
                       >
-                        {isLoadingManualContacts ? '🔍 Searching...' : '🔍 Find Contacts'}
+                        Next: Export {selectedManualContacts.length} Contact(s) to Gmail →
                       </button>
+                    </>
+                  )}
 
-                      {manualContacts.length > 0 && (
-                        <>
-                          <div className="contacts-found">
-                            <p><strong>{manualContacts.length} contacts found</strong></p>
-                            <p className="text-muted">Select contacts to export to Gmail</p>
-                          </div>
+                  <button
+                    onClick={() => setManualStep(2)}
+                    style={{
+                      marginTop: '16px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'rgba(255,255,255,0.4)',
+                      cursor: 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >← Back to email</button>
+                </div>
+              )}
 
-                          <div className="manual-contacts-list">
-                            {manualContacts.map(contact => (
-                              <div
-                                key={contact.email}
-                                className={`manual-contact-card ${selectedManualContacts.includes(contact.email) ? 'selected' : ''}`}
-                                onClick={() => toggleManualContact(contact.email)}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedManualContacts.includes(contact.email)}
-                                  onChange={() => toggleManualContact(contact.email)}
-                                />
-                                <div className="contact-details">
-                                  <strong>{contact.name}</strong>
-                                  <p className="contact-title">{contact.title}</p>
-                                  <p className="contact-email">{contact.email}</p>
-                                  {contact.matchLevel && (
-                                    <span className={`match-badge ${contact.matchClass}`}>
-                                      {contact.matchEmoji} {contact.matchLevel}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-
-                          <div className="export-actions">
-                            <button
-                              className="primary-btn"
-                              onClick={exportToGmail}
-                              disabled={selectedManualContacts.length === 0}
-                            >
-                              📧 Export {selectedManualContacts.length} Contact(s) to Gmail
-                            </button>
-                            <p className="text-muted">
-                              Opens Gmail with selected contacts in BCC
-                            </p>
-                          </div>
-                        </>
-                      )}
+              {/* Step 4: Export to Gmail */}
+              {manualStep === 4 && selectedLeadForManual && (
+                <div style={{
+                  maxWidth: '700px',
+                  margin: '0 auto',
+                  padding: '24px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  textAlign: 'center'
+                }}>
+                  <h3 style={{ marginBottom: '20px' }}>Ready to Send!</h3>
+                  
+                  <div style={{
+                    padding: '16px',
+                    borderRadius: '8px',
+                    backgroundColor: 'rgba(0,0,0,0.2)',
+                    marginBottom: '20px',
+                    textAlign: 'left'
+                  }}>
+                    <div style={{ marginBottom: '12px' }}>
+                      <strong>Lead:</strong> {selectedLeadForManual.website}
+                    </div>
+                    <div style={{ marginBottom: '12px' }}>
+                      <strong>Recipients ({selectedManualContacts.length}):</strong>
+                      <div style={{ fontSize: '13px', opacity: 0.7, marginTop: '4px' }}>
+                        {selectedManualContacts.join(', ')}
+                      </div>
+                    </div>
+                    <div>
+                      <strong>Email Preview:</strong>
+                      <pre style={{ fontSize: '12px', opacity: 0.7, whiteSpace: 'pre-wrap', marginTop: '4px' }}>
+                        {manualEmail.substring(0, 200)}...
+                      </pre>
                     </div>
                   </div>
-                )}
-              </div>
+
+                  <button
+                    className="primary-btn"
+                    onClick={() => {
+                      exportToGmail();
+                      // Reset for next lead
+                      setTimeout(() => {
+                        setManualStep(1);
+                        setSelectedLeadForManual(null);
+                        setManualEmail('');
+                        setManualContacts([]);
+                        setSelectedManualContacts([]);
+                      }, 1000);
+                    }}
+                    style={{ width: '100%', padding: '16px', fontSize: '16px' }}
+                  >
+                    📧 Open in Gmail
+                  </button>
+                  <p style={{ marginTop: '8px', opacity: 0.5, fontSize: '12px' }}>
+                    Opens Gmail with contacts in BCC and your generated email
+                  </p>
+
+                  <button
+                    onClick={() => setManualStep(3)}
+                    style={{
+                      marginTop: '16px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'rgba(255,255,255,0.4)',
+                      cursor: 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >← Back to contacts</button>
+                </div>
+              )}
             </div>
           )}
 
