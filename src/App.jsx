@@ -485,7 +485,6 @@ IMPORTANT EXAMPLES:
     await searchEnrichLeads(enrichSearchTerm, enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage);
     await loadActivity();
   };
-  };
 
   // Toggle lead selection
   const toggleLeadSelection = (leadId) => {
