@@ -23,6 +23,7 @@ function App() {
   const [enrichSearchTerm, setEnrichSearchTerm] = useState('');
   const [enrichFilterStatus, setEnrichFilterStatus] = useState('all');
   const [enrichFilterICP, setEnrichFilterICP] = useState('all');
+  const [enrichFilterCountry, setEnrichFilterCountry] = useState('all');
 
   // Manual outreach state
   const [selectedLeadForManual, setSelectedLeadForManual] = useState(null);
@@ -582,7 +583,8 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
       filtered = filtered.filter(l =>
         l.website.toLowerCase().includes(term) ||
         (l.research_notes && l.research_notes.toLowerCase().includes(term)) ||
-        (l.icp_fit && l.icp_fit.toLowerCase().includes(term))
+        (l.icp_fit && l.icp_fit.toLowerCase().includes(term)) ||
+        (l.country && l.country.toLowerCase().includes(term))
       );
     }
 
@@ -592,6 +594,22 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
 
     if (enrichFilterICP !== 'all') {
       filtered = filtered.filter(l => l.icp_fit === enrichFilterICP);
+    }
+
+    if (enrichFilterCountry !== 'all') {
+      if (enrichFilterCountry === 'US/CA') {
+        filtered = filtered.filter(l => 
+          l.country === 'US (assumed)' || l.country === 'US' || l.country === 'Canada'
+        );
+      } else if (enrichFilterCountry === 'International') {
+        filtered = filtered.filter(l => 
+          l.country && l.country !== 'US (assumed)' && l.country !== 'US' && l.country !== 'Canada' && l.country !== 'Unknown'
+        );
+      } else if (enrichFilterCountry === 'Unknown') {
+        filtered = filtered.filter(l => !l.country || l.country === 'Unknown');
+      } else {
+        filtered = filtered.filter(l => l.country === enrichFilterCountry);
+      }
     }
 
     return filtered;
@@ -803,12 +821,36 @@ timbuk2.com</pre>
                   <option value="MEDIUM">🟡 MEDIUM</option>
                   <option value="LOW">🔴 LOW</option>
                 </select>
-                {(enrichSearchTerm || enrichFilterStatus !== 'all' || enrichFilterICP !== 'all') && (
+                <select
+                  value={enrichFilterCountry}
+                  onChange={(e) => setEnrichFilterCountry(e.target.value)}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: 'rgba(255,255,255,0.08)',
+                    color: 'inherit',
+                    fontSize: '14px'
+                  }}
+                >
+                  <option value="all">All Countries</option>
+                  <option value="US/CA">🇺🇸🇨🇦 US & Canada Only</option>
+                  <option value="US (assumed)">🇺🇸 US (assumed)</option>
+                  <option value="Canada">🇨🇦 Canada</option>
+                  <option value="International">🌍 International</option>
+                  <option value="UK">🇬🇧 UK</option>
+                  <option value="Australia">🇦🇺 Australia</option>
+                  <option value="Germany">🇩🇪 Germany</option>
+                  <option value="France">🇫🇷 France</option>
+                  <option value="Unknown">❓ Unknown</option>
+                </select>
+                {(enrichSearchTerm || enrichFilterStatus !== 'all' || enrichFilterICP !== 'all' || enrichFilterCountry !== 'all') && (
                   <button
                     onClick={() => {
                       setEnrichSearchTerm('');
                       setEnrichFilterStatus('all');
                       setEnrichFilterICP('all');
+                      setEnrichFilterCountry('all');
                     }}
                     style={{
                       padding: '10px 14px',
@@ -850,6 +892,34 @@ timbuk2.com</pre>
                       {lead.icp_fit && (
                         <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>
                           {lead.icp_fit}
+                        </span>
+                      )}
+                      {lead.country && (
+                        <span style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          backgroundColor: lead.country === 'US (assumed)' || lead.country === 'US' 
+                            ? 'rgba(59,130,246,0.15)' 
+                            : lead.country === 'Canada' 
+                            ? 'rgba(239,68,68,0.15)' 
+                            : 'rgba(255,255,255,0.1)',
+                          color: lead.country === 'US (assumed)' || lead.country === 'US'
+                            ? '#60a5fa'
+                            : lead.country === 'Canada'
+                            ? '#f87171'
+                            : 'rgba(255,255,255,0.6)'
+                        }}>
+                          {lead.country === 'US (assumed)' ? '🇺🇸 US' : 
+                           lead.country === 'US' ? '🇺🇸 US' :
+                           lead.country === 'Canada' ? '🇨🇦 CA' :
+                           lead.country === 'UK' ? '🇬🇧 UK' :
+                           lead.country === 'Australia' ? '🇦🇺 AU' :
+                           lead.country === 'Germany' ? '🇩🇪 DE' :
+                           lead.country === 'France' ? '🇫🇷 FR' :
+                           lead.country}
                         </span>
                       )}
                     </div>
@@ -1246,6 +1316,7 @@ timbuk2.com</pre>
                       <th>Website</th>
                       <th>Status</th>
                       <th>ICP Fit</th>
+                      <th>Country</th>
                       <th>Source</th>
                       <th>Created</th>
                     </tr>
@@ -1266,6 +1337,7 @@ timbuk2.com</pre>
                             </span>
                           )}
                         </td>
+                        <td>{lead.country || '—'}</td>
                         <td>{lead.source}</td>
                         <td>{new Date(lead.created_at).toLocaleDateString()}</td>
                       </tr>
