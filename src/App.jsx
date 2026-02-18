@@ -108,7 +108,7 @@ function App() {
         .from('daily_stats')
         .select('*')
         .eq('date', today)
-        .single();
+        .maybeSingle();
       setStats(data || {
         leads_enriched: 0,
         contacts_found: 0,
