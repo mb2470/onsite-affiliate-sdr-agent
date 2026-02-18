@@ -86,15 +86,6 @@ function App() {
       setIsLoadingLeads(false);
     }
   };
-      console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
-      setLeads(allLeads);
-    } catch (error) {
-      console.error('💥 Error loading leads:', error);
-      alert('Failed to load leads: ' + error.message);
-    } finally {
-      setIsLoadingLeads(false);
-    }
-  };
 
   // Load agent settings
   const loadAgentSettings = async () => {
