@@ -329,14 +329,9 @@ function App() {
     reader.readAsText(file);
   };
 
-  // Enrich selected leads
+  // Enrich selected leads - with web search and expanded scoring
   const enrichSelectedLeads = async () => {
-    if (selectedLeads.length === 0) {
-      alert('Please select leads to enrich');
-      return;
-    }
-
-    if (!confirm(`Enrich ${selectedLeads.length} lead(s)?`)) return;
+    if (selectedLeads.length === 0) return;
 
     setIsEnriching(true);
 
@@ -345,34 +340,66 @@ function App() {
       if (!lead) continue;
 
       try {
-        console.log(`Enriching ${lead.website}...`);
+        console.log(`🔬 Enriching ${lead.website}...`);
 
         const response = await fetch('/.netlify/functions/claude', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt: `Research ${lead.website} for B2B sales qualification.
+            useWebSearch: true,
+            prompt: `Research the company at ${lead.website} for B2B sales qualification.
 
-Provide in this EXACT format (return ONLY the text, no markdown code fences):
+TASKS:
+1. Visit or search for ${lead.website} to understand what they sell
+2. Search Google Shopping for "${lead.website}" or their brand name to check if they list products there
+3. Determine their headquarters location
 
-Industry: [industry name]
+Provide in this EXACT format (return ONLY plain text, no markdown code fences, no extra commentary):
+
+Industry: [specific industry/vertical]
+Catalog Size: [Small (<100 products) / Medium (100-250) / Large (250+)]
+Sells D2C: [YES/NO - do they sell direct to consumer on their own website?]
+Headquarters: [City, State/Country]
+Google Shopping: [YES/NO/UNKNOWN - are their products listed on Google Shopping?]
 ICP Fit: [HIGH/MEDIUM/LOW]
-Decision Makers: [comma-separated titles]
-Pain Points: [3-4 pain points related to creator/UGC costs]
+Fit Reason: [one sentence explaining why this score]
+Decision Makers: [comma-separated likely titles e.g. CMO, VP Marketing, Head of Ecommerce]
+Pain Points: [2-3 pain points related to creator content, UGC costs, or influencer spend]`,
+            systemPrompt: `You are a B2B sales researcher for Onsite Affiliate. You have web search available — USE IT to look up the company website and check Google Shopping.
 
-Be concise and specific.`,
-            systemPrompt: `You are a B2B sales researcher for Onsite Affiliate. Return ONLY plain text, no markdown.
+Return ONLY plain text in the exact format requested. No markdown, no code fences, no extra explanation.
 
 WHAT ONSITE AFFILIATE DOES:
-We enable D2C brands to copy Amazon's Influencer Onsite Commission program for their OWN website. Brands get UGC video content with NO upfront costs - they only pay performance commissions when creators drive actual sales.
+We help D2C ecommerce brands run performance-based creator/UGC programs on their own website. Brands get video content with no upfront costs — creators earn commissions on sales they drive.
 
-IDEAL CUSTOMER PROFILE:
-- D2C brands in: Fashion, Beauty, Outdoor, Lifestyle, Home, Kitchen, Pet
-- Currently paying $500-2k upfront per UGC post OR dealing with product gifting logistics
-- Need authentic video content at scale
-- Want to eliminate upfront creator costs
+ICP SCORING RULES (follow these EXACTLY):
 
-Research this company and determine ICP fit based on these criteria.`
+HIGH FIT — ALL of these must be true:
+1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — Nike, Coach, Nordstrom all count as D2C because they sell on their own site)
+2. Large product catalog (estimate 250+ products)
+3. Primary category is one of: Fashion/Apparel, Home Goods, Outdoor/Lifestyle, Electronics
+4. Headquartered in US or Canada
+5. BONUS: If found on Google Shopping, this is a strong HIGH signal
+
+MEDIUM FIT — has a D2C website BUT one or more:
+- Catalog under 250 products in a target category
+- Large catalog but in a non-target category (Beauty, Pet, Food, Health, Sports, Toys, etc.)
+- Headquartered outside US/Canada
+
+LOW FIT — any of these:
+- No D2C ecommerce (B2B only, SaaS, services, marketplace-only seller with no own store)
+- Brick-and-mortar only with no online store
+- Non-profit, government, media company, blog
+- No product sales at all
+
+IMPORTANT EXAMPLES:
+- Wayfair.com → HIGH (D2C ecommerce, huge Home Goods catalog, US-based)
+- Nordstrom.com → HIGH (D2C ecommerce, huge Fashion catalog, US-based)
+- Nike.com → HIGH (D2C ecommerce, large Fashion/Apparel catalog, US-based)
+- A small Shopify jewelry store with 30 products → MEDIUM (D2C but small catalog)
+- A UK-based home goods brand → MEDIUM (D2C but non-US/CA)
+- A B2B industrial supplier → LOW (not D2C consumer)
+- A SaaS company → LOW (no product sales)`
           })
         });
 
@@ -380,23 +407,45 @@ Research this company and determine ICP fit based on these criteria.`
 
         const data = await response.json();
         
-        let research = '';
-        if (data.content && Array.isArray(data.content)) {
-          research = data.content[0]?.text || '';
-        } else if (typeof data === 'string') {
-          research = data;
-        } else {
-          research = JSON.stringify(data);
+        // Use the extracted text field (strips out web search blocks)
+        let research = data.text || '';
+        if (!research && data.content && Array.isArray(data.content)) {
+          research = data.content
+            .filter(b => b.type === 'text')
+            .map(b => b.text)
+            .join('\n');
         }
 
-        const icpMatch = research.match(/ICP Fit:\s*(HIGH|MEDIUM|LOW)/i);
-        const icpFit = icpMatch ? icpMatch[1].toUpperCase() : null;
+        // Parse all fields from the response
+        const parseField = (fieldName) => {
+          const match = research.match(new RegExp(`${fieldName}:\\s*(.+)`, 'i'));
+          return match ? match[1].trim() : null;
+        };
 
+        const icpFit = parseField('ICP Fit')?.toUpperCase() || null;
+        const industry = parseField('Industry');
+        const catalogSize = parseField('Catalog Size');
+        const sellsD2C = parseField('Sells D2C');
+        const headquarters = parseField('Headquarters');
+        const googleShopping = parseField('Google Shopping');
+        const fitReason = parseField('Fit Reason');
+        const decisionMakers = parseField('Decision Makers');
+        const painPoints = parseField('Pain Points');
+
+        // Store everything to Supabase
         await supabase
           .from('leads')
           .update({
             research_notes: research,
             icp_fit: icpFit,
+            industry: industry,
+            catalog_size: catalogSize,
+            sells_d2c: sellsD2C,
+            headquarters: headquarters,
+            google_shopping: googleShopping,
+            fit_reason: fitReason,
+            decision_makers: decisionMakers,
+            pain_points: painPoints,
             status: 'enriched',
             enrichment_status: 'completed'
           })
@@ -407,11 +456,11 @@ Research this company and determine ICP fit based on these criteria.`
           .insert({
             activity_type: 'lead_enriched',
             lead_id: leadId,
-            summary: `Enriched ${lead.website} - ICP: ${icpFit || 'Unknown'}`,
+            summary: `Enriched ${lead.website} — ICP: ${icpFit || 'Unknown'} | ${industry || ''} | D2C: ${sellsD2C || '?'} | Catalog: ${catalogSize || '?'} | GShop: ${googleShopping || '?'}`,
             status: 'success'
           });
 
-        console.log(`✅ Successfully enriched ${lead.website}`);
+        console.log(`✅ ${lead.website} → ${icpFit} | ${industry} | D2C:${sellsD2C} | Catalog:${catalogSize} | GShop:${googleShopping}`);
 
       } catch (error) {
         console.error(`❌ Error enriching ${lead.website}:`, error);
@@ -426,7 +475,8 @@ Research this company and determine ICP fit based on these criteria.`
           });
       }
 
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Rate limit between calls
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
     setIsEnriching(false);
@@ -434,7 +484,7 @@ Research this company and determine ICP fit based on these criteria.`
     await loadLeads();
     await searchEnrichLeads(enrichSearchTerm, enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage);
     await loadActivity();
-    alert('✅ Enrichment complete!');
+  };
   };
 
   // Toggle lead selection
@@ -960,7 +1010,16 @@ timbuk2.com</pre>
                     </div>
                     {lead.research_notes && (
                       <div className="lead-research-preview">
-                        {lead.research_notes.substring(0, 100)}...
+                        {lead.industry && <div><strong>{lead.industry}</strong></div>}
+                        {lead.fit_reason && <div>{lead.fit_reason}</div>}
+                        {!lead.fit_reason && lead.research_notes.substring(0, 100) + '...'}
+                        {(lead.catalog_size || lead.google_shopping || lead.sells_d2c) && (
+                          <div style={{ marginTop: '4px', fontSize: '11px', opacity: 0.7 }}>
+                            {lead.sells_d2c && `D2C: ${lead.sells_d2c}`}
+                            {lead.catalog_size && ` · ${lead.catalog_size}`}
+                            {lead.google_shopping && ` · GShop: ${lead.google_shopping}`}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
