@@ -19,6 +19,11 @@ function App() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   
+  // Enrich page search/filter state
+  const [enrichSearchTerm, setEnrichSearchTerm] = useState('');
+  const [enrichFilterStatus, setEnrichFilterStatus] = useState('all');
+  const [enrichFilterICP, setEnrichFilterICP] = useState('all');
+
   // Manual outreach state
   const [selectedLeadForManual, setSelectedLeadForManual] = useState(null);
   const [manualEmail, setManualEmail] = useState('');
@@ -35,8 +40,7 @@ function App() {
     loadActivity();
   }, []);
 
-  // Load ALL leads from Supabase with pagination - FIXED
-// Load ALL leads from Supabase with pagination
+  // Load ALL leads from Supabase with pagination
   const loadLeads = async () => {
     setIsLoadingLeads(true);
     try {
@@ -75,7 +79,7 @@ function App() {
           hasMore = false;
           console.log('🏁 No more data, stopping...');
         }
-      } // End of while loop
+      }
 
       console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
       setLeads(allLeads);
@@ -259,7 +263,7 @@ function App() {
     reader.readAsText(file);
   };
 
-  // Enrich selected leads - WITH CORRECTED PROMPTS
+  // Enrich selected leads
   const enrichSelectedLeads = async () => {
     if (selectedLeads.length === 0) {
       alert('Please select leads to enrich');
@@ -383,7 +387,7 @@ Research this company and determine ICP fit based on these criteria.`
     setSelectedLeads(unenriched);
   };
 
-  // Generate email for manual outreach - WITH CORRECTED PROMPTS
+  // Generate email for manual outreach
   const generateManualEmail = async (lead) => {
     setIsGenerating(true);
     try {
@@ -569,6 +573,30 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
     return filtered;
   };
 
+  // Get filtered leads for enrich page
+  const getEnrichFilteredLeads = () => {
+    let filtered = leads;
+
+    if (enrichSearchTerm) {
+      const term = enrichSearchTerm.toLowerCase();
+      filtered = filtered.filter(l =>
+        l.website.toLowerCase().includes(term) ||
+        (l.research_notes && l.research_notes.toLowerCase().includes(term)) ||
+        (l.icp_fit && l.icp_fit.toLowerCase().includes(term))
+      );
+    }
+
+    if (enrichFilterStatus !== 'all') {
+      filtered = filtered.filter(l => l.status === enrichFilterStatus);
+    }
+
+    if (enrichFilterICP !== 'all') {
+      filtered = filtered.filter(l => l.icp_fit === enrichFilterICP);
+    }
+
+    return filtered;
+  };
+
   // Get status count
   const getStatusCount = (status) => leads.filter(l => l.status === status).length;
 
@@ -717,8 +745,91 @@ timbuk2.com</pre>
                 </div>
               </div>
 
+              {/* Search and Filter Bar */}
+              <div className="enrich-filters" style={{
+                display: 'flex',
+                gap: '12px',
+                marginBottom: '20px',
+                alignItems: 'center',
+                flexWrap: 'wrap'
+              }}>
+                <input
+                  type="text"
+                  placeholder="🔍 Search by website, notes, or ICP..."
+                  value={enrichSearchTerm}
+                  onChange={(e) => setEnrichSearchTerm(e.target.value)}
+                  style={{
+                    flex: '1',
+                    minWidth: '250px',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: 'rgba(255,255,255,0.05)',
+                    color: 'inherit',
+                    fontSize: '14px'
+                  }}
+                />
+                <select
+                  value={enrichFilterStatus}
+                  onChange={(e) => setEnrichFilterStatus(e.target.value)}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: 'rgba(255,255,255,0.08)',
+                    color: 'inherit',
+                    fontSize: '14px'
+                  }}
+                >
+                  <option value="all">All Status ({leads.length})</option>
+                  <option value="new">New ({leads.filter(l => l.status === 'new').length})</option>
+                  <option value="enriched">Enriched ({leads.filter(l => l.status === 'enriched').length})</option>
+                  <option value="contacted">Contacted ({leads.filter(l => l.status === 'contacted').length})</option>
+                </select>
+                <select
+                  value={enrichFilterICP}
+                  onChange={(e) => setEnrichFilterICP(e.target.value)}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: 'rgba(255,255,255,0.08)',
+                    color: 'inherit',
+                    fontSize: '14px'
+                  }}
+                >
+                  <option value="all">All ICP</option>
+                  <option value="HIGH">🟢 HIGH</option>
+                  <option value="MEDIUM">🟡 MEDIUM</option>
+                  <option value="LOW">🔴 LOW</option>
+                </select>
+                {(enrichSearchTerm || enrichFilterStatus !== 'all' || enrichFilterICP !== 'all') && (
+                  <button
+                    onClick={() => {
+                      setEnrichSearchTerm('');
+                      setEnrichFilterStatus('all');
+                      setEnrichFilterICP('all');
+                    }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: 'rgba(255,80,80,0.15)',
+                      color: '#ff6b6b',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    ✕ Clear
+                  </button>
+                )}
+                <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
+                  Showing {getEnrichFilteredLeads().length} of {leads.length} leads
+                </span>
+              </div>
+
               <div className="leads-grid">
-                {leads.map(lead => (
+                {getEnrichFilteredLeads().map(lead => (
                   <div
                     key={lead.id}
                     className={`lead-enrich-card ${selectedLeads.includes(lead.id) ? 'selected' : ''}`}
