@@ -620,6 +620,16 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
   // Get status count
   const getStatusCount = (status) => leads.filter(l => l.status === status).length;
 
+  // Computed values for enrich page (React will re-compute when dependencies change)
+  const enrichFilteredLeads = getEnrichFilteredLeads();
+  const enrichTotalPages = Math.ceil(enrichFilteredLeads.length / ENRICH_PAGE_SIZE);
+  const enrichPaginatedLeads = enrichFilteredLeads.slice(
+    enrichPage * ENRICH_PAGE_SIZE,
+    (enrichPage + 1) * ENRICH_PAGE_SIZE
+  );
+  const enrichStartItem = enrichFilteredLeads.length > 0 ? enrichPage * ENRICH_PAGE_SIZE + 1 : 0;
+  const enrichEndItem = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, enrichFilteredLeads.length);
+
   return (
     <div className="app">
       <header className="header">
@@ -747,17 +757,7 @@ timbuk2.com</pre>
             </div>
           )}
 
-          {activeView === 'enrich' && (() => {
-            const filteredLeads = getEnrichFilteredLeads();
-            const totalPages = Math.ceil(filteredLeads.length / ENRICH_PAGE_SIZE);
-            const paginatedLeads = filteredLeads.slice(
-              enrichPage * ENRICH_PAGE_SIZE, 
-              (enrichPage + 1) * ENRICH_PAGE_SIZE
-            );
-            const startItem = enrichPage * ENRICH_PAGE_SIZE + 1;
-            const endItem = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, filteredLeads.length);
-
-            return (
+          {activeView === 'enrich' && (
             <div className="view-container">
               <div className="view-header">
                 <h2>🔬 Enrich Leads with AI</h2>
@@ -879,12 +879,12 @@ timbuk2.com</pre>
                   </button>
                 )}
                 <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
-                  Showing {filteredLeads.length > 0 ? `${startItem}–${endItem}` : '0'} of {filteredLeads.length} leads
+                  Showing {enrichStartItem}–{enrichEndItem} of {enrichFilteredLeads.length} leads
                 </span>
               </div>
 
               <div className="leads-grid">
-                {paginatedLeads.map(lead => (
+                {enrichPaginatedLeads.map(lead => (
                   <div
                     key={lead.id}
                     className={`lead-enrich-card ${selectedLeads.includes(lead.id) ? 'selected' : ''}`}
@@ -946,7 +946,7 @@ timbuk2.com</pre>
               </div>
 
               {/* Pagination */}
-              {totalPages > 1 && (
+              {enrichTotalPages > 1 && (
                 <div style={{
                   display: 'flex',
                   justifyContent: 'center',
@@ -986,33 +986,33 @@ timbuk2.com</pre>
                     ⟨ Prev
                   </button>
                   <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', fontWeight: '600' }}>
-                    Page {enrichPage + 1} of {totalPages}
+                    Page {enrichPage + 1} of {enrichTotalPages}
                   </span>
                   <button
-                    onClick={() => setEnrichPage(p => Math.min(totalPages - 1, p + 1))}
-                    disabled={enrichPage >= totalPages - 1}
+                    onClick={() => setEnrichPage(p => Math.min(enrichTotalPages - 1, p + 1))}
+                    disabled={enrichPage >= enrichTotalPages - 1}
                     style={{
                       padding: '8px 14px',
                       borderRadius: '6px',
                       border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
-                      color: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
-                      cursor: enrichPage >= totalPages - 1 ? 'default' : 'pointer',
+                      backgroundColor: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
+                      color: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
+                      cursor: enrichPage >= enrichTotalPages - 1 ? 'default' : 'pointer',
                       fontSize: '13px'
                     }}
                   >
                     Next ⟩
                   </button>
                   <button
-                    onClick={() => setEnrichPage(totalPages - 1)}
-                    disabled={enrichPage >= totalPages - 1}
+                    onClick={() => setEnrichPage(enrichTotalPages - 1)}
+                    disabled={enrichPage >= enrichTotalPages - 1}
                     style={{
                       padding: '8px 14px',
                       borderRadius: '6px',
                       border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
-                      color: enrichPage >= totalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
-                      cursor: enrichPage >= totalPages - 1 ? 'default' : 'pointer',
+                      backgroundColor: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
+                      color: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
+                      cursor: enrichPage >= enrichTotalPages - 1 ? 'default' : 'pointer',
                       fontSize: '13px'
                     }}
                   >
@@ -1021,8 +1021,7 @@ timbuk2.com</pre>
                 </div>
               )}
             </div>
-            );
-          })()}
+          )}
 
           {activeView === 'manual' && (
             <div className="view-container">
