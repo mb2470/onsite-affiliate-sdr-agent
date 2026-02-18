@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import { createClient } from '@supabase/supabase-js';
 import AgentMonitor from './AgentMonitor'; 
@@ -7,6 +7,7 @@ import { supabase } from './supabaseClient';
 function App() {
   const [activeView, setActiveView] = useState('add');
   const [leads, setLeads] = useState([]);
+  const [totalLeadCount, setTotalLeadCount] = useState(0);
   const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [newWebsite, setNewWebsite] = useState('');
@@ -19,13 +20,17 @@ function App() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Enrich page search/filter state
+  // Enrich page - server-side search/filter state
   const [enrichSearchTerm, setEnrichSearchTerm] = useState('');
   const [enrichFilterStatus, setEnrichFilterStatus] = useState('all');
   const [enrichFilterICP, setEnrichFilterICP] = useState('all');
   const [enrichFilterCountry, setEnrichFilterCountry] = useState('all');
   const [enrichPage, setEnrichPage] = useState(0);
+  const [enrichLeads, setEnrichLeads] = useState([]);
+  const [enrichTotalCount, setEnrichTotalCount] = useState(0);
+  const [isLoadingEnrich, setIsLoadingEnrich] = useState(false);
   const ENRICH_PAGE_SIZE = 100;
+  const searchTimerRef = useRef(null);
 
   // Manual outreach state
   const [selectedLeadForManual, setSelectedLeadForManual] = useState(null);
@@ -43,49 +48,26 @@ function App() {
     loadActivity();
   }, []);
 
-  // Load ALL leads from Supabase with pagination
+  // Load lead count (lightweight - no full data download)
   const loadLeads = async () => {
     setIsLoadingLeads(true);
     try {
-      let allLeads = [];
-      let from = 0;
-      const pageSize = 500; 
-      let hasMore = true;
+      const { count, error } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true });
 
-      console.log('🔄 Starting to load all leads...');
-
-      while (hasMore) {
-        console.log(`Fetching leads ${from} to ${from + pageSize - 1}...`);
-        
-        const { data, error } = await supabase
-          .from('leads')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .range(from, from + pageSize - 1);
-
-        if (error) {
-          console.error('❌ Error loading page:', error);
-          throw error;
-        }
-
-        if (data && data.length > 0) {
-          allLeads = [...allLeads, ...data];
-          console.log(`✅ Loaded ${allLeads.length} leads so far...`);
-          
-          if (data.length < pageSize) {
-            hasMore = false;
-            console.log('📦 Got less than full page, stopping...');
-          } else {
-            from += pageSize;
-          }
-        } else {
-          hasMore = false;
-          console.log('🏁 No more data, stopping...');
-        }
-      }
-
-      console.log(`🎉 FINISHED! Total loaded: ${allLeads.length} leads`);
-      setLeads(allLeads);
+      if (error) throw error;
+      setTotalLeadCount(count || 0);
+      
+      // Also load a small set for other views that need leads (manual outreach dropdown, etc.)
+      const { data } = await supabase
+        .from('leads')
+        .select('*')
+        .in('status', ['enriched', 'contacted'])
+        .order('created_at', { ascending: false })
+        .limit(500);
+      
+      setLeads(data || []);
     } catch (error) {
       console.error('💥 Error loading leads:', error);
       alert('Failed to load leads: ' + error.message);
@@ -93,6 +75,87 @@ function App() {
       setIsLoadingLeads(false);
     }
   };
+
+  // Server-side search for Enrich page
+  const searchEnrichLeads = async (search, status, icp, country, page) => {
+    setIsLoadingEnrich(true);
+    try {
+      let query = supabase
+        .from('leads')
+        .select('*', { count: 'exact' });
+
+      // Text search
+      if (search && search.trim()) {
+        query = query.or(
+          `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%`
+        );
+      }
+
+      // Status filter
+      if (status !== 'all') {
+        query = query.eq('status', status);
+      }
+
+      // ICP filter
+      if (icp !== 'all') {
+        query = query.eq('icp_fit', icp);
+      }
+
+      // Country filter
+      if (country !== 'all') {
+        if (country === 'US/CA') {
+          query = query.in('country', ['US (assumed)', 'US', 'Canada']);
+        } else if (country === 'International') {
+          query = query.not('country', 'in', '("US (assumed)","US","Canada","Unknown")');
+          query = query.not('country', 'is', null);
+        } else if (country === 'Unknown') {
+          query = query.or('country.is.null,country.eq.Unknown');
+        } else {
+          query = query.eq('country', country);
+        }
+      }
+
+      // Pagination
+      const from = page * ENRICH_PAGE_SIZE;
+      const to = from + ENRICH_PAGE_SIZE - 1;
+
+      query = query
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      const { data, error, count } = await query;
+
+      if (error) throw error;
+
+      setEnrichLeads(data || []);
+      setEnrichTotalCount(count || 0);
+    } catch (error) {
+      console.error('❌ Error searching leads:', error);
+    } finally {
+      setIsLoadingEnrich(false);
+    }
+  };
+
+  // Debounced search - waits 400ms after typing stops
+  const debouncedEnrichSearch = (search, status, icp, country) => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    searchTimerRef.current = setTimeout(() => {
+      searchEnrichLeads(search, status, icp, country, 0);
+      setEnrichPage(0);
+    }, 400);
+  };
+
+  // Load enrich leads when filters change (non-search filters are immediate)
+  useEffect(() => {
+    searchEnrichLeads(enrichSearchTerm, enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage);
+  }, [enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage]);
+
+  // Load enrich leads on first mount
+  useEffect(() => {
+    searchEnrichLeads('', 'all', 'all', 'all', 0);
+  }, []);
 
   // Load agent settings
   const loadAgentSettings = async () => {
@@ -278,7 +341,7 @@ function App() {
     setIsEnriching(true);
 
     for (const leadId of selectedLeads) {
-      const lead = leads.find(l => l.id === leadId);
+      const lead = enrichLeads.find(l => l.id === leadId) || leads.find(l => l.id === leadId);
       if (!lead) continue;
 
       try {
@@ -369,6 +432,7 @@ Research this company and determine ICP fit based on these criteria.`
     setIsEnriching(false);
     setSelectedLeads([]);
     await loadLeads();
+    await searchEnrichLeads(enrichSearchTerm, enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage);
     await loadActivity();
     alert('✅ Enrichment complete!');
   };
@@ -382,9 +446,9 @@ Research this company and determine ICP fit based on these criteria.`
     );
   };
 
-  // Select all unenriched leads
+  // Select all unenriched leads on current page
   const selectAllUnenriched = () => {
-    const unenriched = leads
+    const unenriched = enrichLeads
       .filter(l => l.status === 'new' || !l.research_notes)
       .map(l => l.id);
     setSelectedLeads(unenriched);
@@ -576,59 +640,13 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
     return filtered;
   };
 
-  // Get filtered leads for enrich page
-  const getEnrichFilteredLeads = () => {
-    let filtered = leads;
-
-    if (enrichSearchTerm) {
-      const term = enrichSearchTerm.toLowerCase();
-      filtered = filtered.filter(l =>
-        l.website.toLowerCase().includes(term) ||
-        (l.research_notes && l.research_notes.toLowerCase().includes(term)) ||
-        (l.icp_fit && l.icp_fit.toLowerCase().includes(term)) ||
-        (l.country && l.country.toLowerCase().includes(term))
-      );
-    }
-
-    if (enrichFilterStatus !== 'all') {
-      filtered = filtered.filter(l => l.status === enrichFilterStatus);
-    }
-
-    if (enrichFilterICP !== 'all') {
-      filtered = filtered.filter(l => l.icp_fit === enrichFilterICP);
-    }
-
-    if (enrichFilterCountry !== 'all') {
-      if (enrichFilterCountry === 'US/CA') {
-        filtered = filtered.filter(l => 
-          l.country === 'US (assumed)' || l.country === 'US' || l.country === 'Canada'
-        );
-      } else if (enrichFilterCountry === 'International') {
-        filtered = filtered.filter(l => 
-          l.country && l.country !== 'US (assumed)' && l.country !== 'US' && l.country !== 'Canada' && l.country !== 'Unknown'
-        );
-      } else if (enrichFilterCountry === 'Unknown') {
-        filtered = filtered.filter(l => !l.country || l.country === 'Unknown');
-      } else {
-        filtered = filtered.filter(l => l.country === enrichFilterCountry);
-      }
-    }
-
-    return filtered;
-  };
-
   // Get status count
   const getStatusCount = (status) => leads.filter(l => l.status === status).length;
 
-  // Computed values for enrich page (React will re-compute when dependencies change)
-  const enrichFilteredLeads = getEnrichFilteredLeads();
-  const enrichTotalPages = Math.ceil(enrichFilteredLeads.length / ENRICH_PAGE_SIZE);
-  const enrichPaginatedLeads = enrichFilteredLeads.slice(
-    enrichPage * ENRICH_PAGE_SIZE,
-    (enrichPage + 1) * ENRICH_PAGE_SIZE
-  );
-  const enrichStartItem = enrichFilteredLeads.length > 0 ? enrichPage * ENRICH_PAGE_SIZE + 1 : 0;
-  const enrichEndItem = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, enrichFilteredLeads.length);
+  // Computed pagination values for enrich page
+  const enrichTotalPages = Math.ceil(enrichTotalCount / ENRICH_PAGE_SIZE);
+  const enrichStartItem = enrichTotalCount > 0 ? enrichPage * ENRICH_PAGE_SIZE + 1 : 0;
+  const enrichEndItem = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, enrichTotalCount);
 
   return (
     <div className="app">
@@ -639,7 +657,7 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
         </div>
         <div className="header-stats">
           <div className="stat">
-            <span className="stat-value">{leads.length}</span>
+            <span className="stat-value">{totalLeadCount}</span>
             <span className="stat-label">Total Leads</span>
           </div>
           <div className="stat">
@@ -763,7 +781,7 @@ timbuk2.com</pre>
                 <h2>🔬 Enrich Leads with AI</h2>
                 <div className="view-actions">
                   <button onClick={selectAllUnenriched} className="secondary-btn">
-                    Select All Unenriched ({leads.filter(l => l.status === 'new').length})
+                    Select All on Page ({enrichLeads.filter(l => l.status === 'new').length})
                   </button>
                   <button
                     onClick={enrichSelectedLeads}
@@ -785,9 +803,12 @@ timbuk2.com</pre>
               }}>
                 <input
                   type="text"
-                  placeholder="🔍 Search by website, notes, or ICP..."
+                  placeholder="🔍 Search by website or notes..."
                   value={enrichSearchTerm}
-                  onChange={(e) => { setEnrichSearchTerm(e.target.value); setEnrichPage(0); }}
+                  onChange={(e) => { 
+                    setEnrichSearchTerm(e.target.value); 
+                    debouncedEnrichSearch(e.target.value, enrichFilterStatus, enrichFilterICP, enrichFilterCountry);
+                  }}
                   style={{
                     flex: '1',
                     minWidth: '250px',
@@ -811,10 +832,10 @@ timbuk2.com</pre>
                     fontSize: '14px'
                   }}
                 >
-                  <option value="all">All Status ({leads.length})</option>
-                  <option value="new">New ({leads.filter(l => l.status === 'new').length})</option>
-                  <option value="enriched">Enriched ({leads.filter(l => l.status === 'enriched').length})</option>
-                  <option value="contacted">Contacted ({leads.filter(l => l.status === 'contacted').length})</option>
+                  <option value="all">All Status ({totalLeadCount})</option>
+                  <option value="new">New</option>
+                  <option value="enriched">Enriched</option>
+                  <option value="contacted">Contacted</option>
                 </select>
                 <select
                   value={enrichFilterICP}
@@ -864,6 +885,7 @@ timbuk2.com</pre>
                       setEnrichFilterICP('all');
                       setEnrichFilterCountry('all');
                       setEnrichPage(0);
+                      searchEnrichLeads('', 'all', 'all', 'all', 0);
                     }}
                     style={{
                       padding: '10px 14px',
@@ -879,12 +901,12 @@ timbuk2.com</pre>
                   </button>
                 )}
                 <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
-                  Showing {enrichStartItem}–{enrichEndItem} of {enrichFilteredLeads.length} leads
+                  {isLoadingEnrich ? '⏳ Loading...' : `Showing ${enrichStartItem}–${enrichEndItem} of ${enrichTotalCount} leads`}
                 </span>
               </div>
 
               <div className="leads-grid">
-                {enrichPaginatedLeads.map(lead => (
+                {enrichLeads.map(lead => (
                   <div
                     key={lead.id}
                     className={`lead-enrich-card ${selectedLeads.includes(lead.id) ? 'selected' : ''}`}
