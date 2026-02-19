@@ -12,6 +12,8 @@ function App() {
   // Global state
   const [activeView, setActiveView] = useState('add');
   const [totalLeadCount, setTotalLeadCount] = useState(0);
+  const [icpCounts, setIcpCounts] = useState({ high: 0, medium: 0, low: 0 });
+  const [emailsSent, setEmailsSent] = useState(0);
   const [agentSettings, setAgentSettings] = useState(null);
   const [stats, setStats] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
@@ -74,6 +76,20 @@ function App() {
     try {
       const count = await getTotalLeadCount();
       setTotalLeadCount(count);
+    } catch (e) { console.error(e); }
+
+    // ICP fit counts
+    try {
+      const { count: high } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'HIGH');
+      const { count: medium } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'MEDIUM');
+      const { count: low } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'LOW');
+      setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
+    } catch (e) { console.error(e); }
+
+    // Emails sent (contacted leads)
+    try {
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'contacted');
+      setEmailsSent(count || 0);
     } catch (e) { console.error(e); }
 
     try {
@@ -407,11 +423,19 @@ function App() {
             <span className="stat-label">Total Leads</span>
           </div>
           <div className="stat">
-            <span className="stat-value">{stats?.leads_enriched || 0}</span>
-            <span className="stat-label">Enriched Today</span>
+            <span className="stat-value" style={{ color: '#22c55e' }}>{icpCounts.high}</span>
+            <span className="stat-label">HIGH Fit</span>
           </div>
           <div className="stat">
-            <span className="stat-value">{stats?.emails_sent || 0}</span>
+            <span className="stat-value" style={{ color: '#eab308' }}>{icpCounts.medium}</span>
+            <span className="stat-label">MEDIUM Fit</span>
+          </div>
+          <div className="stat">
+            <span className="stat-value" style={{ color: '#ef4444' }}>{icpCounts.low}</span>
+            <span className="stat-label">LOW Fit</span>
+          </div>
+          <div className="stat">
+            <span className="stat-value" style={{ color: '#8b5cf6' }}>{emailsSent}</span>
             <span className="stat-label">Emails Sent</span>
           </div>
         </div>
