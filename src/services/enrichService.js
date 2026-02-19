@@ -97,16 +97,24 @@ export const enrichLead = async (lead) => {
     headquarters: parseField(research, 'Headquarters'),
     google_shopping: parseField(research, 'Google Shopping'),
     fit_reason: parseField(research, 'Fit Reason'),
-    decision_makers: parseField(research, 'Decision Makers'),
-    pain_points: parseField(research, 'Pain Points'),
+    decision_makers: parseField(research, 'Decision Makers')?.replace(/[{}]/g, '') || null,
+    pain_points: parseField(research, 'Pain Points')?.replace(/[{}]/g, '') || null,
   };
 
-  // Save to Supabase
+  // Save to Supabase — use individual set to avoid array parsing issues
   const { error } = await supabase
     .from('leads')
     .update({
       research_notes: research,
-      ...parsed,
+      icp_fit: parsed.icp_fit,
+      industry: parsed.industry,
+      catalog_size: parsed.catalog_size,
+      sells_d2c: parsed.sells_d2c,
+      headquarters: parsed.headquarters,
+      google_shopping: parsed.google_shopping,
+      fit_reason: parsed.fit_reason,
+      decision_makers: parsed.decision_makers,
+      pain_points: parsed.pain_points,
       status: 'enriched'
     })
     .eq('id', lead.id);
