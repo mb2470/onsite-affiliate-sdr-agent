@@ -45,14 +45,10 @@ function scoreICP(domain) {
 
   if (!domain.name) return 'LOW'; // Not found
 
-  // Must be US/CA for HIGH
-  if (isUSCA && score >= 2) return 'HIGH';
-  if (isUSCA && score === 1) return 'MEDIUM';
-  if (isUSCA && score === 0) return 'LOW';
-  
-  // Non-US/CA: max is MEDIUM
-  if (!isUSCA && score >= 2) return 'MEDIUM';
-  if (!isUSCA && score === 1) return 'MEDIUM';
+  // Must be US/CA AND 3/3 for HIGH
+  if (isUSCA && score === 3) return 'HIGH';
+  if (score >= 2) return 'MEDIUM';
+  if (score === 1) return 'LOW';
   return 'LOW';
 }
 
@@ -185,12 +181,7 @@ exports.handler = async (event) => {
 
           if (!d) {
             notFound++;
-            await supabase.from('leads').update({
-              status: 'enriched',
-              icp_fit: 'LOW',
-              fit_reason: 'Not found in StoreLeads — may not be ecommerce',
-              sells_d2c: 'UNKNOWN',
-            }).eq('id', lead.id);
+            // Leave as 'new' — these need Claude enrichment or manual review
             continue;
           }
 
