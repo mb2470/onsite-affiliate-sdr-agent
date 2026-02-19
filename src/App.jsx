@@ -206,6 +206,10 @@ function App() {
         query = query.eq('status', 'contacted');
       } else if (cf === 'not_contacted') {
         query = query.eq('status', 'enriched');
+      } else if (cf === 'has_contacts') {
+        query = query.eq('has_contacts', true);
+      } else if (cf === 'high_with_contacts') {
+        query = query.eq('has_contacts', true).eq('icp_fit', 'HIGH');
       }
 
       const from = p * MANUAL_PAGE_SIZE;
@@ -654,6 +658,8 @@ function App() {
                       <option value="all">All Enriched</option>
                       <option value="not_contacted">Not Contacted</option>
                       <option value="contacted">Already Contacted</option>
+                      <option value="has_contacts">Has Contacts</option>
+                      <option value="high_with_contacts">HIGH + Has Contacts</option>
                     </select>
                     <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
                       {isLoadingManual ? '⏳' : `${manualTotalCount} leads`}
