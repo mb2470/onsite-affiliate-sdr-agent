@@ -22,10 +22,9 @@ exports.handler = async (event) => {
       headers,
       body: JSON.stringify({
         status: response.status,
-        hasContacts: !!(data.domain && data.domain.contacts),
-        contactCount: data.domain?.contacts?.length || 0,
-        sampleContacts: (data.domain?.contacts || []).slice(0, 5),
-        keys: Object.keys(data.domain || {}),
+        hasContactInfo: !!(data.domain && data.domain.contact_info),
+        contactInfoCount: data.domain?.contact_info?.length || 0,
+        sampleContactInfo: (data.domain?.contact_info || []).slice(0, 10),
       }),
     };
   } catch (error) {
