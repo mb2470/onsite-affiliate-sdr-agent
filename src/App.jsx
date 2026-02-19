@@ -1,747 +1,398 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './App.css';
-import { createClient } from '@supabase/supabase-js';
-import AgentMonitor from './AgentMonitor'; 
+import AgentMonitor from './AgentMonitor';
 import { supabase } from './supabaseClient';
+import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
+import { enrichLeads } from './services/enrichService';
+import { generateEmail } from './services/emailService';
+import { findContacts } from './services/contactService';
+import { exportToGmail } from './services/exportService';
 
 function App() {
+  // Global state
   const [activeView, setActiveView] = useState('add');
-  const [leads, setLeads] = useState([]);
   const [totalLeadCount, setTotalLeadCount] = useState(0);
-  const [isLoadingLeads, setIsLoadingLeads] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [newWebsite, setNewWebsite] = useState('');
-  const [bulkWebsites, setBulkWebsites] = useState('');
-  const [selectedLeads, setSelectedLeads] = useState([]);
-  const [isEnriching, setIsEnriching] = useState(false);
   const [agentSettings, setAgentSettings] = useState(null);
   const [stats, setStats] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [searchTerm, setSearchTerm] = useState('');
-  
-  // Enrich page - server-side search/filter state
-  const [enrichSearchTerm, setEnrichSearchTerm] = useState('');
-  const [enrichFilterStatus, setEnrichFilterStatus] = useState('all');
-  const [enrichFilterICP, setEnrichFilterICP] = useState('all');
-  const [enrichFilterCountry, setEnrichFilterCountry] = useState('all');
-  const [enrichPage, setEnrichPage] = useState(0);
-  const [enrichLeads, setEnrichLeads] = useState([]);
+
+  // Add leads state
+  const [newWebsite, setNewWebsite] = useState('');
+  const [bulkWebsites, setBulkWebsites] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Enrich page state
+  const [enrichLeadsList, setEnrichLeadsList] = useState([]);
   const [enrichTotalCount, setEnrichTotalCount] = useState(0);
   const [isLoadingEnrich, setIsLoadingEnrich] = useState(false);
+  const [enrichSearchTerm, setEnrichSearchTerm] = useState('');
+  const [enrichFilterCountry, setEnrichFilterCountry] = useState('all');
+  const [enrichPage, setEnrichPage] = useState(0);
+  const [selectedLeads, setSelectedLeads] = useState([]);
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState(null);
+  const [enrichResult, setEnrichResult] = useState(null);
   const ENRICH_PAGE_SIZE = 100;
-  const searchTimerRef = useRef(null);
+  const enrichTimerRef = useRef(null);
 
   // Manual outreach state
+  const [manualStep, setManualStep] = useState(1);
+  const [manualLeads, setManualLeads] = useState([]);
+  const [manualTotalCount, setManualTotalCount] = useState(0);
+  const [isLoadingManual, setIsLoadingManual] = useState(false);
+  const [manualSearchTerm, setManualSearchTerm] = useState('');
+  const [manualFilterContacted, setManualFilterContacted] = useState('all');
+  const [manualPage, setManualPage] = useState(0);
   const [selectedLeadForManual, setSelectedLeadForManual] = useState(null);
   const [manualEmail, setManualEmail] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [manualContacts, setManualContacts] = useState([]);
-  const [isLoadingManualContacts, setIsLoadingManualContacts] = useState(false);
+  const [isLoadingContacts, setIsLoadingContacts] = useState(false);
   const [selectedManualContacts, setSelectedManualContacts] = useState([]);
-  const [manualStep, setManualStep] = useState(1);
-  const [manualSearchTerm, setManualSearchTerm] = useState('');
-  const [manualLeads, setManualLeads] = useState([]);
-  const [manualTotalCount, setManualTotalCount] = useState(0);
-  const [isLoadingManualLeads, setIsLoadingManualLeads] = useState(false);
-  const [manualPage, setManualPage] = useState(0);
   const MANUAL_PAGE_SIZE = 50;
-  const manualSearchTimerRef = useRef(null);
+  const manualTimerRef = useRef(null);
 
-  // Load data on mount
+  // Pipeline state
+  const [pipelineLeads, setPipelineLeads] = useState([]);
+  const [pipelineTotalCount, setPipelineTotalCount] = useState(0);
+  const [pipelineSearch, setPipelineSearch] = useState('');
+  const [pipelineFilter, setPipelineFilter] = useState('all');
+  const [pipelinePage, setPipelinePage] = useState(0);
+  const PIPELINE_PAGE_SIZE = 100;
+
+  // ═══════════════════════════════════════════
+  // DATA LOADING
+  // ═══════════════════════════════════════════
+
   useEffect(() => {
-    loadLeads();
-    loadAgentSettings();
-    loadStats();
-    loadActivity();
+    loadGlobalData();
+    loadEnrichLeads();
+    loadManualLeads();
   }, []);
 
-  // Load lead count (lightweight - no full data download)
-  const loadLeads = async () => {
-    setIsLoadingLeads(true);
+  const loadGlobalData = async () => {
     try {
-      const { count, error } = await supabase
-        .from('leads')
-        .select('*', { count: 'exact', head: true });
+      const count = await getTotalLeadCount();
+      setTotalLeadCount(count);
+    } catch (e) { console.error(e); }
 
-      if (error) throw error;
-      setTotalLeadCount(count || 0);
-      
-      // Also load a small set for other views that need leads (manual outreach dropdown, etc.)
-      const { data } = await supabase
-        .from('leads')
-        .select('*')
-        .in('status', ['enriched', 'contacted'])
-        .order('created_at', { ascending: false })
-        .limit(500);
-      
-      setLeads(data || []);
-    } catch (error) {
-      console.error('💥 Error loading leads:', error);
-      alert('Failed to load leads: ' + error.message);
-    } finally {
-      setIsLoadingLeads(false);
-    }
+    try {
+      const { data } = await supabase.from('agent_settings').select('*').single();
+      setAgentSettings(data);
+    } catch (e) { console.error(e); }
+
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const { data } = await supabase.from('daily_stats').select('*').eq('date', today).maybeSingle();
+      setStats(data || { leads_enriched: 0, contacts_found: 0, emails_drafted: 0, emails_sent: 0 });
+    } catch (e) { console.error(e); }
+
+    try {
+      const { data } = await supabase.from('activity_log').select('*, leads(website)').order('created_at', { ascending: false }).limit(50);
+      setActivityLog(data || []);
+    } catch (e) { console.error(e); }
   };
 
-  // Server-side search for Enrich page
-  const searchEnrichLeads = async (search, status, icp, country, page) => {
+  // ═══════════════════════════════════════════
+  // ENRICH PAGE - Server-side search
+  // ═══════════════════════════════════════════
+
+  const loadEnrichLeads = async (search, country, page) => {
     setIsLoadingEnrich(true);
     try {
-      let query = supabase
-        .from('leads')
-        .select('*', { count: 'exact' });
-
-      // Text search
-      if (search && search.trim()) {
-        query = query.or(
-          `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%`
-        );
-      }
-
-      // Status filter
-      if (status !== 'all') {
-        query = query.eq('status', status);
-      }
-
-      // ICP filter
-      if (icp !== 'all') {
-        query = query.eq('icp_fit', icp);
-      }
-
-      // Country filter
-      if (country !== 'all') {
-        if (country === 'US/CA') {
-          query = query.in('country', ['US (assumed)', 'US', 'Canada']);
-        } else if (country === 'International') {
-          query = query.not('country', 'in', '("US (assumed)","US","Canada","Unknown")');
-          query = query.not('country', 'is', null);
-        } else if (country === 'Unknown') {
-          query = query.or('country.is.null,country.eq.Unknown');
-        } else {
-          query = query.eq('country', country);
-        }
-      }
-
-      // Pagination
-      const from = page * ENRICH_PAGE_SIZE;
-      const to = from + ENRICH_PAGE_SIZE - 1;
-
-      query = query
-        .order('created_at', { ascending: false })
-        .range(from, to);
-
-      const { data, error, count } = await query;
-
-      if (error) throw error;
-
-      setEnrichLeads(data || []);
-      setEnrichTotalCount(count || 0);
-    } catch (error) {
-      console.error('❌ Error searching leads:', error);
-    } finally {
-      setIsLoadingEnrich(false);
-    }
+      const { leads, totalCount } = await searchLeads({
+        search: search ?? enrichSearchTerm,
+        country: country ?? enrichFilterCountry,
+        unenrichedOnly: true,
+        page: page ?? enrichPage,
+        pageSize: ENRICH_PAGE_SIZE
+      });
+      setEnrichLeadsList(leads);
+      setEnrichTotalCount(totalCount);
+    } catch (e) { console.error(e); }
+    setIsLoadingEnrich(false);
   };
 
-  // Debounced search - waits 400ms after typing stops
-  const debouncedEnrichSearch = (search, status, icp, country) => {
-    if (searchTimerRef.current) {
-      clearTimeout(searchTimerRef.current);
-    }
-    searchTimerRef.current = setTimeout(() => {
-      searchEnrichLeads(search, status, icp, country, 0);
+  const debouncedEnrichSearch = (search) => {
+    if (enrichTimerRef.current) clearTimeout(enrichTimerRef.current);
+    enrichTimerRef.current = setTimeout(() => {
       setEnrichPage(0);
+      loadEnrichLeads(search, enrichFilterCountry, 0);
     }, 400);
   };
 
-  // Load enrich leads when filters change (non-search filters are immediate)
-  useEffect(() => {
-    searchEnrichLeads(enrichSearchTerm, enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage);
-  }, [enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage]);
+  useEffect(() => { loadEnrichLeads(); }, [enrichFilterCountry, enrichPage]);
 
-  // Load enrich leads on first mount
-  useEffect(() => {
-    searchEnrichLeads('', 'all', 'all', 'all', 0);
-  }, []);
+  // ═══════════════════════════════════════════
+  // ENRICHMENT
+  // ═══════════════════════════════════════════
 
-  // Server-side search for Manual Outreach page (enriched leads only)
-  const searchManualLeads = async (search, page) => {
-    setIsLoadingManualLeads(true);
+  const handleEnrich = async () => {
+    if (selectedLeads.length === 0) return;
+    setIsEnriching(true);
+    setEnrichProgress({ current: 0, total: selectedLeads.length, currentSite: '' });
+    setEnrichResult(null);
+
+    const results = await enrichLeads(selectedLeads, enrichLeadsList, (current, total, site, status) => {
+      setEnrichProgress({ current, total, currentSite: site, status });
+    });
+
+    setIsEnriching(false);
+    setEnrichProgress(null);
+    setSelectedLeads([]);
+    setEnrichResult(results);
+
+    // Refresh data
+    loadEnrichLeads();
+    loadManualLeads();
+    const count = await getTotalLeadCount();
+    setTotalLeadCount(count);
+    const { data: activity } = await supabase.from('activity_log').select('*, leads(website)').order('created_at', { ascending: false }).limit(50);
+    setActivityLog(activity || []);
+  };
+
+  const selectAllOnPage = () => {
+    const ids = enrichLeadsList.filter(l => l.status === 'new' || !l.research_notes).map(l => l.id);
+    setSelectedLeads(ids);
+  };
+
+  const toggleLeadSelection = (leadId) => {
+    setSelectedLeads(prev => prev.includes(leadId) ? prev.filter(id => id !== leadId) : [...prev, leadId]);
+  };
+
+  // ═══════════════════════════════════════════
+  // MANUAL OUTREACH - Server-side search
+  // ═══════════════════════════════════════════
+
+  const loadManualLeads = async (search, contactedFilter, page) => {
+    setIsLoadingManual(true);
     try {
+      const s = search ?? manualSearchTerm;
+      const p = page ?? manualPage;
+      
       let query = supabase
         .from('leads')
         .select('*', { count: 'exact' })
-        .eq('status', 'enriched');
+        .in('status', ['enriched', 'contacted']);
 
-      if (search && search.trim()) {
-        query = query.or(
-          `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry.ilike.%${search.trim()}%`
-        );
+      if (s && s.trim()) {
+        query = query.or(`website.ilike.%${s.trim()}%,research_notes.ilike.%${s.trim()}%,industry.ilike.%${s.trim()}%`);
       }
 
-      const from = page * MANUAL_PAGE_SIZE;
-      const to = from + MANUAL_PAGE_SIZE - 1;
+      const cf = contactedFilter ?? manualFilterContacted;
+      if (cf === 'contacted') {
+        query = query.eq('status', 'contacted');
+      } else if (cf === 'not_contacted') {
+        query = query.eq('status', 'enriched');
+      }
 
-      query = query
-        .order('icp_fit', { ascending: true })
-        .order('created_at', { ascending: false })
-        .range(from, to);
+      const from = p * MANUAL_PAGE_SIZE;
+      query = query.order('icp_fit', { ascending: true }).order('created_at', { ascending: false }).range(from, from + MANUAL_PAGE_SIZE - 1);
 
       const { data, error, count } = await query;
       if (error) throw error;
-
       setManualLeads(data || []);
       setManualTotalCount(count || 0);
-    } catch (error) {
-      console.error('❌ Error searching manual leads:', error);
-    } finally {
-      setIsLoadingManualLeads(false);
-    }
+    } catch (e) { console.error(e); }
+    setIsLoadingManual(false);
   };
 
   const debouncedManualSearch = (search) => {
-    if (manualSearchTimerRef.current) clearTimeout(manualSearchTimerRef.current);
-    manualSearchTimerRef.current = setTimeout(() => {
-      searchManualLeads(search, 0);
+    if (manualTimerRef.current) clearTimeout(manualTimerRef.current);
+    manualTimerRef.current = setTimeout(() => {
       setManualPage(0);
+      loadManualLeads(search, manualFilterContacted, 0);
     }, 400);
   };
 
-  // Load manual leads on mount and page change
-  useEffect(() => {
-    searchManualLeads(manualSearchTerm, manualPage);
-  }, [manualPage]);
+  useEffect(() => { loadManualLeads(); }, [manualFilterContacted, manualPage]);
 
-  // Load agent settings
-  const loadAgentSettings = async () => {
+  const handleGenerateEmail = async () => {
+    if (!selectedLeadForManual) return;
+    setIsGenerating(true);
     try {
-      const { data } = await supabase
-        .from('agent_settings')
-        .select('*')
-        .single();
-      setAgentSettings(data);
-    } catch (error) {
-      console.error('Error loading settings:', error);
+      const email = await generateEmail(selectedLeadForManual);
+      setManualEmail(email);
+    } catch (e) {
+      console.error(e);
     }
+    setIsGenerating(false);
   };
 
-  // Load stats
-  const loadStats = async () => {
+  const handleFindContacts = async () => {
+    if (!selectedLeadForManual) return;
+    setIsLoadingContacts(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const { data } = await supabase
-        .from('daily_stats')
-        .select('*')
-        .eq('date', today)
-        .maybeSingle();
-      setStats(data || {
-        leads_enriched: 0,
-        contacts_found: 0,
-        emails_drafted: 0,
-        emails_sent: 0
-      });
-    } catch (error) {
-      console.error('Error loading stats:', error);
+      const contacts = await findContacts(selectedLeadForManual);
+      setManualContacts(contacts);
+    } catch (e) {
+      console.error(e);
     }
+    setIsLoadingContacts(false);
   };
 
-  // Load activity
-  const loadActivity = async () => {
-    try {
-      const { data } = await supabase
-        .from('activity_log')
-        .select('*, leads(website)')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      setActivityLog(data || []);
-    } catch (error) {
-      console.error('Error loading activity:', error);
-    }
+  const toggleContact = (email) => {
+    setSelectedManualContacts(prev => prev.includes(email) ? prev.filter(e => e !== email) : [...prev, email]);
   };
 
-  // Add single website
-  const addSingleWebsite = async () => {
+  const handleExportToGmail = async () => {
+    if (!selectedLeadForManual) return;
+    await exportToGmail(selectedLeadForManual.id, manualEmail, selectedManualContacts);
+    // Reset after short delay
+    setTimeout(() => {
+      setManualStep(1);
+      setSelectedLeadForManual(null);
+      setManualEmail('');
+      setManualContacts([]);
+      setSelectedManualContacts([]);
+      loadManualLeads();
+    }, 1000);
+  };
+
+  // ═══════════════════════════════════════════
+  // ADD LEADS
+  // ═══════════════════════════════════════════
+
+  const handleAddSingle = async () => {
     if (!newWebsite.trim()) return;
-
     try {
-      const { data, error } = await supabase
-        .from('leads')
-        .insert([{ website: newWebsite.trim(), source: 'manual', status: 'new' }])
-        .select();
-
-      if (error) {
-        if (error.code === '23505') {
-          alert('This website already exists!');
-        } else {
-          throw error;
-        }
-        return;
-      }
-
+      await addLead(newWebsite);
       setNewWebsite('');
-      await loadLeads();
-      alert('✅ Lead added successfully!');
-    } catch (error) {
-      console.error('Error adding lead:', error);
-      alert('Failed to add lead: ' + error.message);
-    }
+      const count = await getTotalLeadCount();
+      setTotalLeadCount(count);
+      loadEnrichLeads();
+    } catch (e) { alert(e.message); }
   };
 
-  // Bulk add websites
-  const bulkAddWebsites = async () => {
-    if (!bulkWebsites.trim()) return;
-
-    const websites = bulkWebsites
-      .split('\n')
-      .map(w => w.trim())
-      .filter(w => w);
-
-    if (websites.length === 0) return;
-
+  const handleBulkAdd = async () => {
+    const websites = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w);
+    if (!websites.length) return;
     try {
-      const { data: existing } = await supabase
-        .from('leads')
-        .select('website')
-        .in('website', websites);
-
-      const existingWebsites = new Set(existing?.map(l => l.website) || []);
-      const newWebsites = websites
-        .filter(w => !existingWebsites.has(w))
-        .map(w => ({ website: w, source: 'bulk_add', status: 'new' }));
-
-      if (newWebsites.length === 0) {
-        alert('All websites already exist!');
-        return;
-      }
-
-      const { error } = await supabase
-        .from('leads')
-        .insert(newWebsites);
-
-      if (error) throw error;
-
+      const { added, skipped } = await bulkAddLeads(websites);
       setBulkWebsites('');
-      await loadLeads();
-      alert(`✅ Added ${newWebsites.length} new leads!\nSkipped ${websites.length - newWebsites.length} duplicates.`);
-    } catch (error) {
-      console.error('Error bulk adding:', error);
-      alert('Failed to add leads: ' + error.message);
-    }
+      const count = await getTotalLeadCount();
+      setTotalLeadCount(count);
+      loadEnrichLeads();
+      alert(`✅ Added ${added} leads. Skipped ${skipped} duplicates.`);
+    } catch (e) { alert(e.message); }
   };
 
-  // Import from CSV
   const handleCSVUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
-
     setIsUploading(true);
-
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const text = e.target.result;
-        const rows = text.split('\n').slice(1);
-        
-        const websites = rows
-          .map(row => row.split(',')[0]?.trim())
-          .filter(w => w);
-
-        if (websites.length === 0) {
-          alert('No valid websites found in CSV');
-          return;
-        }
-
-        const { data: existing } = await supabase
-          .from('leads')
-          .select('website')
-          .in('website', websites);
-
-        const existingWebsites = new Set(existing?.map(l => l.website) || []);
-        const newWebsites = websites
-          .filter(w => !existingWebsites.has(w))
-          .map(w => ({ website: w, source: 'csv_upload', status: 'new' }));
-
-        if (newWebsites.length === 0) {
-          alert('All websites already exist!');
-          return;
-        }
-
-        const { error } = await supabase
-          .from('leads')
-          .insert(newWebsites);
-
-        if (error) throw error;
-
-        await loadLeads();
-        alert(`✅ Imported ${newWebsites.length} new leads!\nSkipped ${websites.length - newWebsites.length} duplicates.`);
-      } catch (error) {
-        console.error('Error importing CSV:', error);
-        alert('Failed to import: ' + error.message);
-      } finally {
-        setIsUploading(false);
-      }
+        const websites = e.target.result.split('\n').slice(1).map(row => row.split(',')[0]?.trim()).filter(w => w);
+        if (!websites.length) { alert('No valid websites found'); return; }
+        const { added, skipped } = await bulkAddLeads(websites, 'csv_upload');
+        const count = await getTotalLeadCount();
+        setTotalLeadCount(count);
+        loadEnrichLeads();
+        alert(`✅ Imported ${added} leads. Skipped ${skipped} duplicates.`);
+      } catch (e) { alert(e.message); }
+      setIsUploading(false);
     };
     reader.readAsText(file);
   };
 
-  // Enrich selected leads - with web search and expanded scoring
-  const enrichSelectedLeads = async () => {
-    if (selectedLeads.length === 0) return;
+  // ═══════════════════════════════════════════
+  // AGENT SETTINGS
+  // ═══════════════════════════════════════════
 
-    setIsEnriching(true);
-
-    for (const leadId of selectedLeads) {
-      const lead = enrichLeads.find(l => l.id === leadId) || leads.find(l => l.id === leadId);
-      if (!lead) continue;
-
-      try {
-        console.log(`🔬 Enriching ${lead.website}...`);
-
-        const response = await fetch('/.netlify/functions/claude', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            useWebSearch: true,
-            prompt: `Research the company at ${lead.website} for B2B sales qualification.
-
-TASKS:
-1. Visit or search for ${lead.website} to understand what they sell
-2. Search Google Shopping for "${lead.website}" or their brand name to check if they list products there
-3. Determine their headquarters location
-
-Provide in this EXACT format (return ONLY plain text, no markdown code fences, no extra commentary):
-
-Industry: [specific industry/vertical]
-Catalog Size: [Small (<100 products) / Medium (100-250) / Large (250+)]
-Sells D2C: [YES/NO - do they sell direct to consumer on their own website?]
-Headquarters: [City, State/Country]
-Google Shopping: [YES/NO/UNKNOWN - are their products listed on Google Shopping?]
-ICP Fit: [HIGH/MEDIUM/LOW]
-Fit Reason: [one sentence explaining why this score]
-Decision Makers: [comma-separated likely titles e.g. CMO, VP Marketing, Head of Ecommerce]
-Pain Points: [2-3 pain points related to creator content, UGC costs, or influencer spend]`,
-            systemPrompt: `You are a B2B sales researcher for Onsite Affiliate. You have web search available — USE IT to look up the company website and check Google Shopping.
-
-Return ONLY plain text in the exact format requested. No markdown, no code fences, no extra explanation.
-
-WHAT ONSITE AFFILIATE DOES:
-We help D2C ecommerce brands run performance-based creator/UGC programs on their own website. Brands get video content with no upfront costs — creators earn commissions on sales they drive.
-
-ICP SCORING RULES (follow these EXACTLY):
-
-HIGH FIT — ALL of these must be true:
-1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — Nike, Coach, Nordstrom all count as D2C because they sell on their own site)
-2. Large product catalog (estimate 250+ products)
-3. Primary category is one of: Fashion/Apparel, Home Goods, Outdoor/Lifestyle, Electronics
-4. Headquartered in US or Canada
-5. BONUS: If found on Google Shopping, this is a strong HIGH signal
-
-MEDIUM FIT — has a D2C website BUT one or more:
-- Catalog under 250 products in a target category
-- Large catalog but in a non-target category (Beauty, Pet, Food, Health, Sports, Toys, etc.)
-- Headquartered outside US/Canada
-
-LOW FIT — any of these:
-- No D2C ecommerce (B2B only, SaaS, services, marketplace-only seller with no own store)
-- Brick-and-mortar only with no online store
-- Non-profit, government, media company, blog
-- No product sales at all
-
-IMPORTANT EXAMPLES:
-- Wayfair.com → HIGH (D2C ecommerce, huge Home Goods catalog, US-based)
-- Nordstrom.com → HIGH (D2C ecommerce, huge Fashion catalog, US-based)
-- Nike.com → HIGH (D2C ecommerce, large Fashion/Apparel catalog, US-based)
-- A small Shopify jewelry store with 30 products → MEDIUM (D2C but small catalog)
-- A UK-based home goods brand → MEDIUM (D2C but non-US/CA)
-- A B2B industrial supplier → LOW (not D2C consumer)
-- A SaaS company → LOW (no product sales)`
-          })
-        });
-
-        if (!response.ok) throw new Error(`API error: ${response.status}`);
-
-        const data = await response.json();
-        
-        // Use the extracted text field (strips out web search blocks)
-        let research = data.text || '';
-        if (!research && data.content && Array.isArray(data.content)) {
-          research = data.content
-            .filter(b => b.type === 'text')
-            .map(b => b.text)
-            .join('\n');
-        }
-
-        // Parse all fields from the response
-        const parseField = (fieldName) => {
-          const match = research.match(new RegExp(`${fieldName}:\\s*(.+)`, 'i'));
-          return match ? match[1].trim() : null;
-        };
-
-        const icpFit = parseField('ICP Fit')?.toUpperCase() || null;
-        const industry = parseField('Industry');
-        const catalogSize = parseField('Catalog Size');
-        const sellsD2C = parseField('Sells D2C');
-        const headquarters = parseField('Headquarters');
-        const googleShopping = parseField('Google Shopping');
-        const fitReason = parseField('Fit Reason');
-        const decisionMakers = parseField('Decision Makers');
-        const painPoints = parseField('Pain Points');
-
-        // Store everything to Supabase
-        await supabase
-          .from('leads')
-          .update({
-            research_notes: research,
-            icp_fit: icpFit,
-            industry: industry,
-            catalog_size: catalogSize,
-            sells_d2c: sellsD2C,
-            headquarters: headquarters,
-            google_shopping: googleShopping,
-            fit_reason: fitReason,
-            decision_makers: decisionMakers,
-            pain_points: painPoints,
-            status: 'enriched',
-            enrichment_status: 'completed'
-          })
-          .eq('id', leadId);
-
-        await supabase
-          .from('activity_log')
-          .insert({
-            activity_type: 'lead_enriched',
-            lead_id: leadId,
-            summary: `Enriched ${lead.website} — ICP: ${icpFit || 'Unknown'} | ${industry || ''} | D2C: ${sellsD2C || '?'} | Catalog: ${catalogSize || '?'} | GShop: ${googleShopping || '?'}`,
-            status: 'success'
-          });
-
-        console.log(`✅ ${lead.website} → ${icpFit} | ${industry} | D2C:${sellsD2C} | Catalog:${catalogSize} | GShop:${googleShopping}`);
-
-      } catch (error) {
-        console.error(`❌ Error enriching ${lead.website}:`, error);
-        
-        await supabase
-          .from('activity_log')
-          .insert({
-            activity_type: 'lead_enriched',
-            lead_id: leadId,
-            summary: `Failed to enrich ${lead.website}: ${error.message}`,
-            status: 'failed'
-          });
-      }
-
-      // Rate limit between calls
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-
-    setIsEnriching(false);
-    setSelectedLeads([]);
-    await loadLeads();
-    await searchEnrichLeads(enrichSearchTerm, enrichFilterStatus, enrichFilterICP, enrichFilterCountry, enrichPage);
-    await loadActivity();
-  };
-
-  // Toggle lead selection
-  const toggleLeadSelection = (leadId) => {
-    setSelectedLeads(prev =>
-      prev.includes(leadId)
-        ? prev.filter(id => id !== leadId)
-        : [...prev, leadId]
-    );
-  };
-
-  // Select all unenriched leads on current page
-  const selectAllUnenriched = () => {
-    const unenriched = enrichLeads
-      .filter(l => l.status === 'new' || !l.research_notes)
-      .map(l => l.id);
-    setSelectedLeads(unenriched);
-  };
-
-  // Generate email for manual outreach
-  const generateManualEmail = async (lead) => {
-    setIsGenerating(true);
-    try {
-      const response = await fetch('/.netlify/functions/claude', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: `Write a casual outreach email for ${lead.website}. 
-
-${lead.research_notes ? `Context: ${lead.research_notes.substring(0, 300)}` : ''}
-
-Requirements:
-- Under 90 words total
-- Ask about upfront creator costs OR gifting logistics
-- Explain: Amazon proved performance commissions eliminate upfront costs
-- Key point: We help brands COPY that model for their OWN site (not access to Amazon creators)
-- Tone: Casual, like a Slack message
-- Include subject line
-
-Format:
-Subject: [subject]
-
-[body]`,
-          systemPrompt: `You are an SDR for Onsite Affiliate. Under 90 words, casual tone.
-
-CRITICAL - WHAT WE ACTUALLY DO:
-We help D2C brands COPY Amazon's Influencer commission model for their OWN website. We provide the platform/technology to run performance-based creator programs. We are NOT a network, NOT providing access to Amazon creators, NOT a middleman.
-
-THE OFFER:
-- Brands implement same commission structure Amazon uses on their own site
-- Get UGC video content with ZERO upfront costs (no gifting, no retainers, no content fees)
-- Only pay performance commissions when videos actually drive sales
-- Creators earn MORE long-term through commissions vs one-time payments
-
-CORRECT MESSAGING (USE THESE):
-✓ "Copy Amazon's commission model for your site"
-✓ "Build what Amazon built for your brand"  
-✓ "Same structure Amazon uses, but for your products"
-✓ "Implement Amazon's model on your own site"
-
-NEVER SAY (THESE ARE WRONG):
-✗ "Tap into Amazon's creators"
-✗ "Access Amazon influencers"
-✗ "Work with Amazon creators"
-✗ "Our network of Amazon creators"
-✗ "Through our Onsite Affiliate network"
-
-EMAIL STRUCTURE (under 90 words):
-[Name] -
-[Pain question: upfront costs OR gifting logistics]
-[Amazon proved performance commissions work - no upfront, pay after sales]
-[We help you copy that exact model for YOUR site/products]
-[Simple CTA question]
-Mike
-
-EXAMPLE (72 words):
-Sarah -
-
-Still paying creators $1k upfront for every UGC post?
-
-Amazon figured out how to eliminate that with performance commissions. Creators promote products, earn after driving actual sales. Zero upfront costs.
-
-We help D2C brands copy that exact model for their own site - same commission structure Amazon uses, but for your products.
-
-Worth a quick call to see how it works?
-
-Mike
-
-TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
-        })
-      });
-
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-
-      const data = await response.json();
-      const email = data.content[0]?.text || '';
-      setManualEmail(email);
-    } catch (error) {
-      console.error('Error generating email:', error);
-      alert('Failed to generate email: ' + error.message);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  // Find contacts for manual outreach
-  const findManualContacts = async (lead) => {
-    setIsLoadingManualContacts(true);
-    try {
-      const response = await fetch('/.netlify/functions/csv-contacts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          website: lead.website,
-          researchNotes: lead.research_notes,
-          offset: 0
-        })
-      });
-
-      if (!response.ok) throw new Error('Failed to find contacts');
-
-      const data = await response.json();
-      setManualContacts(data.contacts || []);
-      
-      if (!data.contacts || data.contacts.length === 0) {
-        alert(`No contacts found for ${lead.website}`);
-      }
-    } catch (error) {
-      console.error('Error finding contacts:', error);
-      alert('Failed to find contacts: ' + error.message);
-    } finally {
-      setIsLoadingManualContacts(false);
-    }
-  };
-
-  // Toggle contact selection
-  const toggleManualContact = (contactEmail) => {
-    setSelectedManualContacts(prev =>
-      prev.includes(contactEmail)
-        ? prev.filter(e => e !== contactEmail)
-        : [...prev, contactEmail]
-    );
-  };
-
-  // Export selected contacts to Gmail
-  const exportToGmail = () => {
-    if (selectedManualContacts.length === 0 || !manualEmail) return;
-
-    const subjectMatch = manualEmail.match(/Subject:\s*(.+)/i);
-    const subject = subjectMatch ? subjectMatch[1].trim() : 'Onsite Affiliate Introduction';
-    
-    const bodyStart = manualEmail.indexOf('\n', manualEmail.indexOf('Subject:'));
-    const body = bodyStart > -1 ? manualEmail.substring(bodyStart).trim() : manualEmail;
-
-    const bccEmails = selectedManualContacts.join(',');
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bccEmails)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-    window.open(gmailUrl, '_blank');
-  };
-
-  // Update agent settings
   const updateAgentSettings = async (updates) => {
     try {
-      const { error } = await supabase
-        .from('agent_settings')
-        .update(updates)
-        .eq('id', '00000000-0000-0000-0000-000000000001');
-      
-      if (!error) {
-        setAgentSettings({ ...agentSettings, ...updates });
-        alert('✅ Settings updated!');
-      }
-    } catch (error) {
-      console.error('Error updating settings:', error);
-      alert('Failed to update settings');
-    }
+      const { error } = await supabase.from('agent_settings').update(updates).eq('id', '00000000-0000-0000-0000-000000000001');
+      if (!error) setAgentSettings({ ...agentSettings, ...updates });
+    } catch (e) { console.error(e); }
   };
 
-  // Get filtered leads for pipeline
-  const getFilteredLeads = () => {
-    let filtered = leads;
+  // ═══════════════════════════════════════════
+  // PIPELINE
+  // ═══════════════════════════════════════════
 
-    if (filterStatus !== 'all') {
-      filtered = filtered.filter(l => l.status === filterStatus);
-    }
-
-    if (searchTerm) {
-      filtered = filtered.filter(l =>
-        l.website.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-
-    return filtered;
+  const loadPipeline = async () => {
+    try {
+      const { leads, totalCount } = await searchLeads({
+        search: pipelineSearch,
+        status: pipelineFilter,
+        page: pipelinePage,
+        pageSize: PIPELINE_PAGE_SIZE
+      });
+      setPipelineLeads(leads);
+      setPipelineTotalCount(totalCount);
+    } catch (e) { console.error(e); }
   };
 
-  // Get status count
-  const getStatusCount = (status) => leads.filter(l => l.status === status).length;
+  useEffect(() => { if (activeView === 'pipeline') loadPipeline(); }, [activeView, pipelineFilter, pipelinePage, pipelineSearch]);
 
-  // Computed pagination values for enrich page
+  // ═══════════════════════════════════════════
+  // HELPERS
+  // ═══════════════════════════════════════════
+
   const enrichTotalPages = Math.ceil(enrichTotalCount / ENRICH_PAGE_SIZE);
-  const enrichStartItem = enrichTotalCount > 0 ? enrichPage * ENRICH_PAGE_SIZE + 1 : 0;
-  const enrichEndItem = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, enrichTotalCount);
+  const enrichStart = enrichTotalCount > 0 ? enrichPage * ENRICH_PAGE_SIZE + 1 : 0;
+  const enrichEnd = Math.min((enrichPage + 1) * ENRICH_PAGE_SIZE, enrichTotalCount);
+
+  const formatContactedDates = (contactedAt) => {
+    if (!contactedAt || !contactedAt.length) return null;
+    return contactedAt.map(d => new Date(d).toLocaleDateString()).join(', ');
+  };
+
+  // Country badge component
+  const CountryBadge = ({ country }) => {
+    if (!country) return null;
+    const label = country === 'US (assumed)' ? '🇺🇸 US' : country === 'Canada' ? '🇨🇦 CA' : country === 'UK' ? '🇬🇧 UK' : country;
+    return (
+      <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: '600', backgroundColor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)' }}>
+        {label}
+      </span>
+    );
+  };
+
+  // Lead card component used in both Enrich and Manual
+  const LeadCard = ({ lead, selected, onClick, showContacted }) => (
+    <div
+      className={`lead-enrich-card ${selected ? 'selected' : ''}`}
+      onClick={onClick}
+      style={{ cursor: 'pointer' }}
+    >
+      {onClick && (
+        <div className="lead-checkbox">
+          <input type="checkbox" checked={selected} readOnly />
+        </div>
+      )}
+      <div className="lead-info">
+        <h4>{lead.website}</h4>
+        {lead.status === 'enriched' && <span className="status-badge enriched">ENRICHED</span>}
+        {lead.status === 'contacted' && <span className="status-badge contacted" style={{ backgroundColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>CONTACTED</span>}
+        {lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}
+        <CountryBadge country={lead.country} />
+      </div>
+      {lead.industry && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry}</div>}
+      {lead.fit_reason && <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.fit_reason}</div>}
+      {!lead.fit_reason && lead.research_notes && (
+        <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.research_notes.substring(0, 80)}...</div>
+      )}
+      {(lead.catalog_size || lead.google_shopping) && (
+        <div style={{ marginTop: '4px', fontSize: '10px', opacity: 0.4 }}>
+          {lead.sells_d2c && `D2C: ${lead.sells_d2c}`}
+          {lead.catalog_size && ` · ${lead.catalog_size}`}
+          {lead.google_shopping && ` · GShop: ${lead.google_shopping}`}
+        </div>
+      )}
+      {showContacted && lead.contacted_at && lead.contacted_at.length > 0 && (
+        <div style={{ marginTop: '4px', fontSize: '10px', color: '#4ade80' }}>
+          📧 Contacted: {formatContactedDates(lead.contacted_at)}
+        </div>
+      )}
+    </div>
+  );
+
+  // ═══════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════
 
   return (
     <div className="app">
@@ -768,541 +419,233 @@ TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`
 
       <div className="main-layout">
         <aside className="vertical-sidebar">
-  <button
-    className={`sidebar-btn ${activeView === 'add' ? 'active' : ''}`}
-    onClick={() => setActiveView('add')}
-  >
-    <span className="btn-icon">➕</span>
-    <span className="btn-label">Add Leads</span>
-  </button>
-  
-  <button
-    className={`sidebar-btn ${activeView === 'enrich' ? 'active' : ''}`}
-    onClick={() => setActiveView('enrich')}
-  >
-    <span className="btn-icon">🔬</span>
-    <span className="btn-label">Enrich Leads</span>
-  </button>
-
-  <button
-    className={`sidebar-btn ${activeView === 'manual' ? 'active' : ''}`}
-    onClick={() => setActiveView('manual')}
-  >
-    <span className="btn-icon">✉️</span>
-    <span className="btn-label">Manual Outreach</span>
-  </button>
-  
-  <button
-    className={`sidebar-btn ${activeView === 'agent' ? 'active' : ''}`}
-    onClick={() => setActiveView('agent')}
-  >
-    <span className="btn-icon">🤖</span>
-    <span className="btn-label">Manage Agent</span>
-  </button>
-  
-  <button
-    className={`sidebar-btn ${activeView === 'pipeline' ? 'active' : ''}`}
-    onClick={() => setActiveView('pipeline')}
-  >
-    <span className="btn-icon">📊</span>
-    <span className="btn-label">Pipeline</span>
-  </button>
-</aside>
+          {[
+            { key: 'add', icon: '➕', label: 'Add Leads' },
+            { key: 'enrich', icon: '🔬', label: 'Enrich Leads' },
+            { key: 'manual', icon: '✉️', label: 'Manual Outreach' },
+            { key: 'agent', icon: '🤖', label: 'Manage Agent' },
+            { key: 'pipeline', icon: '📊', label: 'Pipeline' },
+          ].map(item => (
+            <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
+              <span className="btn-icon">{item.icon}</span>
+              <span className="btn-label">{item.label}</span>
+            </button>
+          ))}
+        </aside>
 
         <main className="main-content">
+
+          {/* ═══ ADD LEADS ═══ */}
           {activeView === 'add' && (
             <div className="view-container">
               <h2>➕ Add New Leads</h2>
-              
               <div className="add-methods">
                 <div className="add-method-card">
                   <h3>Add Single Website</h3>
                   <div className="input-group">
-                    <input
-                      type="text"
-                      placeholder="revolut.com"
-                      value={newWebsite}
-                      onChange={(e) => setNewWebsite(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && addSingleWebsite()}
-                    />
-                    <button onClick={addSingleWebsite} className="primary-btn">
-                      Add Lead
-                    </button>
+                    <input type="text" placeholder="revolut.com" value={newWebsite} onChange={(e) => setNewWebsite(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddSingle()} />
+                    <button onClick={handleAddSingle} className="primary-btn">Add Lead</button>
                   </div>
                 </div>
-
                 <div className="add-method-card">
                   <h3>Bulk Add Websites</h3>
                   <p>Enter one website per line</p>
-                  <textarea
-                    placeholder="revolut.com&#10;coach.com&#10;timbuk2.com"
-                    value={bulkWebsites}
-                    onChange={(e) => setBulkWebsites(e.target.value)}
-                    rows={8}
-                  />
-                  <button onClick={bulkAddWebsites} className="primary-btn">
-                    Add {bulkWebsites.split('\n').filter(w => w.trim()).length} Leads
-                  </button>
+                  <textarea placeholder="revolut.com&#10;coach.com&#10;timbuk2.com" value={bulkWebsites} onChange={(e) => setBulkWebsites(e.target.value)} rows={8} />
+                  <button onClick={handleBulkAdd} className="primary-btn">Add {bulkWebsites.split('\n').filter(w => w.trim()).length} Leads</button>
                 </div>
-
                 <div className="add-method-card">
                   <h3>Upload CSV</h3>
-                  <p>CSV Format: website column with one website per row</p>
+                  <p>CSV with website column, one per row</p>
                   <label className="upload-btn">
                     {isUploading ? '⏳ Uploading...' : '📤 Choose CSV File'}
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handleCSVUpload}
-                      disabled={isUploading}
-                      style={{ display: 'none' }}
-                    />
+                    <input type="file" accept=".csv" onChange={handleCSVUpload} disabled={isUploading} style={{ display: 'none' }} />
                   </label>
-                  <div className="csv-example">
-                    <p><strong>Example CSV:</strong></p>
-                    <pre>website
-revolut.com
-coach.com
-timbuk2.com</pre>
-                  </div>
                 </div>
               </div>
             </div>
           )}
 
+          {/* ═══ ENRICH LEADS ═══ */}
           {activeView === 'enrich' && (
             <div className="view-container">
+              {/* Enrichment result modal */}
+              {enrichResult && (
+                <div style={{
+                  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                  backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                  <div style={{
+                    backgroundColor: '#1a1a2e', borderRadius: '16px', padding: '32px', maxWidth: '500px', width: '90%',
+                    border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center'
+                  }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
+                    <h3 style={{ marginBottom: '8px' }}>Enrichment Complete!</h3>
+                    <p style={{ opacity: 0.7, marginBottom: '24px' }}>
+                      {enrichResult.success.length} lead{enrichResult.success.length !== 1 ? 's' : ''} enriched successfully
+                      {enrichResult.failed.length > 0 && `, ${enrichResult.failed.length} failed`}
+                    </p>
+                    {enrichResult.success.length > 0 && (
+                      <div style={{ marginBottom: '24px', textAlign: 'left', maxHeight: '200px', overflowY: 'auto' }}>
+                        {enrichResult.success.map(l => (
+                          <div key={l.id} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: 'rgba(255,255,255,0.05)', marginBottom: '4px', fontSize: '13px' }}>
+                            <strong>{l.website}</strong>
+                            {l.icp_fit && <span className={`icp-badge ${l.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{l.icp_fit}</span>}
+                            {l.fit_reason && <div style={{ opacity: 0.6, fontSize: '11px', marginTop: '2px' }}>{l.fit_reason}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                      <button className="primary-btn" onClick={() => { setEnrichResult(null); setActiveView('manual'); loadManualLeads(); }}>
+                        ✉️ Start Outreach
+                      </button>
+                      <button className="secondary-btn" onClick={() => { setEnrichResult(null); loadEnrichLeads(); }}>
+                        🔬 Keep Enriching
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Enrichment progress overlay */}
+              {isEnriching && enrichProgress && (
+                <div style={{
+                  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                  backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                  <div style={{
+                    backgroundColor: '#1a1a2e', borderRadius: '16px', padding: '32px', maxWidth: '400px', width: '90%',
+                    border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center'
+                  }}>
+                    <div style={{ fontSize: '36px', marginBottom: '16px' }}>🔬</div>
+                    <h3>Enriching Leads...</h3>
+                    <p style={{ opacity: 0.7 }}>{enrichProgress.current} of {enrichProgress.total}</p>
+                    <p style={{ fontSize: '13px', opacity: 0.5 }}>{enrichProgress.currentSite}</p>
+                    <div style={{ height: '4px', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '16px' }}>
+                      <div style={{ height: '100%', backgroundColor: '#8b5cf6', borderRadius: '2px', width: `${(enrichProgress.current / enrichProgress.total) * 100}%`, transition: 'width 0.3s' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="view-header">
                 <h2>🔬 Enrich Leads with AI</h2>
                 <div className="view-actions">
-                  <button onClick={selectAllUnenriched} className="secondary-btn">
-                    Select All on Page ({enrichLeads.filter(l => l.status === 'new').length})
+                  <button onClick={selectAllOnPage} className="secondary-btn">
+                    Select All on Page ({enrichLeadsList.length})
                   </button>
-                  <button
-                    onClick={enrichSelectedLeads}
-                    disabled={selectedLeads.length === 0 || isEnriching}
-                    className="primary-btn"
-                  >
+                  <button onClick={handleEnrich} disabled={selectedLeads.length === 0 || isEnriching} className="primary-btn">
                     {isEnriching ? '🔬 Enriching...' : `Enrich ${selectedLeads.length} Lead(s)`}
                   </button>
                 </div>
               </div>
 
-              {/* Search and Filter Bar */}
-              <div className="enrich-filters" style={{
-                display: 'flex',
-                gap: '12px',
-                marginBottom: '20px',
-                alignItems: 'center',
-                flexWrap: 'wrap'
-              }}>
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <input
-                  type="text"
-                  placeholder="🔍 Search by website or notes..."
+                  type="text" placeholder="🔍 Search by website or notes..."
                   value={enrichSearchTerm}
-                  onChange={(e) => { 
-                    setEnrichSearchTerm(e.target.value); 
-                    debouncedEnrichSearch(e.target.value, enrichFilterStatus, enrichFilterICP, enrichFilterCountry);
-                  }}
-                  style={{
-                    flex: '1',
-                    minWidth: '250px',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    backgroundColor: 'rgba(255,255,255,0.05)',
-                    color: 'inherit',
-                    fontSize: '14px'
-                  }}
+                  onChange={(e) => { setEnrichSearchTerm(e.target.value); debouncedEnrichSearch(e.target.value); }}
+                  style={{ flex: '1', minWidth: '250px', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.05)', color: 'inherit', fontSize: '14px' }}
                 />
-                <select
-                  value={enrichFilterStatus}
-                  onChange={(e) => { setEnrichFilterStatus(e.target.value); setEnrichPage(0); }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    backgroundColor: 'rgba(255,255,255,0.08)',
-                    color: 'inherit',
-                    fontSize: '14px'
-                  }}
-                >
-                  <option value="all">All Status ({totalLeadCount})</option>
-                  <option value="new">New</option>
-                  <option value="enriched">Enriched</option>
-                  <option value="contacted">Contacted</option>
-                </select>
-                <select
-                  value={enrichFilterICP}
-                  onChange={(e) => { setEnrichFilterICP(e.target.value); setEnrichPage(0); }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    backgroundColor: 'rgba(255,255,255,0.08)',
-                    color: 'inherit',
-                    fontSize: '14px'
-                  }}
-                >
-                  <option value="all">All ICP</option>
-                  <option value="HIGH">🟢 HIGH</option>
-                  <option value="MEDIUM">🟡 MEDIUM</option>
-                  <option value="LOW">🔴 LOW</option>
-                </select>
-                <select
-                  value={enrichFilterCountry}
-                  onChange={(e) => { setEnrichFilterCountry(e.target.value); setEnrichPage(0); }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    backgroundColor: 'rgba(255,255,255,0.08)',
-                    color: 'inherit',
-                    fontSize: '14px'
-                  }}
-                >
+                <select value={enrichFilterCountry} onChange={(e) => { setEnrichFilterCountry(e.target.value); setEnrichPage(0); }}
+                  style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontSize: '14px' }}>
                   <option value="all">All Countries</option>
-                  <option value="US/CA">🇺🇸🇨🇦 US & Canada Only</option>
-                  <option value="US (assumed)">🇺🇸 US (assumed)</option>
-                  <option value="Canada">🇨🇦 Canada</option>
+                  <option value="US/CA">🇺🇸🇨🇦 US & Canada</option>
                   <option value="International">🌍 International</option>
-                  <option value="UK">🇬🇧 UK</option>
-                  <option value="Australia">🇦🇺 Australia</option>
-                  <option value="Germany">🇩🇪 Germany</option>
-                  <option value="France">🇫🇷 France</option>
                   <option value="Unknown">❓ Unknown</option>
                 </select>
-                {(enrichSearchTerm || enrichFilterStatus !== 'all' || enrichFilterICP !== 'all' || enrichFilterCountry !== 'all') && (
-                  <button
-                    onClick={() => {
-                      setEnrichSearchTerm('');
-                      setEnrichFilterStatus('all');
-                      setEnrichFilterICP('all');
-                      setEnrichFilterCountry('all');
-                      setEnrichPage(0);
-                      searchEnrichLeads('', 'all', 'all', 'all', 0);
-                    }}
-                    style={{
-                      padding: '10px 14px',
-                      borderRadius: '8px',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: 'rgba(255,80,80,0.15)',
-                      color: '#ff6b6b',
-                      cursor: 'pointer',
-                      fontSize: '14px'
-                    }}
-                  >
-                    ✕ Clear
-                  </button>
-                )}
                 <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
-                  {isLoadingEnrich ? '⏳ Loading...' : `Showing ${enrichStartItem}–${enrichEndItem} of ${enrichTotalCount} leads`}
+                  {isLoadingEnrich ? '⏳' : `${enrichStart}–${enrichEnd} of ${enrichTotalCount} unenriched`}
                 </span>
               </div>
 
               <div className="leads-grid">
-                {enrichLeads.map(lead => (
-                  <div
-                    key={lead.id}
-                    className={`lead-enrich-card ${selectedLeads.includes(lead.id) ? 'selected' : ''}`}
-                    onClick={() => toggleLeadSelection(lead.id)}
-                  >
-                    <div className="lead-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={selectedLeads.includes(lead.id)}
-                        onChange={() => toggleLeadSelection(lead.id)}
-                      />
-                    </div>
-                    <div className="lead-info">
-                      <h4>{lead.website}</h4>
-                      <span className={`status-badge ${lead.status}`}>
-                        {lead.status}
-                      </span>
-                      {lead.icp_fit && (
-                        <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>
-                          {lead.icp_fit}
-                        </span>
-                      )}
-                      {lead.country && (
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '2px 8px',
-                          borderRadius: '4px',
-                          fontSize: '11px',
-                          fontWeight: '600',
-                          backgroundColor: lead.country === 'US (assumed)' || lead.country === 'US' 
-                            ? 'rgba(59,130,246,0.15)' 
-                            : lead.country === 'Canada' 
-                            ? 'rgba(239,68,68,0.15)' 
-                            : 'rgba(255,255,255,0.1)',
-                          color: lead.country === 'US (assumed)' || lead.country === 'US'
-                            ? '#60a5fa'
-                            : lead.country === 'Canada'
-                            ? '#f87171'
-                            : 'rgba(255,255,255,0.6)'
-                        }}>
-                          {lead.country === 'US (assumed)' ? '🇺🇸 US' : 
-                           lead.country === 'US' ? '🇺🇸 US' :
-                           lead.country === 'Canada' ? '🇨🇦 CA' :
-                           lead.country === 'UK' ? '🇬🇧 UK' :
-                           lead.country === 'Australia' ? '🇦🇺 AU' :
-                           lead.country === 'Germany' ? '🇩🇪 DE' :
-                           lead.country === 'France' ? '🇫🇷 FR' :
-                           lead.country}
-                        </span>
-                      )}
-                    </div>
-                    {lead.research_notes && (
-                      <div className="lead-research-preview">
-                        {lead.industry && <div><strong>{lead.industry}</strong></div>}
-                        {lead.fit_reason && <div>{lead.fit_reason}</div>}
-                        {!lead.fit_reason && lead.research_notes.substring(0, 100) + '...'}
-                        {(lead.catalog_size || lead.google_shopping || lead.sells_d2c) && (
-                          <div style={{ marginTop: '4px', fontSize: '11px', opacity: 0.7 }}>
-                            {lead.sells_d2c && `D2C: ${lead.sells_d2c}`}
-                            {lead.catalog_size && ` · ${lead.catalog_size}`}
-                            {lead.google_shopping && ` · GShop: ${lead.google_shopping}`}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                {enrichLeadsList.map(lead => (
+                  <LeadCard key={lead.id} lead={lead} selected={selectedLeads.includes(lead.id)} onClick={() => toggleLeadSelection(lead.id)} />
                 ))}
               </div>
 
-              {/* Pagination */}
               {enrichTotalPages > 1 && (
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  gap: '12px',
-                  marginTop: '24px',
-                  paddingBottom: '20px'
-                }}>
-                  <button
-                    onClick={() => setEnrichPage(0)}
-                    disabled={enrichPage === 0}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: enrichPage === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
-                      color: enrichPage === 0 ? 'rgba(255,255,255,0.3)' : 'inherit',
-                      cursor: enrichPage === 0 ? 'default' : 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >
-                    ⟨⟨ First
-                  </button>
-                  <button
-                    onClick={() => setEnrichPage(p => Math.max(0, p - 1))}
-                    disabled={enrichPage === 0}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: enrichPage === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
-                      color: enrichPage === 0 ? 'rgba(255,255,255,0.3)' : 'inherit',
-                      cursor: enrichPage === 0 ? 'default' : 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >
-                    ⟨ Prev
-                  </button>
-                  <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', fontWeight: '600' }}>
-                    Page {enrichPage + 1} of {enrichTotalPages}
-                  </span>
-                  <button
-                    onClick={() => setEnrichPage(p => Math.min(enrichTotalPages - 1, p + 1))}
-                    disabled={enrichPage >= enrichTotalPages - 1}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
-                      color: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
-                      cursor: enrichPage >= enrichTotalPages - 1 ? 'default' : 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >
-                    Next ⟩
-                  </button>
-                  <button
-                    onClick={() => setEnrichPage(enrichTotalPages - 1)}
-                    disabled={enrichPage >= enrichTotalPages - 1}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(255,255,255,0.15)',
-                      backgroundColor: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.08)',
-                      color: enrichPage >= enrichTotalPages - 1 ? 'rgba(255,255,255,0.3)' : 'inherit',
-                      cursor: enrichPage >= enrichTotalPages - 1 ? 'default' : 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >
-                    Last ⟩⟩
-                  </button>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '24px', paddingBottom: '20px' }}>
+                  <button onClick={() => setEnrichPage(p => Math.max(0, p - 1))} disabled={enrichPage === 0}
+                    style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>⟨ Prev</button>
+                  <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>Page {enrichPage + 1} of {enrichTotalPages}</span>
+                  <button onClick={() => setEnrichPage(p => p + 1)} disabled={enrichPage >= enrichTotalPages - 1}
+                    style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>Next ⟩</button>
                 </div>
               )}
             </div>
           )}
 
+          {/* ═══ MANUAL OUTREACH ═══ */}
           {activeView === 'manual' && (
             <div className="view-container">
               <h2>✉️ Manual Outreach</h2>
 
               {/* Step indicator */}
-              <div style={{
-                display: 'flex',
-                gap: '4px',
-                marginBottom: '24px',
-                alignItems: 'center'
-              }}>
-                {[
-                  { num: 1, label: 'Select Lead' },
-                  { num: 2, label: 'Generate Email' },
-                  { num: 3, label: 'Find Contacts' },
-                  { num: 4, label: 'Export to Gmail' }
-                ].map((s, i) => (
-                  <div key={s.num} style={{ display: 'flex', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {[{ n: 1, l: 'Select Lead' }, { n: 2, l: 'Generate Email' }, { n: 3, l: 'Find Contacts' }, { n: 4, l: 'Export to Gmail' }].map((s, i) => (
+                  <div key={s.n} style={{ display: 'flex', alignItems: 'center' }}>
                     <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '8px 16px',
-                      borderRadius: '20px',
-                      backgroundColor: manualStep === s.num ? 'rgba(139,92,246,0.3)' : 
-                                       manualStep > s.num ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
-                      border: manualStep === s.num ? '1px solid rgba(139,92,246,0.6)' : '1px solid rgba(255,255,255,0.1)',
-                      color: manualStep > s.num ? '#4ade80' : manualStep === s.num ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
-                      fontSize: '13px',
-                      fontWeight: manualStep === s.num ? '600' : '400'
+                      padding: '8px 16px', borderRadius: '20px', fontSize: '13px',
+                      backgroundColor: manualStep === s.n ? 'rgba(139,92,246,0.3)' : manualStep > s.n ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
+                      border: manualStep === s.n ? '1px solid rgba(139,92,246,0.6)' : '1px solid rgba(255,255,255,0.1)',
+                      color: manualStep > s.n ? '#4ade80' : manualStep === s.n ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+                      fontWeight: manualStep === s.n ? '600' : '400'
                     }}>
-                      <span>{manualStep > s.num ? '✓' : s.num}</span>
-                      <span>{s.label}</span>
+                      {manualStep > s.n ? '✓' : s.n} {s.l}
                     </div>
                     {i < 3 && <span style={{ color: 'rgba(255,255,255,0.2)', margin: '0 4px' }}>→</span>}
                   </div>
                 ))}
               </div>
 
-              {/* Step 1: Select Lead - tile grid with search */}
+              {/* Step 1: Select Lead */}
               {manualStep === 1 && (
                 <>
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
-                    <input
-                      type="text"
-                      placeholder="🔍 Search enriched leads by website, industry..."
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input type="text" placeholder="🔍 Search enriched leads..."
                       value={manualSearchTerm}
                       onChange={(e) => { setManualSearchTerm(e.target.value); debouncedManualSearch(e.target.value); }}
-                      style={{
-                        flex: '1',
-                        padding: '10px 14px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.15)',
-                        backgroundColor: 'rgba(255,255,255,0.05)',
-                        color: 'inherit',
-                        fontSize: '14px'
-                      }}
+                      style={{ flex: '1', minWidth: '200px', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.05)', color: 'inherit', fontSize: '14px' }}
                     />
-                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', whiteSpace: 'nowrap' }}>
-                      {isLoadingManualLeads ? '⏳' : `${manualTotalCount} enriched leads`}
+                    <select value={manualFilterContacted} onChange={(e) => { setManualFilterContacted(e.target.value); setManualPage(0); }}
+                      style={{ padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontSize: '14px' }}>
+                      <option value="all">All Enriched</option>
+                      <option value="not_contacted">Not Contacted</option>
+                      <option value="contacted">Already Contacted</option>
+                    </select>
+                    <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
+                      {isLoadingManual ? '⏳' : `${manualTotalCount} leads`}
                     </span>
                   </div>
 
                   <div className="leads-grid">
                     {manualLeads.map(lead => (
-                      <div
-                        key={lead.id}
-                        className={`lead-enrich-card ${selectedLeadForManual?.id === lead.id ? 'selected' : ''}`}
-                        onClick={() => {
-                          setSelectedLeadForManual(lead);
-                          setManualEmail('');
-                          setManualContacts([]);
-                          setSelectedManualContacts([]);
-                        }}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <div className="lead-info">
-                          <h4>{lead.website}</h4>
-                          {lead.icp_fit && (
-                            <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>
-                              {lead.icp_fit}
-                            </span>
-                          )}
-                          {lead.country && (
-                            <span style={{
-                              display: 'inline-block',
-                              padding: '2px 8px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: '600',
-                              backgroundColor: 'rgba(255,255,255,0.1)',
-                              color: 'rgba(255,255,255,0.6)'
-                            }}>
-                              {lead.country === 'US (assumed)' ? '🇺🇸 US' : 
-                               lead.country === 'Canada' ? '🇨🇦 CA' : lead.country}
-                            </span>
-                          )}
-                        </div>
-                        {lead.industry && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry}</div>}
-                        {lead.fit_reason && <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.fit_reason}</div>}
+                      <div key={lead.id} onClick={() => { setSelectedLeadForManual(lead); setManualEmail(''); setManualContacts([]); setSelectedManualContacts([]); }}>
+                        <LeadCard lead={lead} selected={selectedLeadForManual?.id === lead.id} showContacted={true} />
                       </div>
                     ))}
                   </div>
 
-                  {/* Manual pagination */}
                   {manualTotalCount > MANUAL_PAGE_SIZE && (
                     <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '20px' }}>
-                      <button
-                        onClick={() => setManualPage(p => Math.max(0, p - 1))}
-                        disabled={manualPage === 0}
-                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}
-                      >⟨ Prev</button>
-                      <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>
-                        Page {manualPage + 1} of {Math.ceil(manualTotalCount / MANUAL_PAGE_SIZE)}
-                      </span>
-                      <button
-                        onClick={() => setManualPage(p => p + 1)}
-                        disabled={(manualPage + 1) * MANUAL_PAGE_SIZE >= manualTotalCount}
-                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}
-                      >Next ⟩</button>
+                      <button onClick={() => setManualPage(p => Math.max(0, p - 1))} disabled={manualPage === 0}
+                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>⟨ Prev</button>
+                      <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>Page {manualPage + 1} of {Math.ceil(manualTotalCount / MANUAL_PAGE_SIZE)}</span>
+                      <button onClick={() => setManualPage(p => p + 1)} disabled={(manualPage + 1) * MANUAL_PAGE_SIZE >= manualTotalCount}
+                        style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>Next ⟩</button>
                     </div>
                   )}
 
-                  {/* Selected lead + proceed button */}
                   {selectedLeadForManual && (
-                    <div style={{
-                      position: 'sticky',
-                      bottom: '0',
-                      marginTop: '20px',
-                      padding: '16px',
-                      borderRadius: '12px',
-                      backgroundColor: 'rgba(139,92,246,0.15)',
-                      border: '1px solid rgba(139,92,246,0.4)',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}>
+                    <div style={{ position: 'sticky', bottom: 0, marginTop: '20px', padding: '16px', borderRadius: '12px', backgroundColor: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.4)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
                         <strong>{selectedLeadForManual.website}</strong>
-                        {selectedLeadForManual.icp_fit && (
-                          <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>
-                            {selectedLeadForManual.icp_fit}
-                          </span>
-                        )}
-                        {selectedLeadForManual.industry && (
-                          <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>
-                        )}
+                        {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
+                        {selectedLeadForManual.industry && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>}
                       </div>
-                      <button
-                        className="primary-btn"
-                        onClick={() => setManualStep(2)}
-                      >
-                        Next: Generate Email →
-                      </button>
+                      <button className="primary-btn" onClick={() => setManualStep(2)}>Next: Generate Email →</button>
                     </div>
                   )}
                 </>
@@ -1310,258 +653,93 @@ timbuk2.com</pre>
 
               {/* Step 2: Generate Email */}
               {manualStep === 2 && selectedLeadForManual && (
-                <div style={{
-                  maxWidth: '700px',
-                  margin: '0 auto',
-                  padding: '24px',
-                  borderRadius: '12px',
-                  backgroundColor: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.1)'
-                }}>
+                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
                   <div style={{ marginBottom: '20px' }}>
                     <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
                     <span style={{ opacity: 0.6, fontSize: '13px' }}>{selectedLeadForManual.industry} · {selectedLeadForManual.icp_fit} fit</span>
                   </div>
-
                   {!manualEmail ? (
-                    <button
-                      className="primary-btn"
-                      onClick={() => generateManualEmail(selectedLeadForManual)}
-                      disabled={isGenerating}
-                      style={{ width: '100%', padding: '14px' }}
-                    >
+                    <button className="primary-btn" onClick={handleGenerateEmail} disabled={isGenerating} style={{ width: '100%', padding: '14px' }}>
                       {isGenerating ? '⏳ Generating with AI...' : '✨ Generate Personalized Email'}
                     </button>
                   ) : (
                     <>
-                      <div style={{
-                        backgroundColor: 'rgba(0,0,0,0.3)',
-                        borderRadius: '8px',
-                        padding: '16px',
-                        marginBottom: '16px',
-                        position: 'relative'
-                      }}>
-                        <button
-                          onClick={() => navigator.clipboard.writeText(manualEmail)}
-                          style={{
-                            position: 'absolute',
-                            top: '8px',
-                            right: '8px',
-                            padding: '4px 10px',
-                            borderRadius: '4px',
-                            border: '1px solid rgba(255,255,255,0.2)',
-                            backgroundColor: 'transparent',
-                            color: 'rgba(255,255,255,0.6)',
-                            cursor: 'pointer',
-                            fontSize: '12px'
-                          }}
-                        >📋 Copy</button>
+                      <div style={{ backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '16px', marginBottom: '16px', position: 'relative' }}>
+                        <button onClick={() => navigator.clipboard.writeText(manualEmail)}
+                          style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 10px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.2)', backgroundColor: 'transparent', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '12px' }}>📋 Copy</button>
                         <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: '13px', lineHeight: '1.5' }}>{manualEmail}</pre>
                       </div>
                       <div style={{ display: 'flex', gap: '12px' }}>
-                        <button
-                          className="secondary-btn"
-                          onClick={() => generateManualEmail(selectedLeadForManual)}
-                          disabled={isGenerating}
-                        >
-                          🔄 Regenerate
-                        </button>
-                        <button
-                          className="primary-btn"
-                          onClick={() => {
-                            setManualStep(3);
-                            findManualContacts(selectedLeadForManual);
-                          }}
-                          style={{ flex: 1 }}
-                        >
-                          Next: Find Contacts →
-                        </button>
+                        <button className="secondary-btn" onClick={handleGenerateEmail} disabled={isGenerating}>🔄 Regenerate</button>
+                        <button className="primary-btn" onClick={() => { setManualStep(3); handleFindContacts(); }} style={{ flex: 1 }}>Next: Find Contacts →</button>
                       </div>
                     </>
                   )}
-
-                  <button
-                    onClick={() => setManualStep(1)}
-                    style={{
-                      marginTop: '16px',
-                      background: 'none',
-                      border: 'none',
-                      color: 'rgba(255,255,255,0.4)',
-                      cursor: 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >← Back to lead selection</button>
+                  <button onClick={() => setManualStep(1)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to lead selection</button>
                 </div>
               )}
 
               {/* Step 3: Find Contacts */}
               {manualStep === 3 && selectedLeadForManual && (
-                <div style={{
-                  maxWidth: '700px',
-                  margin: '0 auto',
-                  padding: '24px',
-                  borderRadius: '12px',
-                  backgroundColor: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.1)'
-                }}>
+                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
                   <div style={{ marginBottom: '20px' }}>
                     <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
                     <span style={{ opacity: 0.6, fontSize: '13px' }}>Select contacts to reach out to</span>
                   </div>
-
-                  {isLoadingManualContacts ? (
-                    <div style={{ textAlign: 'center', padding: '40px', opacity: 0.6 }}>
-                      🔍 Searching for contacts at {selectedLeadForManual.website}...
-                    </div>
+                  {isLoadingContacts ? (
+                    <div style={{ textAlign: 'center', padding: '40px', opacity: 0.6 }}>🔍 Searching for contacts...</div>
                   ) : manualContacts.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '40px' }}>
                       <p style={{ opacity: 0.6 }}>No contacts found for {selectedLeadForManual.website}</p>
-                      <button
-                        className="secondary-btn"
-                        onClick={() => findManualContacts(selectedLeadForManual)}
-                      >🔄 Try Again</button>
+                      <button className="secondary-btn" onClick={handleFindContacts}>🔄 Try Again</button>
                     </div>
                   ) : (
                     <>
-                      <p style={{ marginBottom: '12px', opacity: 0.7 }}><strong>{manualContacts.length}</strong> contacts found — select who to email:</p>
+                      <p style={{ marginBottom: '12px', opacity: 0.7 }}><strong>{manualContacts.length}</strong> contacts found:</p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
-                        {manualContacts.map(contact => (
-                          <div
-                            key={contact.email}
-                            onClick={() => toggleManualContact(contact.email)}
-                            style={{
-                              padding: '12px 16px',
-                              borderRadius: '8px',
-                              border: selectedManualContacts.includes(contact.email) 
-                                ? '1px solid rgba(139,92,246,0.6)' 
-                                : '1px solid rgba(255,255,255,0.1)',
-                              backgroundColor: selectedManualContacts.includes(contact.email)
-                                ? 'rgba(139,92,246,0.15)'
-                                : 'rgba(255,255,255,0.03)',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '12px'
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedManualContacts.includes(contact.email)}
-                              onChange={() => toggleManualContact(contact.email)}
-                            />
+                        {manualContacts.map(c => (
+                          <div key={c.email} onClick={() => toggleContact(c.email)}
+                            style={{ padding: '12px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px',
+                              border: selectedManualContacts.includes(c.email) ? '1px solid rgba(139,92,246,0.6)' : '1px solid rgba(255,255,255,0.1)',
+                              backgroundColor: selectedManualContacts.includes(c.email) ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.03)' }}>
+                            <input type="checkbox" checked={selectedManualContacts.includes(c.email)} readOnly />
                             <div style={{ flex: 1 }}>
-                              <strong>{contact.name}</strong>
-                              <div style={{ fontSize: '12px', opacity: 0.7 }}>{contact.title}</div>
-                              <div style={{ fontSize: '12px', opacity: 0.5 }}>{contact.email}</div>
+                              <strong>{c.name}</strong>
+                              <div style={{ fontSize: '12px', opacity: 0.7 }}>{c.title}</div>
+                              <div style={{ fontSize: '12px', opacity: 0.5 }}>{c.email}</div>
                             </div>
-                            {contact.matchLevel && (
-                              <span className={`match-badge ${contact.matchClass}`}>
-                                {contact.matchEmoji} {contact.matchLevel}
-                              </span>
-                            )}
+                            {c.matchLevel && <span className={`match-badge ${c.matchClass}`}>{c.matchEmoji} {c.matchLevel}</span>}
                           </div>
                         ))}
                       </div>
-
-                      <button
-                        className="primary-btn"
-                        onClick={() => setManualStep(4)}
-                        disabled={selectedManualContacts.length === 0}
-                        style={{ width: '100%', padding: '14px' }}
-                      >
-                        Next: Export {selectedManualContacts.length} Contact(s) to Gmail →
+                      <button className="primary-btn" onClick={() => setManualStep(4)} disabled={selectedManualContacts.length === 0} style={{ width: '100%', padding: '14px' }}>
+                        Next: Export {selectedManualContacts.length} Contact(s) →
                       </button>
                     </>
                   )}
-
-                  <button
-                    onClick={() => setManualStep(2)}
-                    style={{
-                      marginTop: '16px',
-                      background: 'none',
-                      border: 'none',
-                      color: 'rgba(255,255,255,0.4)',
-                      cursor: 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >← Back to email</button>
+                  <button onClick={() => setManualStep(2)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to email</button>
                 </div>
               )}
 
-              {/* Step 4: Export to Gmail */}
+              {/* Step 4: Export */}
               {manualStep === 4 && selectedLeadForManual && (
-                <div style={{
-                  maxWidth: '700px',
-                  margin: '0 auto',
-                  padding: '24px',
-                  borderRadius: '12px',
-                  backgroundColor: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  textAlign: 'center'
-                }}>
+                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}>
                   <h3 style={{ marginBottom: '20px' }}>Ready to Send!</h3>
-                  
-                  <div style={{
-                    padding: '16px',
-                    borderRadius: '8px',
-                    backgroundColor: 'rgba(0,0,0,0.2)',
-                    marginBottom: '20px',
-                    textAlign: 'left'
-                  }}>
-                    <div style={{ marginBottom: '12px' }}>
-                      <strong>Lead:</strong> {selectedLeadForManual.website}
-                    </div>
-                    <div style={{ marginBottom: '12px' }}>
-                      <strong>Recipients ({selectedManualContacts.length}):</strong>
-                      <div style={{ fontSize: '13px', opacity: 0.7, marginTop: '4px' }}>
-                        {selectedManualContacts.join(', ')}
-                      </div>
-                    </div>
-                    <div>
-                      <strong>Email Preview:</strong>
-                      <pre style={{ fontSize: '12px', opacity: 0.7, whiteSpace: 'pre-wrap', marginTop: '4px' }}>
-                        {manualEmail.substring(0, 200)}...
-                      </pre>
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)', marginBottom: '20px', textAlign: 'left' }}>
+                    <div style={{ marginBottom: '12px' }}><strong>Lead:</strong> {selectedLeadForManual.website}</div>
+                    <div style={{ marginBottom: '12px' }}><strong>Recipients ({selectedManualContacts.length}):</strong>
+                      <div style={{ fontSize: '13px', opacity: 0.7, marginTop: '4px' }}>{selectedManualContacts.join(', ')}</div>
                     </div>
                   </div>
-
-                  <button
-                    className="primary-btn"
-                    onClick={() => {
-                      exportToGmail();
-                      // Reset for next lead
-                      setTimeout(() => {
-                        setManualStep(1);
-                        setSelectedLeadForManual(null);
-                        setManualEmail('');
-                        setManualContacts([]);
-                        setSelectedManualContacts([]);
-                      }, 1000);
-                    }}
-                    style={{ width: '100%', padding: '16px', fontSize: '16px' }}
-                  >
-                    📧 Open in Gmail
-                  </button>
-                  <p style={{ marginTop: '8px', opacity: 0.5, fontSize: '12px' }}>
-                    Opens Gmail with contacts in BCC and your generated email
-                  </p>
-
-                  <button
-                    onClick={() => setManualStep(3)}
-                    style={{
-                      marginTop: '16px',
-                      background: 'none',
-                      border: 'none',
-                      color: 'rgba(255,255,255,0.4)',
-                      cursor: 'pointer',
-                      fontSize: '13px'
-                    }}
-                  >← Back to contacts</button>
+                  <button className="primary-btn" onClick={handleExportToGmail} style={{ width: '100%', padding: '16px', fontSize: '16px' }}>📧 Open in Gmail</button>
+                  <p style={{ marginTop: '8px', opacity: 0.5, fontSize: '12px' }}>Opens Gmail with contacts in BCC and your email</p>
+                  <button onClick={() => setManualStep(3)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to contacts</button>
                 </div>
               )}
             </div>
           )}
 
+          {/* ═══ MANAGE AGENT ═══ */}
           {activeView === 'agent' && (
             <div className="view-container">
               <div className="agent-header">
@@ -1570,197 +748,25 @@ timbuk2.com</pre>
                   <div className={`status-indicator ${agentSettings?.agent_enabled ? 'active' : 'paused'}`}>
                     {agentSettings?.agent_enabled ? '🟢 Active' : '⏸️ Paused'}
                   </div>
-                  <button
-                    className="toggle-agent-btn"
-                    onClick={() => updateAgentSettings({ agent_enabled: !agentSettings?.agent_enabled })}
-                  >
+                  <button className="toggle-agent-btn" onClick={() => updateAgentSettings({ agent_enabled: !agentSettings?.agent_enabled })}>
                     {agentSettings?.agent_enabled ? 'Pause Agent' : 'Start Agent'}
                   </button>
                 </div>
               </div>
-             <AgentMonitor />
-              <div className="agent-settings">
-                <div className="settings-card">
-                  <h3>Email Limits</h3>
-                  <div className="setting-item">
-                    <label>Max Emails Per Day</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.max_emails_per_day || 50}
-                      onChange={(e) => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
-                    />
-                  </div>
-                  <div className="setting-item">
-                    <label>Minutes Between Emails</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.min_minutes_between_emails || 15}
-                      onChange={(e) => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
-                    />
-                  </div>
-                  <div className="setting-item">
-                    <label>Send Hours (EST)</label>
-                    <div className="hours-input">
-                      <input
-                        type="number"
-                        min="0"
-                        max="23"
-                        value={agentSettings?.send_hours_start || 9}
-                        onChange={(e) => updateAgentSettings({ send_hours_start: parseInt(e.target.value) })}
-                        style={{ width: '80px' }}
-                      />
-                      <span>to</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="23"
-                        value={agentSettings?.send_hours_end || 17}
-                        onChange={(e) => updateAgentSettings({ send_hours_end: parseInt(e.target.value) })}
-                        style={{ width: '80px' }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="settings-card">
-                  <h3>Contact Limits</h3>
-                  <div className="setting-item">
-                    <label>Max Contacts Per Lead</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.max_contacts_per_lead || 3}
-                      onChange={(e) => updateAgentSettings({ max_contacts_per_lead: parseInt(e.target.value) })}
-                    />
-                    <p className="setting-hint">
-                      Maximum number of people to contact at each company
-                    </p>
-                  </div>
-                  <div className="setting-item">
-                    <label>Max Per Company Per Day</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.max_contacts_per_company_per_day || 1}
-                      onChange={(e) => updateAgentSettings({ max_contacts_per_company_per_day: parseInt(e.target.value) })}
-                    />
-                    <p className="setting-hint">
-                      Prevents spamming multiple people at the same company in one day
-                    </p>
-                  </div>
-                </div>
-
-                <div className="settings-card">
-                  <h3>Contact Quality</h3>
-                  <div className="setting-item">
-                    <label>Minimum Match Level</label>
-                    <select
-                      value={agentSettings?.min_match_level || 'Good Match'}
-                      onChange={(e) => updateAgentSettings({ min_match_level: e.target.value })}
-                    >
-                      <option value="Best Match">Best Match Only</option>
-                      <option value="Great Match">Great Match or Better</option>
-                      <option value="Good Match">Good Match or Better</option>
-                      <option value="Possible Match">All Matches</option>
-                    </select>
-                    <p className="setting-hint">
-                      Only contact decision makers that meet this quality threshold
-                    </p>
-                  </div>
-                  <div className="setting-item">
-                    <label>Minimum Match Score</label>
-                    <input
-                      type="number"
-                      value={agentSettings?.min_match_score || 40}
-                      onChange={(e) => updateAgentSettings({ min_match_score: parseInt(e.target.value) })}
-                    />
-                    <p className="setting-hint">
-                      Minimum scoring threshold (0-200+). Higher scores = better title match.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="settings-card">
-                  <h3>ICP Fit Filter</h3>
-                  <div className="checkbox-group">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={agentSettings?.allowed_icp_fits?.includes('HIGH')}
-                        onChange={(e) => {
-                          const fits = agentSettings?.allowed_icp_fits || [];
-                          const newFits = e.target.checked
-                            ? [...fits, 'HIGH']
-                            : fits.filter(f => f !== 'HIGH');
-                          updateAgentSettings({ allowed_icp_fits: newFits });
-                        }}
-                      />
-                      HIGH Only
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={agentSettings?.allowed_icp_fits?.includes('MEDIUM')}
-                        onChange={(e) => {
-                          const fits = agentSettings?.allowed_icp_fits || [];
-                          const newFits = e.target.checked
-                            ? [...fits, 'MEDIUM']
-                            : fits.filter(f => f !== 'MEDIUM');
-                          updateAgentSettings({ allowed_icp_fits: newFits });
-                        }}
-                      />
-                      Include MEDIUM
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={agentSettings?.allowed_icp_fits?.includes('LOW')}
-                        onChange={(e) => {
-                          const fits = agentSettings?.allowed_icp_fits || [];
-                          const newFits = e.target.checked
-                            ? [...fits, 'LOW']
-                            : fits.filter(f => f !== 'LOW');
-                          updateAgentSettings({ allowed_icp_fits: newFits });
-                        }}
-                      />
-                      Include LOW
-                    </label>
-                  </div>
-                  <p className="setting-hint">
-                    Agent will only work on leads that match selected ICP fit levels
-                  </p>
-                </div>
-
-                <div className="settings-card">
-                  <h3>Approval Mode</h3>
-                  <label className="toggle-label">
-                    <input
-                      type="checkbox"
-                      checked={agentSettings?.auto_send || false}
-                      onChange={(e) => updateAgentSettings({ auto_send: e.target.checked })}
-                    />
-                    <span>Auto-send emails (no manual approval)</span>
-                  </label>
-                  <p className="setting-hint">
-                    {agentSettings?.auto_send
-                      ? '⚠️ Emails will send automatically'
-                      : '✅ Emails require your approval'}
-                  </p>
-                </div>
-              </div>
-
+              <AgentMonitor />
               <div className="activity-section">
                 <h3>Recent Activity</h3>
                 <div className="activity-list">
-                  {activityLog.slice(0, 10).map(activity => (
-                    <div key={activity.id} className="activity-item">
+                  {activityLog.slice(0, 15).map(a => (
+                    <div key={a.id} className="activity-item">
                       <span className="activity-icon">
-                        {activity.activity_type === 'lead_enriched' && '🔍'}
-                        {activity.activity_type === 'email_sent' && '📤'}
-                        {activity.activity_type === 'email_failed' && '❌'}
+                        {a.activity_type === 'lead_enriched' && '🔍'}
+                        {a.activity_type === 'email_sent' && '📤'}
+                        {a.activity_type === 'email_exported' && '📧'}
+                        {a.activity_type === 'email_failed' && '❌'}
                       </span>
-                      <span className="activity-summary">{activity.summary}</span>
-                      <span className="activity-time">
-                        {new Date(activity.created_at).toLocaleTimeString()}
-                      </span>
+                      <span className="activity-summary">{a.summary}</span>
+                      <span className="activity-time">{new Date(a.created_at).toLocaleTimeString()}</span>
                     </div>
                   ))}
                 </div>
@@ -1768,69 +774,50 @@ timbuk2.com</pre>
             </div>
           )}
 
+          {/* ═══ PIPELINE ═══ */}
           {activeView === 'pipeline' && (
             <div className="view-container">
               <h2>📊 Lead Pipeline</h2>
-              
               <div className="pipeline-filters">
-                <input
-                  type="text"
-                  placeholder="Search leads..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="search-input"
-                />
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="filter-select"
-                >
-                  <option value="all">All Status ({leads.length})</option>
-                  <option value="new">New ({getStatusCount('new')})</option>
-                  <option value="enriched">Enriched ({getStatusCount('enriched')})</option>
-                  <option value="contacted">Contacted ({getStatusCount('contacted')})</option>
-                  <option value="qualified">Qualified ({getStatusCount('qualified')})</option>
+                <input type="text" placeholder="Search leads..." value={pipelineSearch} onChange={(e) => { setPipelineSearch(e.target.value); setPipelinePage(0); }} className="search-input" />
+                <select value={pipelineFilter} onChange={(e) => { setPipelineFilter(e.target.value); setPipelinePage(0); }} className="filter-select">
+                  <option value="all">All ({pipelineTotalCount})</option>
+                  <option value="new">New</option>
+                  <option value="enriched">Enriched</option>
+                  <option value="contacted">Contacted</option>
                 </select>
               </div>
-
               <div className="pipeline-table">
                 <table>
                   <thead>
-                    <tr>
-                      <th>Website</th>
-                      <th>Status</th>
-                      <th>ICP Fit</th>
-                      <th>Country</th>
-                      <th>Source</th>
-                      <th>Created</th>
-                    </tr>
+                    <tr><th>Website</th><th>Status</th><th>ICP Fit</th><th>Industry</th><th>Country</th><th>Contacted</th></tr>
                   </thead>
                   <tbody>
-                    {getFilteredLeads().map(lead => (
+                    {pipelineLeads.map(lead => (
                       <tr key={lead.id}>
                         <td className="website-cell">{lead.website}</td>
-                        <td>
-                          <span className={`status-badge ${lead.status}`}>
-                            {lead.status}
-                          </span>
-                        </td>
-                        <td>
-                          {lead.icp_fit && (
-                            <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>
-                              {lead.icp_fit}
-                            </span>
-                          )}
-                        </td>
+                        <td><span className={`status-badge ${lead.status}`}>{lead.status}</span></td>
+                        <td>{lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}</td>
+                        <td style={{ fontSize: '12px' }}>{lead.industry || '—'}</td>
                         <td>{lead.country || '—'}</td>
-                        <td>{lead.source}</td>
-                        <td>{new Date(lead.created_at).toLocaleDateString()}</td>
+                        <td style={{ fontSize: '12px' }}>{lead.contacted_at?.length ? formatContactedDates(lead.contacted_at) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {pipelineTotalCount > PIPELINE_PAGE_SIZE && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '20px' }}>
+                  <button onClick={() => setPipelinePage(p => Math.max(0, p - 1))} disabled={pipelinePage === 0}
+                    style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>⟨ Prev</button>
+                  <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>Page {pipelinePage + 1} of {Math.ceil(pipelineTotalCount / PIPELINE_PAGE_SIZE)}</span>
+                  <button onClick={() => setPipelinePage(p => p + 1)} disabled={(pipelinePage + 1) * PIPELINE_PAGE_SIZE >= pipelineTotalCount}
+                    style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>Next ⟩</button>
+                </div>
+              )}
             </div>
           )}
+
         </main>
       </div>
     </div>
