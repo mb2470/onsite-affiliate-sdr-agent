@@ -660,6 +660,17 @@ function App() {
                     </span>
                   </div>
 
+                  {selectedLeadForManual && (
+                    <div style={{ position: 'sticky', top: 0, zIndex: 10, marginBottom: '16px', padding: '16px', borderRadius: '12px', backgroundColor: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backdropFilter: 'blur(12px)' }}>
+                      <div>
+                        <strong style={{ fontSize: '16px' }}>{selectedLeadForManual.website}</strong>
+                        {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
+                        {selectedLeadForManual.industry && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>}
+                      </div>
+                      <button className="primary-btn" onClick={() => setManualStep(2)} style={{ whiteSpace: 'nowrap' }}>Next: Generate Email →</button>
+                    </div>
+                  )}
+
                   <div className="leads-grid">
                     {manualLeads.map(lead => (
                       <div key={lead.id} onClick={() => { setSelectedLeadForManual(lead); setManualEmail(''); setManualContacts([]); setSelectedManualContacts([]); }}>
@@ -675,17 +686,6 @@ function App() {
                       <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>Page {manualPage + 1} of {Math.ceil(manualTotalCount / MANUAL_PAGE_SIZE)}</span>
                       <button onClick={() => setManualPage(p => p + 1)} disabled={(manualPage + 1) * MANUAL_PAGE_SIZE >= manualTotalCount}
                         style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>Next ⟩</button>
-                    </div>
-                  )}
-
-                  {selectedLeadForManual && (
-                    <div style={{ position: 'sticky', bottom: 0, marginTop: '20px', padding: '16px', borderRadius: '12px', backgroundColor: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.4)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <strong>{selectedLeadForManual.website}</strong>
-                        {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
-                        {selectedLeadForManual.industry && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>}
-                      </div>
-                      <button className="primary-btn" onClick={() => setManualStep(2)}>Next: Generate Email →</button>
                     </div>
                   )}
                 </>
