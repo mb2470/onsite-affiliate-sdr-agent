@@ -97,8 +97,8 @@ export const enrichLead = async (lead) => {
     headquarters: parseField(research, 'Headquarters'),
     google_shopping: parseField(research, 'Google Shopping'),
     fit_reason: parseField(research, 'Fit Reason'),
-    decision_makers: parseField(research, 'Decision Makers')?.replace(/[{}]/g, '') || null,
-    pain_points: parseField(research, 'Pain Points')?.replace(/[{}]/g, '') || null,
+    decision_makers: parseField(research, 'Decision Makers')?.replace(/[{}]/g, '').replace(/,/g, ';') || null,
+    pain_points: parseField(research, 'Pain Points')?.replace(/[{}]/g, '').replace(/,/g, ';') || null,
   };
 
   // Save to Supabase — use individual set to avoid array parsing issues
