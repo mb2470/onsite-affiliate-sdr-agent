@@ -213,7 +213,7 @@ function App() {
       }
 
       const from = p * MANUAL_PAGE_SIZE;
-      query = query.order('icp_fit', { ascending: true }).order('created_at', { ascending: false }).range(from, from + MANUAL_PAGE_SIZE - 1);
+      query = query.order('has_contacts', { ascending: false, nullsFirst: false }).order('icp_fit', { ascending: true }).order('created_at', { ascending: false }).range(from, from + MANUAL_PAGE_SIZE - 1);
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -411,6 +411,16 @@ function App() {
       {showContacted && lead.contacted_at && lead.contacted_at.length > 0 && (
         <div style={{ marginTop: '4px', fontSize: '10px', color: '#4ade80' }}>
           📧 Contacted: {formatContactedDates(lead.contacted_at)}
+        </div>
+      )}
+      {lead.has_contacts && (
+        <div style={{ marginTop: '4px', fontSize: '10px', color: '#8b5cf6' }}>
+          📧 {lead.contact_name || 'Contact available'}{lead.contact_email ? ` · ${lead.contact_email}` : ''}
+        </div>
+      )}
+      {!lead.has_contacts && (
+        <div style={{ marginTop: '4px', fontSize: '10px', color: 'rgba(255,255,255,0.25)' }}>
+          ⚠️ No contact email
         </div>
       )}
     </div>
