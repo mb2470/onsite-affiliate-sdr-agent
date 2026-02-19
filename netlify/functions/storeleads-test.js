@@ -10,8 +10,8 @@ exports.handler = async (event) => {
   const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
 
   try {
-    // Test single domain lookup (not bulk)
-    const response = await fetch('https://storeleads.app/json/api/v1/all/domain/www.fashionnova.com?fields=name,contacts', {
+    // Test single domain lookup without fields filter
+    const response = await fetch('https://storeleads.app/json/api/v1/all/domain/www.fashionnova.com', {
       headers: { 'Authorization': `Bearer ${STORELEADS_API_KEY}` },
     });
 
