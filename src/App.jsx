@@ -237,7 +237,7 @@ function App() {
     if (!selectedLeadForManual) return;
     setIsGenerating(true);
     try {
-      const email = await generateEmail(selectedLeadForManual);
+      const email = await generateEmail(selectedLeadForManual, selectedLeadForManual.contact_name);
       setManualEmail(email);
     } catch (e) {
       console.error(e);
@@ -752,7 +752,7 @@ function App() {
                   ) : (
                     <>
                       <p style={{ marginBottom: '12px', opacity: 0.7 }}><strong>{manualContacts.length}</strong> contacts found:</p>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px', maxHeight: '400px', overflowY: 'auto' }}>
                         {manualContacts.map(c => (
                           <div key={c.email} onClick={() => toggleContact(c.email)}
                             style={{ padding: '12px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px',
