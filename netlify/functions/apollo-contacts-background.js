@@ -94,7 +94,7 @@ exports.handler = async (event, context) => {
       .eq('has_contacts', false)
       .eq('status', 'enriched')
       .order('created_at', { ascending: true })
-      .limit(15); // ~15 leads × 6 credits = ~90 credits (stay under 100/month)
+      .limit(125); // Process all HIGH leads without contacts
 
     if (error) throw error;
 
@@ -131,7 +131,7 @@ exports.handler = async (event, context) => {
           .filter(p => p.has_email)
           .map(p => ({ ...p, _score: scoreTitleRelevance(p.title) }))
           .sort((a, b) => b._score - a._score)
-          .slice(0, 5); // Enrich top 5 max
+          .slice(0, 3); // Enrich top 3 max (~4 credits per lead)
 
         if (withEmail.length === 0) {
           console.log(`  ❌ No people with emails found`);
