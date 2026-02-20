@@ -106,12 +106,38 @@ exports.handler = async (event) => {
 
     // Deduplicate
     bouncedEmails = [...new Set(bouncedEmails)];
-    console.log(`🚫 Bounced emails: ${bouncedEmails.join(', ')}`);
+    console.log(`🚫 Bounced emails found: ${bouncedEmails.join(', ')}`);
+
+    // Filter out bounces we already processed (already logged in activity_log)
+    const { data: alreadyLogged } = await supabase
+      .from('activity_log')
+      .select('summary')
+      .eq('activity_type', 'email_bounced')
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    const alreadyProcessed = new Set(
+      (alreadyLogged || []).map(a => {
+        const match = a.summary.match(/Bounced:\s+(\S+@\S+)/);
+        return match ? match[1].toLowerCase() : '';
+      }).filter(Boolean)
+    );
+
+    const newBounces = bouncedEmails.filter(e => !alreadyProcessed.has(e));
+    console.log(`📋 ${bouncedEmails.length} total bounces, ${newBounces.length} new (${bouncedEmails.length - newBounces.length} already processed)`);
+
+    if (newBounces.length === 0) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ bounces: bouncedEmails.length, new: 0, cleaned: 0, message: 'All bounces already processed', bouncedEmails: [] }),
+      };
+    }
 
     let cleaned = 0;
     let leadsReset = [];
 
-    for (const email of bouncedEmails) {
+    for (const email of newBounces) {
       // Remove from contact_database
       const { data: deleted } = await supabase
         .from('contact_database')
@@ -177,7 +203,8 @@ exports.handler = async (event) => {
 
     const summary = {
       bouncesFound: messages.length,
-      bouncedEmails,
+      bouncedEmails: newBounces,
+      alreadyProcessed: bouncedEmails.length - newBounces.length,
       contactsRemoved: cleaned,
       leadsReset,
     };
