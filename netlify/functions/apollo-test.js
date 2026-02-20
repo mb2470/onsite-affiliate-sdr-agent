@@ -15,15 +15,22 @@ exports.handler = async (event) => {
 
     console.log(`🔍 Testing Apollo for: ${domain}`);
 
-    // Step 1: Search
+    // Step 1: Search — find actual employees at this company
     const searchRes = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': APOLLO_API_KEY },
       body: JSON.stringify({
         organization_domains: [domain],
-        person_titles: ['Marketing', 'Influencer', 'Creator', 'Affiliate', 'Partnership',
-          'Ecommerce', 'E-Commerce', 'Digital', 'Growth', 'Brand', 'Content', 'Social Media',
-          'CMO', 'CEO', 'Founder'],
+        person_titles: ['VP Marketing', 'Head of Marketing', 'Director of Marketing',
+          'VP Ecommerce', 'Head of Ecommerce', 'Director of Ecommerce',
+          'VP Digital', 'Head of Digital', 'Head of Growth',
+          'CMO', 'Chief Marketing Officer',
+          'VP Brand', 'Director of Brand', 'Head of Brand',
+          'Director of Partnerships', 'Head of Partnerships',
+          'Director of Content', 'Head of Content',
+          'CEO', 'Founder', 'Co-Founder', 'President'],
+        organization_num_employees_ranges: [],
+        contact_email_status: ['verified', 'guessed', 'likely'],
         per_page: 25,
       }),
     });
