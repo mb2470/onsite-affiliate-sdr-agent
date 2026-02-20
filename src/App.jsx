@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
 import AgentMonitor from './AgentMonitor';
+import Login from './Login';
 import { supabase } from './supabaseClient';
 import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
 import { enrichLeads } from './services/enrichService';
@@ -9,6 +10,53 @@ import { findContacts } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
 
 function App() {
+  // Auth state
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    // Check current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        background: 'linear-gradient(170deg, #01081e 0%, #070e24 50%, #01081e 100%)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: "'Raleway', sans-serif", color: '#f6f6f7',
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '28px', fontFamily: "'Barlow', sans-serif", fontWeight: 800,
+            background: 'linear-gradient(135deg, #9015ed, #245ef9)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+          }}>AI SDR Agent</div>
+          <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.3)', marginTop: '8px' }}>Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show login if not authenticated
+  if (!session) {
+    return <Login />;
+  }
+
+  return <AuthenticatedApp session={session} />;
+}
+
+function AuthenticatedApp({ session }) {
   // Global state
   const [activeView, setActiveView] = useState('add');
   const [totalLeadCount, setTotalLeadCount] = useState(0);
@@ -639,6 +687,14 @@ function App() {
                 ✓ No bounces
               </span>
             )}
+          </div>
+          <div style={{ marginLeft: '8px' }}>
+            <button onClick={() => supabase.auth.signOut()}
+              style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '11px', whiteSpace: 'nowrap', fontFamily: 'inherit', transition: 'all 0.15s' }}
+              onMouseEnter={(e) => { e.target.style.backgroundColor = 'rgba(255,255,255,0.08)'; e.target.style.color = 'rgba(255,255,255,0.7)'; }}
+              onMouseLeave={(e) => { e.target.style.backgroundColor = 'rgba(255,255,255,0.04)'; e.target.style.color = 'rgba(255,255,255,0.4)'; }}>
+              Sign Out
+            </button>
           </div>
         </div>
       </header>
