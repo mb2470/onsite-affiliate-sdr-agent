@@ -63,8 +63,120 @@ const parseField = (text, fieldName) => {
   return match ? match[1].trim() : null;
 };
 
-// Enrich a single lead
-export const enrichLead = async (lead) => {
+// ═══ ICP SCORING (same as StoreLeads/Apollo functions) ═══
+const TARGET_CATEGORIES = [
+  'apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
+  'home & garden', 'furniture', 'kitchen', 'decor', 'outdoor',
+  'sporting', 'fitness', 'travel',
+  'electronics', 'computers', 'phones',
+];
+
+function scoreICP(productCount, estimatedSales, categories, country) {
+  const factors = [];
+  const fitReason = [];
+
+  if (productCount >= 250) { factors.push('products'); fitReason.push(`Products: ${productCount}`); }
+  if (estimatedSales >= 100000000) { factors.push('sales'); fitReason.push(`Sales: $${(estimatedSales / 100).toLocaleString()}/mo`); }
+
+  const catText = (categories || []).join(' ').toLowerCase();
+  if (TARGET_CATEGORIES.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
+
+  const c = (country || '').toUpperCase();
+  const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA'].some(x => c.includes(x));
+
+  let icp_fit;
+  if (factors.length >= 3 && isUSCA) icp_fit = 'HIGH';
+  else if (factors.length >= 2) icp_fit = 'MEDIUM';
+  else icp_fit = 'LOW';
+
+  return { icp_fit, fitReason: fitReason.join('; ') };
+}
+
+// ═══ STEP 1: Try StoreLeads ═══
+async function tryStoreLeads(domain) {
+  try {
+    const res = await fetch(`/.netlify/functions/storeleads-single?domain=${encodeURIComponent(domain)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.domain) return null;
+
+    const productCount = data.product_count || 0;
+    const estimatedSales = data.estimated_sales || 0;
+    const categories = data.categories || [];
+    const country = data.country || '';
+
+    const { icp_fit, fitReason } = scoreICP(productCount, estimatedSales, categories, country);
+
+    return {
+      source: 'storeleads',
+      icp_fit,
+      fit_reason: fitReason,
+      industry: (categories[0] || '').replace(/^.*>/, '').trim() || null,
+      catalog_size: productCount >= 250 ? `Large (${productCount})` : productCount >= 100 ? `Medium (${productCount})` : `Small (${productCount})`,
+      country: country || null,
+      city: data.city || null,
+      state: data.state || null,
+      platform: data.platform || null,
+      product_count: productCount,
+      store_rank: data.rank || null,
+      estimated_sales: estimatedSales,
+      headquarters: [data.city, data.state, data.country].filter(Boolean).join(', ') || null,
+      research_notes: JSON.stringify({ source: 'storeleads', ...data }),
+    };
+  } catch (e) {
+    console.log(`StoreLeads miss for ${domain}:`, e.message);
+    return null;
+  }
+}
+
+// ═══ STEP 2: Try Apollo Org Enrichment ═══
+async function tryApollo(domain) {
+  try {
+    const res = await fetch(`/.netlify/functions/apollo-enrich-single`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.organization) return null;
+
+    const org = data.organization;
+    const revenue = org.annual_revenue || 0;
+    const employees = org.estimated_num_employees || 0;
+    const industry = (org.industry || '').toLowerCase();
+    const keywords = (org.keywords || []).join(' ').toLowerCase();
+
+    const factors = [];
+    const fitReason = [];
+    if (revenue >= 12000000) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
+    if (TARGET_CATEGORIES.some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
+    if (employees >= 50) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
+
+    const c = (org.country || '').toUpperCase();
+    const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA'].some(x => c.includes(x));
+    let icp_fit = factors.length >= 3 && isUSCA ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
+
+    return {
+      source: 'apollo',
+      icp_fit,
+      fit_reason: fitReason.join('; '),
+      industry: org.industry || null,
+      country: org.country || null,
+      city: org.city || null,
+      state: org.state || null,
+      headquarters: org.raw_address || null,
+      estimated_sales: revenue || null,
+      research_notes: JSON.stringify({ source: 'apollo', employees, revenue, industry: org.industry, keywords: org.keywords }),
+    };
+  } catch (e) {
+    console.log(`Apollo miss for ${domain}:`, e.message);
+    return null;
+  }
+}
+
+// ═══ STEP 3: Fall back to Claude AI ═══
+async function tryClaude(lead) {
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -75,20 +187,14 @@ export const enrichLead = async (lead) => {
     })
   });
 
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  if (!response.ok) throw new Error(`Claude API error: ${response.status}`);
 
   const data = await response.json();
-  
-  // Extract text (strips web search blocks)
   let research = data.text || '';
   if (!research && data.content && Array.isArray(data.content)) {
-    research = data.content
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('\n');
+    research = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
   }
 
-  // Parse all fields
   const parsed = {
     icp_fit: parseField(research, 'ICP Fit')?.toUpperCase() || null,
     industry: parseField(research, 'Industry'),
@@ -101,35 +207,71 @@ export const enrichLead = async (lead) => {
     pain_points: parseField(research, 'Pain Points')?.replace(/[{}]/g, '').replace(/,/g, ';') || null,
   };
 
-  // Save to Supabase — use individual set to avoid array parsing issues
-  const { error } = await supabase
-    .from('leads')
-    .update({
-      research_notes: research,
-      icp_fit: parsed.icp_fit,
-      industry: parsed.industry,
-      catalog_size: parsed.catalog_size,
-      sells_d2c: parsed.sells_d2c,
-      headquarters: parsed.headquarters,
-      google_shopping: parsed.google_shopping,
-      fit_reason: parsed.fit_reason,
-      decision_makers: parsed.decision_makers,
-      pain_points: parsed.pain_points,
-      status: 'enriched'
-    })
-    .eq('id', lead.id);
+  return { source: 'claude', ...parsed, research_notes: research };
+}
 
+// ═══ WATERFALL ENRICH: StoreLeads → Apollo → Claude ═══
+export const enrichLead = async (lead) => {
+  const domain = lead.website.replace(/^www\./, '');
+  let result = null;
+  let source = '';
+
+  // Step 1: StoreLeads (free, fast)
+  result = await tryStoreLeads(domain);
+  if (result) {
+    source = 'storeleads';
+    console.log(`✅ ${domain} enriched via StoreLeads → ${result.icp_fit}`);
+  }
+
+  // Step 2: Apollo (cheap, good company data)
+  if (!result) {
+    result = await tryApollo(domain);
+    if (result) {
+      source = 'apollo';
+      console.log(`✅ ${domain} enriched via Apollo → ${result.icp_fit}`);
+    }
+  }
+
+  // Step 3: Claude AI (expensive, most thorough)
+  if (!result) {
+    result = await tryClaude(lead);
+    source = 'claude';
+    console.log(`✅ ${domain} enriched via Claude AI → ${result.icp_fit}`);
+  }
+
+  // Save to Supabase
+  const update = {
+    research_notes: result.research_notes,
+    icp_fit: result.icp_fit,
+    industry: result.industry || null,
+    catalog_size: result.catalog_size || null,
+    sells_d2c: result.sells_d2c || null,
+    headquarters: result.headquarters || null,
+    google_shopping: result.google_shopping || null,
+    fit_reason: result.fit_reason || null,
+    decision_makers: result.decision_makers || null,
+    pain_points: result.pain_points || null,
+    country: result.country || null,
+    city: result.city || null,
+    state: result.state || null,
+    platform: result.platform || null,
+    product_count: result.product_count || null,
+    store_rank: result.store_rank || null,
+    estimated_sales: result.estimated_sales || null,
+    status: 'enriched',
+  };
+
+  const { error } = await supabase.from('leads').update(update).eq('id', lead.id);
   if (error) throw error;
 
-  // Log activity
   await logActivity(
     'lead_enriched',
     lead.id,
-    `Enriched ${lead.website} — ICP: ${parsed.icp_fit || 'Unknown'} | ${parsed.industry || ''} | D2C: ${parsed.sells_d2c || '?'} | Catalog: ${parsed.catalog_size || '?'} | GShop: ${parsed.google_shopping || '?'}`,
+    `Enriched ${lead.website} via ${source} — ICP: ${result.icp_fit || 'Unknown'} | ${result.industry || ''}`,
     'success'
   );
 
-  return { ...lead, ...parsed, research_notes: research, status: 'enriched' };
+  return { ...lead, ...update };
 };
 
 // Enrich multiple leads with progress callback
@@ -159,9 +301,9 @@ export const enrichLeads = async (leadIds, allLeads, onProgress) => {
       if (onProgress) onProgress(i + 1, leadIds.length, lead.website, 'failed', null);
     }
 
-    // Rate limit between calls (web search needs more time)
+    // Rate limit between calls
     if (i < leadIds.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
 
