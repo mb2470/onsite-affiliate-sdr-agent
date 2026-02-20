@@ -408,9 +408,57 @@ function App() {
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const websites = e.target.result.split('\n').slice(1).map(row => row.split(',')[0]?.trim()).filter(w => w);
-        if (!websites.length) { alert('No valid websites found'); return; }
-        const { added, skipped } = await bulkAddLeads(websites, 'csv_upload');
+        const lines = e.target.result.split('\n').filter(l => l.trim());
+        if (lines.length < 2) { alert('No data found in CSV'); setIsUploading(false); return; }
+
+        // Parse header
+        const headerLine = lines[0];
+        const headers = headerLine.split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+
+        // Map common column name variations
+        const colMap = {
+          'website': ['website', 'domain', 'url', 'site'],
+          'industry': ['industry', 'vertical', 'category', 'niche'],
+          'country': ['country', 'location', 'region'],
+          'sells_d2c': ['sells_d2c', 'selss_d2c', 'd2c', 'dtc', 'sells_dtc'],
+          'icp_fit': ['icp_fit', 'icp', 'fit', 'score'],
+          'headquarters': ['headquarters', 'hq', 'address'],
+          'platform': ['platform', 'ecommerce_platform'],
+          'catalog_size': ['catalog_size', 'products', 'product_count'],
+          'city': ['city'],
+          'state': ['state', 'province'],
+        };
+
+        // Find column indices
+        const colIdx = {};
+        for (const [field, aliases] of Object.entries(colMap)) {
+          const idx = headers.findIndex(h => aliases.includes(h));
+          if (idx !== -1) colIdx[field] = idx;
+        }
+
+        if (!('website' in colIdx)) { alert('No "website" column found in CSV'); setIsUploading(false); return; }
+
+        // Parse rows
+        const leads = [];
+        for (let i = 1; i < lines.length; i++) {
+          // Handle quoted CSV values
+          const row = lines[i].match(/(".*?"|[^",]+|(?<=,)(?=,))/g)?.map(v => v.replace(/^"|"$/g, '').trim()) || lines[i].split(',').map(v => v.trim());
+
+          const website = (row[colIdx.website] || '').toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/.*$/, '').trim();
+          if (!website || !website.includes('.')) continue;
+
+          const lead = { website };
+          for (const [field, idx] of Object.entries(colIdx)) {
+            if (field !== 'website' && row[idx]) {
+              lead[field] = row[idx].trim();
+            }
+          }
+          leads.push(lead);
+        }
+
+        if (!leads.length) { alert('No valid websites found'); setIsUploading(false); return; }
+
+        const { added, skipped } = await bulkAddLeads(leads, 'csv_upload');
         const count = await getTotalLeadCount();
         setTotalLeadCount(count);
         loadEnrichLeads();
@@ -623,7 +671,7 @@ function App() {
                 </div>
                 <div className="add-method-card">
                   <h3>Upload CSV</h3>
-                  <p>CSV with website column, one per row</p>
+                  <p>Requires <b>website</b> column. Also accepts: industry, country, sells_d2c, icp_fit, platform, city, state</p>
                   <label className="upload-btn">
                     {isUploading ? '⏳ Uploading...' : '📤 Choose CSV File'}
                     <input type="file" accept=".csv" onChange={handleCSVUpload} disabled={isUploading} style={{ display: 'none' }} />
