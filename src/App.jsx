@@ -1105,7 +1105,7 @@ function App() {
               <div className="activity-section" style={{ marginTop: '24px' }}>
                 <h3>Recent Activity</h3>
                 <div className="activity-list">
-                  {activityLog.slice(0, 15).map(a => (
+                  {activityLog.slice(0, 20).map(a => (
                     <div key={a.id} className="activity-item">
                       <span className="activity-icon">
                         {a.activity_type === 'lead_enriched' && '🔍'}
@@ -1115,6 +1115,15 @@ function App() {
                         {a.activity_type === 'email_bounced' && '🔄'}
                         {a.activity_type === 'autonomous_run' && '🤖'}
                         {a.activity_type === 'batch_send' && '📦'}
+                        {a.activity_type === 'apollo_discovery' && '🚀'}
+                        {a.activity_type === 'apollo_org_enrichment' && '🏢'}
+                        {a.activity_type === 'lead_discovery' && '🌐'}
+                        {a.activity_type === 'bulk_socials' && '📱'}
+                        {a.activity_type === 'prioritized_enrichment' && '⚡'}
+                        {a.activity_type === 'contact_matching' && '👥'}
+                        {a.activity_type === 'email_verified' && '✅'}
+                        {a.activity_type === 'bulk_enrichment' && '📊'}
+                        {!['lead_enriched','email_sent','email_exported','email_failed','email_bounced','autonomous_run','batch_send','apollo_discovery','apollo_org_enrichment','lead_discovery','bulk_socials','prioritized_enrichment','contact_matching','email_verified','bulk_enrichment'].includes(a.activity_type) && '📋'}
                       </span>
                       <span className="activity-summary">{a.summary}</span>
                       <span className="activity-time">{new Date(a.created_at).toLocaleTimeString()}</span>
