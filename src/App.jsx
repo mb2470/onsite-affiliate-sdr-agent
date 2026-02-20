@@ -560,7 +560,7 @@ function App() {
         </div>
       )}
       {lead.has_contacts && (
-        <div style={{ marginTop: '4px', fontSize: '10px', color: '#8b5cf6' }}>
+        <div style={{ marginTop: '4px', fontSize: '10px', color: '#9015ed' }}>
           📧 {lead.contact_name || 'Contact available'}{lead.contact_email ? ` · ${lead.contact_email}` : ''}
         </div>
       )}
@@ -611,7 +611,7 @@ function App() {
           </div>
           <div style={{ width: '1px', backgroundColor: 'rgba(255,255,255,0.15)', margin: '0 4px' }} />
           <div className="stat">
-            <span className="stat-value" style={{ color: '#8b5cf6' }}>{emailsSent}</span>
+            <span className="stat-value" style={{ color: '#9015ed' }}>{emailsSent}</span>
             <span className="stat-label">Emails Sent</span>
           </div>
           <div className="stat">
@@ -691,7 +691,7 @@ function App() {
                   backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
                 }}>
                   <div style={{
-                    backgroundColor: '#1a1a2e', borderRadius: '16px', padding: '32px', maxWidth: '500px', width: '90%',
+                    backgroundColor: '#0d1530', borderRadius: '16px', padding: '32px', maxWidth: '500px', width: '90%',
                     border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center'
                   }}>
                     <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
@@ -730,7 +730,7 @@ function App() {
                   backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
                 }}>
                   <div style={{
-                    backgroundColor: '#1a1a2e', borderRadius: '16px', padding: '32px', maxWidth: '400px', width: '90%',
+                    backgroundColor: '#0d1530', borderRadius: '16px', padding: '32px', maxWidth: '400px', width: '90%',
                     border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center'
                   }}>
                     <div style={{ fontSize: '36px', marginBottom: '16px' }}>🔬</div>
@@ -738,7 +738,7 @@ function App() {
                     <p style={{ opacity: 0.7 }}>{enrichProgress.current} of {enrichProgress.total}</p>
                     <p style={{ fontSize: '13px', opacity: 0.5 }}>{enrichProgress.currentSite}</p>
                     <div style={{ height: '4px', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '16px' }}>
-                      <div style={{ height: '100%', backgroundColor: '#8b5cf6', borderRadius: '2px', width: `${(enrichProgress.current / enrichProgress.total) * 100}%`, transition: 'width 0.3s' }} />
+                      <div style={{ height: '100%', backgroundColor: '#9015ed', borderRadius: '2px', width: `${(enrichProgress.current / enrichProgress.total) * 100}%`, transition: 'width 0.3s' }} />
                     </div>
                   </div>
                 </div>
@@ -804,9 +804,9 @@ function App() {
                   <div key={s.n} style={{ display: 'flex', alignItems: 'center' }}>
                     <div style={{
                       padding: '8px 16px', borderRadius: '20px', fontSize: '13px',
-                      backgroundColor: manualStep === s.n ? 'rgba(139,92,246,0.3)' : manualStep > s.n ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
-                      border: manualStep === s.n ? '1px solid rgba(139,92,246,0.6)' : '1px solid rgba(255,255,255,0.1)',
-                      color: manualStep > s.n ? '#4ade80' : manualStep === s.n ? '#c4b5fd' : 'rgba(255,255,255,0.4)',
+                      backgroundColor: manualStep === s.n ? 'rgba(144,21,237,0.3)' : manualStep > s.n ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
+                      border: manualStep === s.n ? '1px solid rgba(144,21,237,0.6)' : '1px solid rgba(255,255,255,0.1)',
+                      color: manualStep > s.n ? '#4ade80' : manualStep === s.n ? '#c6beee' : 'rgba(255,255,255,0.4)',
                       fontWeight: manualStep === s.n ? '600' : '400'
                     }}>
                       {manualStep > s.n ? '✓' : s.n} {s.l}
@@ -839,7 +839,7 @@ function App() {
                   </div>
 
                   {selectedLeadForManual && (
-                    <div style={{ position: 'sticky', top: 0, zIndex: 10, marginBottom: '16px', padding: '16px', borderRadius: '12px', backgroundColor: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backdropFilter: 'blur(12px)' }}>
+                    <div style={{ position: 'sticky', top: 0, zIndex: 10, marginBottom: '16px', padding: '16px', borderRadius: '12px', backgroundColor: 'rgba(144,21,237,0.2)', border: '1px solid rgba(144,21,237,0.5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backdropFilter: 'blur(12px)' }}>
                       <div>
                         <strong style={{ fontSize: '16px' }}>{selectedLeadForManual.website}</strong>
                         {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
@@ -918,8 +918,8 @@ function App() {
                         {manualContacts.map(c => (
                           <div key={c.email} onClick={() => toggleContact(c.email)}
                             style={{ padding: '12px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px',
-                              border: selectedManualContacts.includes(c.email) ? '1px solid rgba(139,92,246,0.6)' : '1px solid rgba(255,255,255,0.1)',
-                              backgroundColor: selectedManualContacts.includes(c.email) ? 'rgba(139,92,246,0.15)' : 'rgba(255,255,255,0.03)' }}>
+                              border: selectedManualContacts.includes(c.email) ? '1px solid rgba(144,21,237,0.6)' : '1px solid rgba(255,255,255,0.1)',
+                              backgroundColor: selectedManualContacts.includes(c.email) ? 'rgba(144,21,237,0.15)' : 'rgba(255,255,255,0.03)' }}>
                             <input type="checkbox" checked={selectedManualContacts.includes(c.email)} readOnly />
                             <div style={{ flex: 1 }}>
                               <strong>{c.name}</strong>
@@ -1072,8 +1072,8 @@ function App() {
                             if (newDays.length > 0) updateAgentSettings({ send_days: newDays });
                           }} style={{
                             flex: 1, padding: '6px 2px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold',
-                            border: isActive ? '1px solid rgba(139,92,246,0.5)' : '1px solid rgba(255,255,255,0.15)',
-                            backgroundColor: isActive ? 'rgba(139,92,246,0.2)' : 'transparent',
+                            border: isActive ? '1px solid rgba(144,21,237,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                            backgroundColor: isActive ? 'rgba(144,21,237,0.2)' : 'transparent',
                             color: isActive ? '#a78bfa' : 'rgba(255,255,255,0.3)',
                           }}>{day}</button>
                         );
