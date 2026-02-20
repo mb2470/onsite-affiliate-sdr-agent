@@ -20,7 +20,7 @@ exports.handler = async (event) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': APOLLO_API_KEY },
       body: JSON.stringify({
-        organization_domains: [domain],
+        q_organization_domains_list: [domain],
         person_titles: ['VP Marketing', 'Head of Marketing', 'Director of Marketing',
           'VP Ecommerce', 'Head of Ecommerce', 'Director of Ecommerce',
           'VP Digital', 'Head of Digital', 'Head of Growth',
@@ -29,8 +29,6 @@ exports.handler = async (event) => {
           'Director of Partnerships', 'Head of Partnerships',
           'Director of Content', 'Head of Content',
           'CEO', 'Founder', 'Co-Founder', 'President'],
-        organization_num_employees_ranges: [],
-        contact_email_status: ['verified', 'guessed', 'likely'],
         per_page: 25,
       }),
     });
