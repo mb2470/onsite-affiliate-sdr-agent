@@ -1,0 +1,32 @@
+name: AI SDR Agent
+on:
+  schedule:
+    # Runs every hour from 9am-5pm EST (14:00-22:00 UTC), Mon-Fri
+    - cron: '0 14-22 * * 1-5'
+  workflow_dispatch:  # Manual trigger button in GitHub UI
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r agent/requirements.txt
+
+      - name: Run SDR Agent
+        run: python agent/ai_sdr_agent.py auto
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_OAUTH_CREDENTIALS: ${{ secrets.GMAIL_OAUTH_CREDENTIALS }}
+          GMAIL_FROM_EMAIL: ${{ secrets.GMAIL_FROM_EMAIL }}
