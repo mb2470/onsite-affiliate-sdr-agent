@@ -353,17 +353,54 @@ class AISDRAgent:
             print("⏸️  Agent is PAUSED. Enable in dashboard first.")
             return
 
-        leads = supabase.table("leads").select("*").eq(
-            "icp_fit", "HIGH"
-        ).eq("has_contacts", True).eq("status", "enriched").order(
-            "created_at", desc=False
-        ).limit(count).execute()
+        # Check send days (Mon=1, Sun=7)
+        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
+        try:
+            import pytz
+            now_est = datetime.now(pytz.timezone('US/Eastern'))
+            current_dow = now_est.isoweekday()  # Mon=1, Sun=7
+        except ImportError:
+            now_est = datetime.now(timezone.utc)
+            current_dow = now_est.isoweekday()
 
-        if not leads.data:
-            print("📭 No HIGH leads with contacts ready to send.")
+        if current_dow not in send_days:
+            day_names = {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'}
+            print(f"📅 Today is {day_names.get(current_dow, '?')} — not a send day. Skipping.")
             return
 
-        print(f"📋 Found {len(leads.data)} leads to process\n")
+        allowed_fits = settings.get('allowed_icp_fits', ['HIGH'])
+        max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
+
+        # Get leads that match ICP, have contacts, and are enriched OR contacted (for multi-contact)
+        leads = supabase.table("leads").select("*").in_(
+            "icp_fit", allowed_fits
+        ).eq("has_contacts", True).in_(
+            "status", ["enriched", "contacted"]
+        ).order("created_at", desc=False).limit(count * 3).execute()
+
+        if not leads.data:
+            print(f"📭 No {'/'.join(allowed_fits)} leads with contacts ready.")
+            return
+
+        # Get today's outreach to track per-lead limits
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        today_outreach = supabase.table("outreach_log").select(
+            "website, contact_email"
+        ).gte("sent_at", f"{today}T00:00:00Z").execute()
+
+        today_by_website = {}
+        all_emailed = set()
+        for o in (today_outreach.data or []):
+            today_by_website.setdefault(o['website'], []).append(o['contact_email'])
+            all_emailed.add(o['contact_email'])
+
+        # Also get ALL previously emailed contacts
+        all_outreach = supabase.table("outreach_log").select("contact_email").execute()
+        for o in (all_outreach.data or []):
+            all_emailed.add(o['contact_email'])
+
+        print(f"📋 Found {len(leads.data)} candidate leads")
+        print(f"📧 {len(all_emailed)} contacts already emailed globally\n")
 
         sent = 0
         failed = 0
@@ -371,27 +408,51 @@ class AISDRAgent:
         min_gap = settings.get('min_minutes_between_emails', 2)
 
         for i, lead in enumerate(leads.data):
+            if sent >= count:
+                break
+
             print(f"\n{'─' * 50}")
-            print(f"[{i + 1}/{len(leads.data)}] {lead['website']}")
+            print(f"[{sent + 1}/{count}] {lead['website']}")
 
-            # Skip if already in outreach_log
-            existing = supabase.table("outreach_log").select(
-                "id", count="exact", head=True
-            ).eq("website", lead['website']).execute()
-
-            if existing.count and existing.count > 0:
-                print(f"  ⏭️  Already emailed, skipping")
+            # Check per-lead daily limit
+            today_contacts_for_lead = today_by_website.get(lead['website'], [])
+            if len(today_contacts_for_lead) >= max_contacts_per_lead_per_day:
+                print(f"  ⏭️  Already sent {len(today_contacts_for_lead)} today (limit: {max_contacts_per_lead_per_day})")
                 skipped += 1
                 continue
 
-            # Find best contact
-            contact = find_best_contact(lead['website'])
-            if not contact or not contact.get('email'):
-                print(f"  ❌ No contact found")
+            # Find contacts not yet emailed
+            domain = lead['website'].lower().replace('www.', '')
+            result = supabase.table('contact_database').select('*').or_(
+                f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
+            ).limit(50).execute()
+
+            contacts = result.data or []
+            if not contacts:
+                print(f"  ❌ No contacts in database")
                 failed += 1
                 continue
 
+            # Score, filter already emailed, pick best available
+            scored = sorted(contacts, key=lambda c: score_contact(c.get('title', '')), reverse=True)
+            available = [c for c in scored if c.get('email') and c['email'].lower() not in all_emailed]
+
+            if not available:
+                print(f"  ⏭️  All contacts already emailed")
+                skipped += 1
+                continue
+
+            contact_raw = available[0]
+            contact = {
+                'name': f"{contact_raw.get('first_name', '')} {contact_raw.get('last_name', '')}".strip(),
+                'email': contact_raw['email'],
+                'title': contact_raw.get('title', ''),
+                'score': score_contact(contact_raw.get('title', '')),
+            }
+
             print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
+            print(f"  📧 {contact['email']}")
+            print(f"  📊 {len(available) - 1} more contacts available at this company")
 
             # Generate email
             try:
@@ -433,11 +494,15 @@ class AISDRAgent:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", lead['id']).execute()
 
+            # Track so we don't re-email
+            all_emailed.add(contact['email'].lower())
+            today_by_website.setdefault(lead['website'], []).append(contact['email'])
+
             self._log('email_sent', lead['id'],
                        f"Sent to {contact['name']} <{contact['email']}> at {lead['website']}")
 
             # Wait between sends
-            if i < len(leads.data) - 1:
+            if sent < count:
                 wait = (min_gap * 60) + random.randint(10, 60)
                 print(f"  ⏳ Waiting {wait // 60}m {wait % 60}s...")
                 time.sleep(wait)
@@ -497,6 +562,11 @@ class AISDRAgent:
             print(f"❌ Gmail error: {e}")
             return
 
+        # Update heartbeat so dashboard shows agent is alive
+        supabase.table("agent_settings").update({
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", "00000000-0000-0000-0000-000000000001").execute()
+
         settings = self._get_settings()
         if not settings.get('agent_enabled', False):
             print("⏸️  Agent PAUSED.")
@@ -508,9 +578,20 @@ class AISDRAgent:
 
         try:
             import pytz
-            current_hour = datetime.now(pytz.timezone('US/Eastern')).hour
+            now_est = datetime.now(pytz.timezone('US/Eastern'))
+            current_hour = now_est.hour
+            current_dow = now_est.isoweekday()
         except ImportError:
-            current_hour = (datetime.now(timezone.utc).hour - 5) % 24
+            now_est = datetime.now(timezone.utc)
+            current_hour = (now_est.hour - 5) % 24
+            current_dow = now_est.isoweekday()
+
+        # Check send days
+        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
+        if current_dow not in send_days:
+            day_names = {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'}
+            print(f"📅 Today is {day_names.get(current_dow)} — not a send day.")
+            return
 
         if current_hour < send_start or current_hour >= send_end:
             print(f"⏰ Outside hours ({send_start}-{send_end} EST). Now: {current_hour}")
