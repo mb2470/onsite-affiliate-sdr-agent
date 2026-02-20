@@ -16,6 +16,8 @@ function App() {
   const [unenrichedCount, setUnenrichedCount] = useState(0);
   const [icpCounts, setIcpCounts] = useState({ high: 0, medium: 0, low: 0 });
   const [emailsSent, setEmailsSent] = useState(0);
+  const [isCheckingBounces, setIsCheckingBounces] = useState(false);
+  const [bounceResult, setBounceResult] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
   const [stats, setStats] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
@@ -276,6 +278,24 @@ function App() {
     setSelectedManualContacts(prev => prev.includes(email) ? prev.filter(e => e !== email) : [...prev, email]);
   };
 
+  const handleCheckBounces = async () => {
+    setIsCheckingBounces(true);
+    setBounceResult(null);
+    try {
+      const res = await fetch('/.netlify/functions/check-bounces', { method: 'POST' });
+      const data = await res.json();
+      setBounceResult(data);
+      if (data.bouncedEmails?.length > 0) {
+        await loadGlobalData();
+        await loadManualLeads();
+      }
+    } catch (e) {
+      console.error(e);
+      setBounceResult({ error: e.message });
+    }
+    setIsCheckingBounces(false);
+  };
+
   const handleExportToGmail = async () => {
     if (!selectedLeadForManual) return;
     await exportToGmail(selectedLeadForManual.id, manualEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
@@ -508,6 +528,22 @@ function App() {
           <div className="stat">
             <span className="stat-value" style={{ color: '#8b5cf6' }}>{emailsSent}</span>
             <span className="stat-label">Emails Sent</span>
+          </div>
+          <div className="stat">
+            <button onClick={handleCheckBounces} disabled={isCheckingBounces}
+              style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.4)', backgroundColor: isCheckingBounces ? 'rgba(239,68,68,0.1)' : 'rgba(239,68,68,0.15)', color: '#f87171', cursor: 'pointer', fontSize: '11px', whiteSpace: 'nowrap' }}>
+              {isCheckingBounces ? '⏳ Checking...' : '🔄 Check Bounces'}
+            </button>
+            {bounceResult && bounceResult.bouncedEmails?.length > 0 && (
+              <span style={{ fontSize: '10px', color: '#f87171', marginTop: '4px', display: 'block' }}>
+                {bounceResult.bouncedEmails.length} bounced
+              </span>
+            )}
+            {bounceResult && bounceResult.bouncedEmails?.length === 0 && (
+              <span style={{ fontSize: '10px', color: '#4ade80', marginTop: '4px', display: 'block' }}>
+                ✓ No bounces
+              </span>
+            )}
           </div>
         </div>
       </header>
