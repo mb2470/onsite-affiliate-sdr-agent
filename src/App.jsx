@@ -272,6 +272,7 @@ function App() {
       setManualContacts([]);
       setSelectedManualContacts([]);
       loadManualLeads();
+      loadGlobalData();
     }, 1000);
   };
 
