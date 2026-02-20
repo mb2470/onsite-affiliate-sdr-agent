@@ -250,7 +250,22 @@ function App() {
     setIsLoadingContacts(true);
     try {
       const contacts = await findContacts(selectedLeadForManual);
-      setManualContacts(contacts);
+
+      // Check which contacts were already emailed
+      const { data: sent } = await supabase
+        .from('outreach_log')
+        .select('contact_email, sent_at')
+        .eq('website', selectedLeadForManual.website);
+
+      const sentEmails = new Map((sent || []).map(s => [s.contact_email, s.sent_at]));
+
+      const enrichedContacts = contacts.map(c => ({
+        ...c,
+        alreadySent: sentEmails.has(c.email),
+        sentAt: sentEmails.get(c.email) || null,
+      }));
+
+      setManualContacts(enrichedContacts);
     } catch (e) {
       console.error(e);
     }
@@ -263,7 +278,7 @@ function App() {
 
   const handleExportToGmail = async () => {
     if (!selectedLeadForManual) return;
-    await exportToGmail(selectedLeadForManual.id, manualEmail, selectedManualContacts);
+    await exportToGmail(selectedLeadForManual.id, manualEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
     // Reset after short delay
     setTimeout(() => {
       setManualStep(1);
@@ -289,7 +304,7 @@ function App() {
       personalizedEmail = personalizedEmail.replace(/Hey there -/i, `Hey ${firstName} -`);
     }
 
-    await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts);
+    await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
     
     // Reset UI and refresh data
     setManualStep(1);
@@ -787,8 +802,10 @@ function App() {
                             <input type="checkbox" checked={selectedManualContacts.includes(c.email)} readOnly />
                             <div style={{ flex: 1 }}>
                               <strong>{c.name}</strong>
+                              {c.alreadySent && <span style={{ marginLeft: '8px', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>✓ Sent</span>}
                               <div style={{ fontSize: '12px', opacity: 0.7 }}>{c.title}</div>
                               <div style={{ fontSize: '12px', opacity: 0.5 }}>{c.email}</div>
+                              {c.alreadySent && <div style={{ fontSize: '10px', opacity: 0.4 }}>Sent {new Date(c.sentAt).toLocaleDateString()}</div>}
                             </div>
                             {c.matchLevel && <span className={`match-badge ${c.matchClass}`}>{c.matchEmoji} {c.matchLevel}</span>}
                           </div>
