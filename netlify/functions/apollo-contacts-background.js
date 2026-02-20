@@ -28,10 +28,16 @@ async function searchApollo(domain) {
     body: JSON.stringify({
       organization_domains: [domain],
       person_titles: [
-        'Marketing', 'Influencer', 'Creator', 'Affiliate', 'Partnership',
-        'Ecommerce', 'E-Commerce', 'Digital', 'Growth', 'Brand', 'Content',
-        'Social Media', 'CMO', 'CEO', 'Founder',
+        'VP Marketing', 'Head of Marketing', 'Director of Marketing',
+        'VP Ecommerce', 'Head of Ecommerce', 'Director of Ecommerce',
+        'VP Digital', 'Head of Digital', 'Head of Growth',
+        'CMO', 'Chief Marketing Officer',
+        'VP Brand', 'Director of Brand', 'Head of Brand',
+        'Director of Partnerships', 'Head of Partnerships',
+        'Director of Content', 'Head of Content',
+        'CEO', 'Founder', 'Co-Founder', 'President',
       ],
+      contact_email_status: ['verified', 'guessed', 'likely'],
       per_page: 25,
     }),
   });
