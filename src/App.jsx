@@ -26,6 +26,16 @@ function App() {
   const [newWebsite, setNewWebsite] = useState('');
   const [bulkWebsites, setBulkWebsites] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [addTab, setAddTab] = useState('single');
+  const [autoEnrich, setAutoEnrich] = useState(false);
+  const [discoverSource, setDiscoverSource] = useState('storeleads');
+  const [discoverCategories, setDiscoverCategories] = useState(['Fashion & Apparel']);
+  const [discoverCountries, setDiscoverCountries] = useState(['US']);
+  const [discoverMinProducts, setDiscoverMinProducts] = useState(250);
+  const [discoverMinRevenue, setDiscoverMinRevenue] = useState(1000000);
+  const [discoverMaxResults, setDiscoverMaxResults] = useState(100);
+  const [discoverStatus, setDiscoverStatus] = useState(null);
+  const [discoverResults, setDiscoverResults] = useState(null);
 
   // Enrich page state
   const [enrichLeadsList, setEnrichLeadsList] = useState([]);
@@ -654,30 +664,284 @@ function App() {
           {/* ═══ ADD LEADS ═══ */}
           {activeView === 'add' && (
             <div className="view-container">
-              <h2>➕ Add New Leads</h2>
-              <div className="add-methods">
-                <div className="add-method-card">
-                  <h3>Add Single Website</h3>
+              <h2>+ Add Leads</h2>
+
+              {/* Tab Bar */}
+              <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '5px', marginBottom: '24px' }}>
+                {[
+                  { key: 'single', icon: '🌐', label: 'Single Website' },
+                  { key: 'bulk', icon: '📋', label: 'Bulk Add' },
+                  { key: 'csv', icon: '📄', label: 'Import CSV' },
+                  { key: 'discover', icon: '🔍', label: 'Discover' },
+                ].map(t => (
+                  <button key={t.key} onClick={() => setAddTab(t.key)}
+                    style={{
+                      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                      padding: '12px 16px', borderRadius: '10px', border: 'none',
+                      background: addTab === t.key ? 'rgba(144,21,237,0.15)' : 'transparent',
+                      color: addTab === t.key ? '#c6beee' : 'rgba(255,255,255,0.45)',
+                      fontFamily: 'inherit', fontSize: '14px', fontWeight: addTab === t.key ? 600 : 500,
+                      cursor: 'pointer', transition: 'all 0.2s',
+                      boxShadow: addTab === t.key ? '0 0 0 1px rgba(144,21,237,0.25)' : 'none',
+                    }}>
+                    <span>{t.icon}</span> {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* ── Single Website ── */}
+              {addTab === 'single' && (
+                <div className="add-method-card" style={{ maxWidth: '600px' }}>
+                  <h3>Add a single website</h3>
+                  <p>Enter a domain to add it to your pipeline.</p>
                   <div className="input-group">
-                    <input type="text" placeholder="revolut.com" value={newWebsite} onChange={(e) => setNewWebsite(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddSingle()} />
-                    <button onClick={handleAddSingle} className="primary-btn">Add Lead</button>
+                    <input type="text" placeholder="e.g. allbirds.com" value={newWebsite}
+                      onChange={(e) => setNewWebsite(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddSingle()} />
+                    <button onClick={handleAddSingle} className="primary-btn" disabled={!newWebsite.trim()}>➕ Add Lead</button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div onClick={() => setAutoEnrich(!autoEnrich)}
+                      style={{ width: '40px', height: '22px', borderRadius: '11px', background: autoEnrich ? 'rgba(144,21,237,0.6)' : 'rgba(255,255,255,0.12)', position: 'relative', cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}>
+                      <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'white', position: 'absolute', top: '3px', left: autoEnrich ? '21px' : '3px', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                    </div>
+                    <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>
+                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — runs StoreLeads → Apollo → Claude waterfall + contact matching
+                    </span>
                   </div>
                 </div>
-                <div className="add-method-card">
-                  <h3>Bulk Add Websites</h3>
-                  <p>Enter one website per line</p>
-                  <textarea placeholder="revolut.com&#10;coach.com&#10;timbuk2.com" value={bulkWebsites} onChange={(e) => setBulkWebsites(e.target.value)} rows={8} />
-                  <button onClick={handleBulkAdd} className="primary-btn">Add {bulkWebsites.split('\n').filter(w => w.trim()).length} Leads</button>
+              )}
+
+              {/* ── Bulk Add ── */}
+              {addTab === 'bulk' && (
+                <div className="add-method-card" style={{ maxWidth: '600px' }}>
+                  <h3>Add multiple websites</h3>
+                  <p>Paste one domain per line. Duplicates are automatically skipped.</p>
+                  <textarea placeholder={"allbirds.com\naway.com\nbrookinen.com\noutdoorvoices.com\nparachutehome.com"}
+                    value={bulkWebsites} onChange={(e) => setBulkWebsites(e.target.value)}
+                    style={{ minHeight: '180px', lineHeight: '1.7' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px' }}>
+                    <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.35)' }}>
+                      {bulkWebsites.split('\n').filter(w => w.trim()).length > 0
+                        ? `${bulkWebsites.split('\n').filter(w => w.trim()).length} domain(s) ready`
+                        : 'No domains entered'}
+                    </span>
+                    <button onClick={handleBulkAdd} className="primary-btn"
+                      disabled={bulkWebsites.split('\n').filter(w => w.trim()).length === 0}>
+                      ➕ Add {bulkWebsites.split('\n').filter(w => w.trim()).length} Lead{bulkWebsites.split('\n').filter(w => w.trim()).length !== 1 ? 's' : ''}
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div onClick={() => setAutoEnrich(!autoEnrich)}
+                      style={{ width: '40px', height: '22px', borderRadius: '11px', background: autoEnrich ? 'rgba(144,21,237,0.6)' : 'rgba(255,255,255,0.12)', position: 'relative', cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}>
+                      <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'white', position: 'absolute', top: '3px', left: autoEnrich ? '21px' : '3px', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                    </div>
+                    <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>
+                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — waterfall enrichment runs for each domain after import
+                    </span>
+                  </div>
                 </div>
-                <div className="add-method-card">
-                  <h3>Upload CSV</h3>
-                  <p>Requires <b>website</b> column. Also accepts: industry, country, sells_d2c, icp_fit, platform, city, state</p>
-                  <label className="upload-btn">
-                    {isUploading ? '⏳ Uploading...' : '📤 Choose CSV File'}
+              )}
+
+              {/* ── CSV Import ── */}
+              {addTab === 'csv' && (
+                <div className="add-method-card" style={{ maxWidth: '600px' }}>
+                  <h3>Import from CSV</h3>
+                  <p>Upload a .csv file with a <span style={{ color: '#c6beee', fontWeight: 600 }}>website</span> column. Additional columns are mapped automatically.</p>
+                  <label style={{ display: 'block', cursor: 'pointer' }}>
+                    <div style={{ border: '2px dashed rgba(255,255,255,0.1)', borderRadius: '14px', padding: '48px 32px', textAlign: 'center', transition: 'all 0.2s', background: 'rgba(0,0,0,0.15)' }}>
+                      <div style={{ fontSize: '40px', marginBottom: '12px', opacity: 0.7 }}>📄</div>
+                      <div style={{ fontSize: '15px', fontWeight: 500, color: 'rgba(255,255,255,0.6)', marginBottom: '6px' }}>
+                        {isUploading ? '⏳ Uploading...' : 'Drop CSV here or click to browse'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginBottom: '16px' }}>Accepts .csv files</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'center' }}>
+                        {[
+                          { name: 'website', required: true }, { name: 'industry' }, { name: 'country' },
+                          { name: 'sells_d2c' }, { name: 'icp_fit' }, { name: 'platform' },
+                          { name: 'city' }, { name: 'state' }, { name: 'catalog_size' },
+                        ].map(col => (
+                          <span key={col.name} style={{
+                            padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace',
+                            background: col.required ? 'rgba(144,21,237,0.15)' : 'rgba(255,255,255,0.06)',
+                            color: col.required ? '#c6beee' : 'rgba(255,255,255,0.4)',
+                            border: col.required ? '1px solid rgba(144,21,237,0.2)' : 'none',
+                          }}>{col.name}{col.required ? ' *' : ''}</span>
+                        ))}
+                      </div>
+                    </div>
                     <input type="file" accept=".csv" onChange={handleCSVUpload} disabled={isUploading} style={{ display: 'none' }} />
                   </label>
+                  <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.25)', marginTop: '12px', lineHeight: 1.5 }}>
+                    Column names are auto-detected (supports variations like <code style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>domain</code>, <code style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>url</code>, <code style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>site</code> for website). Existing domains are skipped.
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* ── Discover ── */}
+              {addTab === 'discover' && (
+                <div className="add-method-card" style={{ maxWidth: '700px' }}>
+                  <h3>Discover new leads</h3>
+                  <p>Search StoreLeads or Apollo to find ecommerce stores matching your ICP. New domains are automatically added to your pipeline.</p>
+
+                  {/* Source Toggle */}
+                  <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '4px', marginBottom: '24px' }}>
+                    <button onClick={() => setDiscoverSource('storeleads')}
+                      style={{
+                        flex: 1, padding: '10px 16px', border: 'none', borderRadius: '8px',
+                        background: discoverSource === 'storeleads' ? 'rgba(255,255,255,0.08)' : 'transparent',
+                        color: discoverSource === 'storeleads' ? '#e2e8f0' : 'rgba(255,255,255,0.45)',
+                        fontFamily: 'inherit', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
+                        boxShadow: discoverSource === 'storeleads' ? '0 0 0 1px rgba(255,255,255,0.08)' : 'none',
+                      }}>
+                      🛍️ StoreLeads — Stores by category, rank & sales
+                    </button>
+                    <button onClick={() => setDiscoverSource('apollo')}
+                      style={{
+                        flex: 1, padding: '10px 16px', border: 'none', borderRadius: '8px',
+                        background: discoverSource === 'apollo' ? 'rgba(255,255,255,0.08)' : 'transparent',
+                        color: discoverSource === 'apollo' ? '#e2e8f0' : 'rgba(255,255,255,0.45)',
+                        fontFamily: 'inherit', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
+                        boxShadow: discoverSource === 'apollo' ? '0 0 0 1px rgba(255,255,255,0.08)' : 'none',
+                      }}>
+                      🚀 Apollo — Companies by industry, revenue & size
+                    </button>
+                  </div>
+
+                  {/* Category Filter */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', marginBottom: '10px' }}>
+                      {discoverSource === 'storeleads' ? 'Store Categories' : 'Industries'}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {['Fashion & Apparel', 'Home & Garden', 'Electronics', 'Sporting & Outdoors', 'Health & Beauty', 'Food & Beverage', 'Toys & Games', 'Jewelry & Accessories', 'Automotive', 'Pet Supplies'].map(cat => (
+                        <button key={cat} onClick={() => setDiscoverCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat])}
+                          style={{
+                            padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontFamily: 'inherit', cursor: 'pointer',
+                            border: discoverCategories.includes(cat) ? '1px solid rgba(144,21,237,0.3)' : '1px solid rgba(255,255,255,0.08)',
+                            background: discoverCategories.includes(cat) ? 'rgba(144,21,237,0.15)' : 'transparent',
+                            color: discoverCategories.includes(cat) ? '#c6beee' : 'rgba(255,255,255,0.45)',
+                            transition: 'all 0.15s',
+                          }}>{cat}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Country Filter */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', marginBottom: '10px' }}>Countries</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {[{ code: 'US', label: '🇺🇸 United States' }, { code: 'CA', label: '🇨🇦 Canada' }, { code: 'GB', label: '🇬🇧 United Kingdom' }, { code: 'AU', label: '🇦🇺 Australia' }, { code: 'DE', label: '🇩🇪 Germany' }].map(c => (
+                        <button key={c.code} onClick={() => setDiscoverCountries(prev => prev.includes(c.code) ? prev.filter(x => x !== c.code) : [...prev, c.code])}
+                          style={{
+                            padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontFamily: 'inherit', cursor: 'pointer',
+                            border: discoverCountries.includes(c.code) ? '1px solid rgba(144,21,237,0.3)' : '1px solid rgba(255,255,255,0.08)',
+                            background: discoverCountries.includes(c.code) ? 'rgba(144,21,237,0.15)' : 'transparent',
+                            color: discoverCountries.includes(c.code) ? '#c6beee' : 'rgba(255,255,255,0.45)',
+                            transition: 'all 0.15s',
+                          }}>{c.label}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Numeric Filters */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+                        {discoverSource === 'storeleads' ? 'Min Products' : 'Min Employees'}
+                      </label>
+                      <input type="number" value={discoverMinProducts} onChange={(e) => setDiscoverMinProducts(Number(e.target.value))}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.3)', color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', outline: 'none' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+                        {discoverSource === 'storeleads' ? 'Min Monthly Sales ($)' : 'Min Annual Revenue ($)'}
+                      </label>
+                      <input type="number" value={discoverMinRevenue} onChange={(e) => setDiscoverMinRevenue(Number(e.target.value))}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.3)', color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', outline: 'none' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', display: 'block', marginBottom: '6px', fontWeight: 500 }}>Max Results</label>
+                      <input type="number" value={discoverMaxResults} onChange={(e) => setDiscoverMaxResults(Number(e.target.value))} min={10} max={500}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.3)', color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', outline: 'none' }} />
+                    </div>
+                  </div>
+
+                  {/* Discover Button */}
+                  {!discoverStatus && (
+                    <button className="primary-btn" disabled={discoverCategories.length === 0 || discoverCountries.length === 0}
+                      onClick={async () => {
+                        setDiscoverStatus('running');
+                        setDiscoverResults(null);
+                        try {
+                          const res = await fetch('/.netlify/functions/storeleads-top500', { method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ categories: discoverCategories, countries: discoverCountries, minProducts: discoverMinProducts, maxResults: discoverMaxResults }),
+                          });
+                          const data = await res.json();
+                          setDiscoverResults(data);
+                          setDiscoverStatus('done');
+                          const count = await getTotalLeadCount();
+                          setTotalLeadCount(count);
+                          await loadGlobalData();
+                        } catch (err) {
+                          console.error('Discover error:', err);
+                          setDiscoverStatus('done');
+                          setDiscoverResults({ error: err.message });
+                        }
+                      }}
+                      style={{ width: '100%', justifyContent: 'center', padding: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      🔍 Discover {discoverSource === 'storeleads' ? 'Stores' : 'Companies'}
+                    </button>
+                  )}
+
+                  {/* Running */}
+                  {discoverStatus === 'running' && (
+                    <div style={{ textAlign: 'center', padding: '40px' }}>
+                      <div style={{ width: '32px', height: '32px', border: '3px solid rgba(144,21,237,0.2)', borderTopColor: '#9015ed', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 16px' }} />
+                      <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)' }}>Searching {discoverSource === 'storeleads' ? 'StoreLeads' : 'Apollo'}...</div>
+                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginTop: '6px' }}>
+                        Filtering by {discoverCategories.length} categories across {discoverCountries.length} countries
+                      </div>
+                      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                    </div>
+                  )}
+
+                  {/* Results */}
+                  {discoverStatus === 'done' && discoverResults && !discoverResults.error && (
+                    <div style={{ background: 'rgba(144,21,237,0.06)', border: '1px solid rgba(144,21,237,0.15)', borderRadius: '14px', padding: '28px', marginTop: '24px' }}>
+                      <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        ✅ Discovery Complete
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                        <div style={{ textAlign: 'center', padding: '14px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)' }}>
+                          <span style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: '#c6beee', display: 'block' }}>{discoverResults.totalFetched || 0}</span>
+                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', display: 'block' }}>Found</span>
+                        </div>
+                        <div style={{ textAlign: 'center', padding: '14px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)' }}>
+                          <span style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: '#4ade80', display: 'block' }}>{discoverResults.newAdded || 0}</span>
+                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', display: 'block' }}>New Added</span>
+                        </div>
+                        <div style={{ textAlign: 'center', padding: '14px', borderRadius: '10px', background: 'rgba(0,0,0,0.2)' }}>
+                          <span style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: 'rgba(255,255,255,0.3)', display: 'block' }}>{discoverResults.alreadyExisted || 0}</span>
+                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '4px', display: 'block' }}>Already Existed</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                        <button className="secondary-btn" onClick={() => { setDiscoverStatus(null); setDiscoverResults(null); }}>🔍 New Search</button>
+                        <button className="primary-btn" onClick={() => { setActiveView('enrich'); loadEnrichLeads(); }}>🔬 Enrich New Leads →</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {discoverStatus === 'done' && discoverResults?.error && (
+                    <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '10px', padding: '16px', marginTop: '16px', color: '#f87171', fontSize: '13px' }}>
+                      ❌ Error: {discoverResults.error}
+                      <button className="secondary-btn" onClick={() => { setDiscoverStatus(null); setDiscoverResults(null); }} style={{ marginTop: '12px' }}>Try Again</button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
