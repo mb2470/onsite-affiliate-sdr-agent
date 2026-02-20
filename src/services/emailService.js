@@ -24,17 +24,24 @@ NEVER SAY (THESE ARE WRONG):
 ✗ "Access Amazon influencers"
 ✗ "Our network of Amazon creators"
 ✗ "UGC" without "creator" in front of it
+✗ "Hey there" — ALWAYS use the contact's first name
+
+SIGNATURE: Always end with exactly:
+Sam Reid
+OnsiteAffiliate.com
 
 EMAIL STRUCTURE (under 90 words):
-[Name or "Hey there"] -
+Hey {first_name} -
 [Pain question about upfront creator UGC costs]
 [Amazon cracked this with ONSITE commissions - creators review products, only get paid after their videos drive actual sales. Zero upfront risk.]
 [We help brands copy that exact ONSITE commission structure for YOUR site/products]
 [Simple CTA question]
-Mike
+
+Sam Reid
+OnsiteAffiliate.com
 
 EXAMPLE (78 words):
-Hey there -
+Hey Sarah -
 
 Spending thousands upfront on creator UGC before knowing if it converts?
 
@@ -44,17 +51,21 @@ We help home brands copy that exact onsite commission structure for their own si
 
 Quick call to walk through how it works?
 
-Mike
+Sam Reid
+OnsiteAffiliate.com
 
 TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`;
 
 // Generate a personalized outreach email for a lead
-export const generateEmail = async (lead) => {
+export const generateEmail = async (lead, contactName) => {
+  const firstName = contactName ? contactName.split(' ')[0] : 'there';
+  
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prompt: `Write a casual outreach email for ${lead.website}. 
+The contact's first name is "${firstName}" — ALWAYS address them as "Hey ${firstName} -"
 
 ${lead.research_notes ? `Context: ${lead.research_notes.substring(0, 300)}` : ''}
 ${lead.industry ? `Industry: ${lead.industry}` : ''}
@@ -62,10 +73,12 @@ ${lead.pain_points ? `Pain Points: ${lead.pain_points}` : ''}
 
 Requirements:
 - Under 90 words total
+- Start with "Hey ${firstName} -"
 - Ask about upfront creator costs OR gifting logistics
-- Explain: Amazon proved performance commissions eliminate upfront costs
-- Key point: We help brands COPY that model for their OWN site (not access to Amazon creators)
+- Explain: Amazon proved onsite commissions eliminate upfront costs
+- Key point: We help brands COPY that model for their OWN site
 - Tone: Casual, like a Slack message
+- End with signature: Sam Reid and OnsiteAffiliate.com
 - Include subject line
 
 Format:
