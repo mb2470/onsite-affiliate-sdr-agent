@@ -33,10 +33,40 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GMAIL_CREDENTIALS = os.getenv("GMAIL_OAUTH_CREDENTIALS")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "sam@onsiteaffiliate.com")
+ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
 
 # Initialize clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Safe email statuses from EmailListVerify
+SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all']
+BAD_STATUSES = ['invalid', 'email_disabled', 'dead_server', 'syntax_error']
+
+
+def verify_email(email: str) -> Dict:
+    """Verify email via EmailListVerify API."""
+    if not ELV_API_KEY:
+        return {'email': email, 'status': 'skipped', 'safe': True}
+
+    try:
+        url = f"https://apps.emaillistverify.com/api/verifyEmail?secret={urllib.parse.quote(ELV_API_KEY)}&email={urllib.parse.quote(email)}&timeout=15"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            status = resp.read().decode().strip().lower()
+
+        print(f"    📧 Verify {email}: {status}")
+        safe = status in SAFE_STATUSES
+
+        # Remove bad emails from contact_database
+        if not safe and status in BAD_STATUSES:
+            print(f"    🗑️ Removing invalid email {email}")
+            supabase.table('contact_database').delete().eq('email', email).execute()
+
+        return {'email': email, 'status': status, 'safe': safe}
+    except Exception as e:
+        print(f"    ⚠️ Verify error {email}: {e}")
+        return {'email': email, 'status': 'error', 'safe': True}  # Don't block on errors
 
 
 # ═══════════════════════════════════════════════════════════
@@ -453,6 +483,14 @@ class AISDRAgent:
             print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
             print(f"  📧 {contact['email']}")
             print(f"  📊 {len(available) - 1} more contacts available at this company")
+
+            # Verify email before sending
+            verification = verify_email(contact['email'])
+            if not verification['safe']:
+                print(f"  🚫 Email failed verification: {verification['status']} — skipping")
+                all_emailed.add(contact['email'].lower())  # Don't retry this email
+                failed += 1
+                continue
 
             # Generate email
             try:
