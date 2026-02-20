@@ -684,7 +684,7 @@ function App() {
                         {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
                         {selectedLeadForManual.industry && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>}
                       </div>
-                      <button className="primary-btn" onClick={() => setManualStep(2)} style={{ whiteSpace: 'nowrap' }}>Next: Generate Email →</button>
+                      <button className="primary-btn" onClick={() => { setManualStep(2); handleGenerateEmail(); }} style={{ whiteSpace: 'nowrap' }}>Next: Generate Email →</button>
                     </div>
                   )}
 
