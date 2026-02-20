@@ -940,7 +940,121 @@ function App() {
                 </div>
               </div>
               <AgentMonitor />
-              <div className="activity-section">
+
+              {/* Editable Settings */}
+              <div style={{ marginTop: '24px', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <h3 style={{ margin: '0 0 20px 0' }}>⚙️ Agent Settings</h3>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  {/* Send Hours */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Send Hours (EST)</label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                      <select value={agentSettings?.send_hours_start || 9} onChange={e => updateAgentSettings({ send_hours_start: parseInt(e.target.value) })}
+                        style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit' }}>
+                        {Array.from({length: 24}, (_, i) => <option key={i} value={i}>{i}:00</option>)}
+                      </select>
+                      <span style={{ opacity: 0.5 }}>to</span>
+                      <select value={agentSettings?.send_hours_end || 17} onChange={e => updateAgentSettings({ send_hours_end: parseInt(e.target.value) })}
+                        style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit' }}>
+                        {Array.from({length: 24}, (_, i) => <option key={i} value={i}>{i}:00</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Max Emails Per Day */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Max Emails Per Day</label>
+                    <input type="number" value={agentSettings?.max_emails_per_day || 10}
+                      onChange={e => updateAgentSettings({ max_emails_per_day: parseInt(e.target.value) })}
+                      style={{ width: '100%', marginTop: '8px', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontSize: '16px' }} />
+                  </div>
+
+                  {/* Min Minutes Between Emails */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Min Minutes Between Emails</label>
+                    <input type="number" value={agentSettings?.min_minutes_between_emails || 10}
+                      onChange={e => updateAgentSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
+                      style={{ width: '100%', marginTop: '8px', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontSize: '16px' }} />
+                  </div>
+
+                  {/* ICP Filter */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>ICP Fit Filter</label>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                      {['HIGH', 'MEDIUM', 'LOW'].map(fit => {
+                        const allowed = agentSettings?.allowed_icp_fits || ['HIGH'];
+                        const isActive = allowed.includes(fit);
+                        return (
+                          <button key={fit} onClick={() => {
+                            const newFits = isActive ? allowed.filter(f => f !== fit) : [...allowed, fit];
+                            if (newFits.length > 0) updateAgentSettings({ allowed_icp_fits: newFits });
+                          }} style={{
+                            flex: 1, padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
+                            border: isActive ? '1px solid' : '1px solid rgba(255,255,255,0.15)',
+                            backgroundColor: isActive ? (fit === 'HIGH' ? 'rgba(34,197,94,0.2)' : fit === 'MEDIUM' ? 'rgba(234,179,8,0.2)' : 'rgba(239,68,68,0.2)') : 'transparent',
+                            color: isActive ? (fit === 'HIGH' ? '#4ade80' : fit === 'MEDIUM' ? '#facc15' : '#f87171') : 'rgba(255,255,255,0.3)',
+                            borderColor: isActive ? (fit === 'HIGH' ? 'rgba(34,197,94,0.5)' : fit === 'MEDIUM' ? 'rgba(234,179,8,0.5)' : 'rgba(239,68,68,0.5)') : 'rgba(255,255,255,0.15)',
+                          }}>{fit}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Max Contacts Per Lead Per Day */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Max Contacts Per Lead Per Day</label>
+                    <input type="number" value={agentSettings?.max_contacts_per_lead_per_day || 1} min={1} max={5}
+                      onChange={e => updateAgentSettings({ max_contacts_per_lead_per_day: parseInt(e.target.value) })}
+                      style={{ width: '100%', marginTop: '8px', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontSize: '16px' }} />
+                    <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>Agent sends to multiple contacts at a company over multiple days</div>
+                  </div>
+
+                  {/* Send Days */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Send Days</label>
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '8px' }}>
+                      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, i) => {
+                        const sendDays = agentSettings?.send_days || [1, 2, 3, 4, 5];
+                        const dayNum = i + 1;
+                        const isActive = sendDays.includes(dayNum);
+                        return (
+                          <button key={day} onClick={() => {
+                            const newDays = isActive ? sendDays.filter(d => d !== dayNum) : [...sendDays, dayNum].sort();
+                            if (newDays.length > 0) updateAgentSettings({ send_days: newDays });
+                          }} style={{
+                            flex: 1, padding: '6px 2px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold',
+                            border: isActive ? '1px solid rgba(139,92,246,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                            backgroundColor: isActive ? 'rgba(139,92,246,0.2)' : 'transparent',
+                            color: isActive ? '#a78bfa' : 'rgba(255,255,255,0.3)',
+                          }}>{day}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Auto-Send Toggle */}
+                  <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <label style={{ fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Auto-Send</label>
+                    <div style={{ marginTop: '8px' }}>
+                      <button onClick={() => updateAgentSettings({ auto_send: !agentSettings?.auto_send })}
+                        style={{
+                          width: '100%', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold',
+                          border: agentSettings?.auto_send ? '1px solid rgba(234,179,8,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                          backgroundColor: agentSettings?.auto_send ? 'rgba(234,179,8,0.2)' : 'transparent',
+                          color: agentSettings?.auto_send ? '#facc15' : 'rgba(255,255,255,0.4)',
+                        }}>
+                        {agentSettings?.auto_send ? '⚠️ Auto-Send ON' : '📝 Draft Only'}
+                      </button>
+                      <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>
+                        {agentSettings?.auto_send ? 'Agent sends emails automatically' : 'Agent drafts emails for your review'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="activity-section" style={{ marginTop: '24px' }}>
                 <h3>Recent Activity</h3>
                 <div className="activity-list">
                   {activityLog.slice(0, 15).map(a => (
@@ -950,6 +1064,9 @@ function App() {
                         {a.activity_type === 'email_sent' && '📤'}
                         {a.activity_type === 'email_exported' && '📧'}
                         {a.activity_type === 'email_failed' && '❌'}
+                        {a.activity_type === 'email_bounced' && '🔄'}
+                        {a.activity_type === 'autonomous_run' && '🤖'}
+                        {a.activity_type === 'batch_send' && '📦'}
                       </span>
                       <span className="activity-summary">{a.summary}</span>
                       <span className="activity-time">{new Date(a.created_at).toLocaleTimeString()}</span>
