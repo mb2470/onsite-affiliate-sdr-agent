@@ -169,9 +169,7 @@ exports.handler = async (event, context) => {
             email: match.email.toLowerCase(),
             title: match.title || null,
             website: domain,
-            email_domain: domain,
             account_name: match.organization?.name || domain,
-            source: 'apollo',
             linkedin_url: match.linkedin_url || null,
           });
 
