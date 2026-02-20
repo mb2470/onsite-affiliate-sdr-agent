@@ -102,21 +102,11 @@ export const searchEnrichedLeads = async ({ search = '', page = 0, pageSize = 50
 
 // Update lead status to contacted and record date
 export const markLeadContacted = async (leadId) => {
-  // Get current contacted_at dates
-  const { data: lead } = await supabase
-    .from('leads')
-    .select('contacted_at, status')
-    .eq('id', leadId)
-    .single();
-
-  const existingDates = lead?.contacted_at || [];
-  const newDates = [...existingDates, new Date().toISOString()];
-
   const { error } = await supabase
     .from('leads')
     .update({
       status: 'contacted',
-      contacted_at: newDates
+      updated_at: new Date().toISOString()
     })
     .eq('id', leadId);
 
