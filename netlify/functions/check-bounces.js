@@ -1,4 +1,3 @@
-const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
@@ -6,19 +5,33 @@ const supabase = createClient(
   process.env.VITE_SUPABASE_ANON_KEY
 );
 
-function getGmailClient() {
+// Refresh OAuth access token using refresh token
+async function getAccessToken() {
   const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
-  const oauth2Client = new google.auth.OAuth2(
-    creds.client_id,
-    creds.client_secret
-  );
-  oauth2Client.setCredentials({
-    refresh_token: creds.refresh_token,
-    access_token: creds.access_token,
-    token_type: creds.token_type,
-    expiry_date: creds.expiry_date,
+  
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: creds.client_id,
+      client_secret: creds.client_secret,
+      refresh_token: creds.refresh_token,
+      grant_type: 'refresh_token',
+    }),
   });
-  return google.gmail({ version: 'v1', auth: oauth2Client });
+
+  const data = await response.json();
+  if (!data.access_token) throw new Error('Failed to refresh token: ' + JSON.stringify(data));
+  return data.access_token;
+}
+
+// Gmail API helper
+async function gmailGet(accessToken, endpoint) {
+  const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${endpoint}`, {
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
+  if (!response.ok) throw new Error(`Gmail API error: ${response.status}`);
+  return response.json();
 }
 
 exports.handler = async (event) => {
@@ -31,16 +44,14 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const gmail = getGmailClient();
+    const accessToken = await getAccessToken();
 
     // Search for bounce notifications from mailer-daemon in last 7 days
-    const res = await gmail.users.messages.list({
-      userId: 'me',
-      q: 'from:mailer-daemon@googlemail.com newer_than:7d',
-      maxResults: 50,
-    });
+    const searchRes = await gmailGet(accessToken, 
+      'messages?q=' + encodeURIComponent('from:mailer-daemon@googlemail.com newer_than:7d') + '&maxResults=50'
+    );
 
-    const messages = res.data.messages || [];
+    const messages = searchRes.messages || [];
     console.log(`📧 Found ${messages.length} bounce notifications`);
 
     if (messages.length === 0) {
@@ -55,28 +66,22 @@ exports.handler = async (event) => {
 
     for (const msg of messages) {
       try {
-        const detail = await gmail.users.messages.get({
-          userId: 'me',
-          id: msg.id,
-          format: 'full',
-        });
+        const detail = await gmailGet(accessToken, `messages/${msg.id}?format=full`);
+        const body = getMessageBody(detail);
 
-        const body = getMessageBody(detail.data);
-        
-        // Extract bounced email addresses from the bounce message
-        // Common patterns: "wasn't delivered to email@domain.com"
-        // "Delivery to the following recipient failed permanently: email@domain.com"
-        // "The email account that you tried to reach does not exist"
+        // Extract bounced email addresses
         const emailPatterns = [
-          /wasn't delivered to\s+(\S+@\S+\.\S+)/gi,
+          /wasn'?t delivered to\s+(\S+@\S+\.\S+)/gi,
           /delivery to.*?(\S+@\S+\.\S+).*?failed/gi,
           /rejected.*?(\S+@\S+\.\S+)/gi,
           /could not be delivered to\s+(\S+@\S+\.\S+)/gi,
-          /Address not found.*?(\S+@\S+\.\S+)/gi,
+          /address not found.*?(\S+@\S+\.\S+)/gi,
+          /does not exist.*?(\S+@\S+\.\S+)/gi,
+          /(\S+@\S+\.\S+).*?address not found/gi,
         ];
 
-        // Also check headers for X-Failed-Recipients
-        const failedHeader = (detail.data.payload?.headers || []).find(
+        // Check X-Failed-Recipients header
+        const failedHeader = (detail.payload?.headers || []).find(
           h => h.name.toLowerCase() === 'x-failed-recipients'
         );
         if (failedHeader) {
@@ -87,17 +92,12 @@ exports.handler = async (event) => {
         for (const pattern of emailPatterns) {
           let match;
           while ((match = pattern.exec(body)) !== null) {
-            const email = match[1].replace(/[<>]/g, '').toLowerCase();
-            if (email.includes('@') && !email.includes('mailer-daemon')) {
+            const email = match[1].replace(/[<>.,;'"()]/g, '').toLowerCase();
+            if (email.includes('@') && !email.includes('mailer-daemon') && !email.includes('googlemail')) {
               bouncedEmails.push(email);
             }
           }
         }
-
-        // Also try to find email in To header of original message
-        const toHeader = (detail.data.payload?.headers || []).find(
-          h => h.name.toLowerCase() === 'to'
-        );
 
       } catch (msgErr) {
         console.error(`Error reading message ${msg.id}:`, msgErr.message);
@@ -106,7 +106,7 @@ exports.handler = async (event) => {
 
     // Deduplicate
     bouncedEmails = [...new Set(bouncedEmails)];
-    console.log(`🚫 Bounced emails found: ${bouncedEmails.join(', ')}`);
+    console.log(`🚫 Bounced emails: ${bouncedEmails.join(', ')}`);
 
     let cleaned = 0;
     let leadsReset = [];
@@ -123,9 +123,9 @@ exports.handler = async (event) => {
         console.log(`🗑️ Removed ${email} from contact_database`);
         cleaned++;
 
-        // Check if the lead has any remaining contacts
+        // Check if lead has remaining contacts
         for (const contact of deleted) {
-          const website = contact.website?.replace(/^www\./, '').toLowerCase();
+          const website = (contact.website || '').replace(/^www\./, '').toLowerCase();
           if (!website) continue;
 
           const { count } = await supabase
@@ -133,7 +133,6 @@ exports.handler = async (event) => {
             .select('*', { count: 'exact', head: true })
             .or(`website.ilike.%${website}%,email_domain.ilike.%${website}%`);
 
-          // If no more contacts, update the lead
           if (count === 0) {
             await supabase
               .from('leads')
@@ -143,7 +142,7 @@ exports.handler = async (event) => {
         }
       }
 
-      // Reset lead status from contacted back to enriched if the only contact bounced
+      // Reset lead if this was the only outreach
       const { data: outreach } = await supabase
         .from('outreach_log')
         .select('website')
@@ -151,7 +150,6 @@ exports.handler = async (event) => {
 
       if (outreach) {
         for (const o of outreach) {
-          // Check if there are other successful outreaches for this website
           const { count } = await supabase
             .from('outreach_log')
             .select('*', { count: 'exact', head: true })
@@ -159,7 +157,6 @@ exports.handler = async (event) => {
             .neq('contact_email', email);
 
           if (count === 0) {
-            // No other contacts were emailed — reset lead
             await supabase
               .from('leads')
               .update({ status: 'enriched' })
@@ -169,12 +166,6 @@ exports.handler = async (event) => {
           }
         }
       }
-
-      // Mark outreach as bounced
-      await supabase
-        .from('outreach_log')
-        .update({ email_subject: '[BOUNCED] ' + email })
-        .eq('contact_email', email);
 
       // Log activity
       await supabase.from('activity_log').insert({
@@ -193,19 +184,11 @@ exports.handler = async (event) => {
 
     console.log(`✅ Bounce check complete:`, summary);
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify(summary),
-    };
+    return { statusCode: 200, headers, body: JSON.stringify(summary) };
 
   } catch (error) {
     console.error('💥 Bounce check error:', error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: error.message }),
-    };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: error.message }) };
   }
 };
 
