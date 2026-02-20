@@ -1,5 +1,5 @@
 import { supabase } from '../supabaseClient';
-import { markLeadContacted, logActivity } from './leadService';
+import { logActivity } from './leadService';
 
 // Parse email into subject and body
 export const parseEmail = (emailText) => {
@@ -12,7 +12,36 @@ export const parseEmail = (emailText) => {
   return { subject, body };
 };
 
-// Open Gmail compose with contacts in BCC
+// Send email directly via Gmail API
+export const sendEmail = async (leadId, emailText, contactEmails, contactDetails, website) => {
+  if (!contactEmails.length || !emailText) return false;
+
+  const { subject, body } = parseEmail(emailText);
+
+  const response = await fetch('/.netlify/functions/send-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      to: contactEmails[0],
+      bcc: contactEmails.slice(1),
+      subject,
+      body,
+      leadId,
+      website,
+      contactDetails,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to send email');
+  }
+
+  return data;
+};
+
+// Legacy: Open Gmail compose (fallback)
 export const exportToGmail = async (leadId, emailText, contactEmails, contactDetails, website) => {
   if (!contactEmails.length || !emailText) return false;
 
@@ -22,11 +51,12 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
 
   window.open(gmailUrl, '_blank');
 
-  // Mark lead as contacted and log outreach
   try {
-    await markLeadContacted(leadId);
+    const { error } = await supabase.from('leads').update({
+      status: 'contacted',
+      updated_at: new Date().toISOString(),
+    }).eq('id', leadId);
 
-    // Log each contact emailed
     const outreachRows = contactEmails.map(email => {
       const contact = (contactDetails || []).find(c => c.email === email);
       return {
@@ -41,12 +71,7 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
 
     await supabase.from('outreach_log').insert(outreachRows);
 
-    await logActivity(
-      'email_exported',
-      leadId,
-      `Exported to Gmail — ${contactEmails.join(', ')}`,
-      'success'
-    );
+    await logActivity('email_exported', leadId, `Exported to Gmail — ${contactEmails.join(', ')}`, 'success');
   } catch (error) {
     console.error('Error logging outreach:', error);
   }
