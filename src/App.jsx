@@ -122,6 +122,9 @@ function AuthenticatedApp({ session }) {
   const [pipelineSearch, setPipelineSearch] = useState('');
   const [pipelineFilter, setPipelineFilter] = useState('all');
   const [pipelinePage, setPipelinePage] = useState(0);
+  const [pipelineStats, setPipelineStats] = useState({ totalContacts: 0, contacted: 0, pctContacted: 0 });
+  const [emailDetailLead, setEmailDetailLead] = useState(null);
+  const [emailDetailData, setEmailDetailData] = useState([]);
   const PIPELINE_PAGE_SIZE = 100;
 
   // ═══════════════════════════════════════════
@@ -572,9 +575,57 @@ function AuthenticatedApp({ session }) {
         page: pipelinePage,
         pageSize: PIPELINE_PAGE_SIZE
       });
-      setPipelineLeads(leads);
+
+      // Enrich with outreach history
+      const websites = leads.map(l => l.website);
+      let outreachMap = {};
+      if (websites.length > 0) {
+        const { data: outreachData } = await supabase
+          .from('outreach_log')
+          .select('website, contact_email, contact_name, email_subject, email_body, sent_at, replied_at')
+          .in('website', websites)
+          .order('sent_at', { ascending: false });
+
+        for (const o of (outreachData || [])) {
+          if (!outreachMap[o.website]) outreachMap[o.website] = [];
+          outreachMap[o.website].push(o);
+        }
+      }
+
+      const enrichedLeads = leads.map(lead => ({
+        ...lead,
+        outreach_history: outreachMap[lead.website] || [],
+      }));
+
+      setPipelineLeads(enrichedLeads);
       setPipelineTotalCount(totalCount);
+
+      // Pipeline stats — total contacts and % contacted
+      const { count: totalWithContacts } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('has_contacts', true);
+      const { count: totalContacted } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'contacted');
+      const { count: totalReplied } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'replied');
+
+      const contacted = (totalContacted || 0) + (totalReplied || 0);
+      setPipelineStats({
+        totalContacts: totalWithContacts || 0,
+        contacted,
+        pctContacted: totalWithContacts > 0 ? (contacted / totalWithContacts * 100).toFixed(1) : 0,
+      });
     } catch (e) { console.error(e); }
+  };
+
+  const openEmailDetail = (lead) => {
+    setEmailDetailLead(lead);
+    setEmailDetailData(lead.outreach_history || []);
   };
 
   useEffect(() => { if (activeView === 'pipeline') loadPipeline(); }, [activeView, pipelineFilter, pipelinePage, pipelineSearch]);
@@ -1501,8 +1552,24 @@ function AuthenticatedApp({ session }) {
           {activeView === 'pipeline' && (
             <div className="view-container">
               <h2>📊 Lead Pipeline</h2>
+
+              {/* Stats Bar */}
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+                {[
+                  { label: 'Total Leads', value: pipelineTotalCount, color: '#f6f6f7' },
+                  { label: 'With Contacts', value: pipelineStats.totalContacts, color: '#9015ed' },
+                  { label: 'Contacted', value: pipelineStats.contacted, color: '#4ade80' },
+                  { label: '% Contacted', value: `${pipelineStats.pctContacted}%`, color: parseFloat(pipelineStats.pctContacted) > 20 ? '#4ade80' : '#eab308' },
+                ].map(s => (
+                  <div key={s.label} style={{ flex: 1, padding: '14px 16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', textAlign: 'center' }}>
+                    <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginTop: '4px' }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
               <div className="pipeline-filters">
-                <input type="text" placeholder="Search leads..." value={pipelineSearch} onChange={(e) => { setPipelineSearch(e.target.value); setPipelinePage(0); }} className="search-input" />
+                <input type="text" placeholder="Search leads..." value={pipelineSearch} onChange={(e) => { setPipelineSearch(e.target.value); setPipelinePage(0); }} className="search-input" style={{ flex: 1 }} />
                 <select value={pipelineFilter} onChange={(e) => { setPipelineFilter(e.target.value); setPipelinePage(0); }} className="filter-select">
                   <option value="all">All ({pipelineTotalCount})</option>
                   <option value="new">New</option>
@@ -1510,20 +1577,55 @@ function AuthenticatedApp({ session }) {
                   <option value="contacted">Contacted</option>
                 </select>
               </div>
-              <div className="pipeline-table">
-                <table>
+
+              <div className="pipeline-table" style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
-                    <tr><th>Website</th><th>Status</th><th>ICP Fit</th><th>Industry</th><th>Country</th><th>Contacted</th></tr>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                      <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Website</th>
+                      <th style={{ textAlign: 'left', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Status</th>
+                      <th style={{ textAlign: 'left', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>ICP</th>
+                      <th style={{ textAlign: 'left', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Industry</th>
+                      <th style={{ textAlign: 'left', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Country</th>
+                      <th style={{ textAlign: 'center', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Emails Sent</th>
+                      <th style={{ textAlign: 'center', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Last Contacted</th>
+                      <th style={{ textAlign: 'center', padding: '10px 8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Reply</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {pipelineLeads.map(lead => (
-                      <tr key={lead.id}>
-                        <td className="website-cell">{lead.website}</td>
-                        <td><span className={`status-badge ${lead.status}`}>{lead.status}</span></td>
-                        <td>{lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}</td>
-                        <td style={{ fontSize: '12px' }}>{lead.industry || '—'}</td>
-                        <td>{lead.country || '—'}</td>
-                        <td style={{ fontSize: '12px' }}>{lead.status === 'contacted' ? '✅' : '—'}</td>
+                      <tr key={lead.id}
+                        onClick={() => lead.outreach_history.length > 0 && openEmailDetail(lead)}
+                        style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: lead.outreach_history.length > 0 ? 'pointer' : 'default', transition: 'background 0.1s' }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                        <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 500 }}>{lead.website}</td>
+                        <td style={{ padding: '10px 8px' }}><span className={`status-badge ${lead.status}`}>{lead.status}</span></td>
+                        <td style={{ padding: '10px 8px' }}>{lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}</td>
+                        <td style={{ padding: '10px 8px', fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>{lead.industry || '—'}</td>
+                        <td style={{ padding: '10px 8px', fontSize: '12px' }}>{lead.country || '—'}</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                          {lead.outreach_history.length > 0 ? (
+                            <span style={{
+                              padding: '2px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 600,
+                              background: 'rgba(144,21,237,0.12)', color: '#c6beee', cursor: 'pointer',
+                            }}>
+                              {lead.outreach_history.length} ✉️
+                            </span>
+                          ) : '—'}
+                        </td>
+                        <td style={{ padding: '10px 8px', textAlign: 'center', fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: 'rgba(255,255,255,0.4)' }}>
+                          {lead.outreach_history.length > 0
+                            ? new Date(lead.outreach_history[0].sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                            : '—'}
+                        </td>
+                        <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                          {lead.outreach_history.some(o => o.replied_at)
+                            ? <span style={{ color: '#245ef9', fontWeight: 600, fontSize: '11px' }}>💬 YES</span>
+                            : lead.outreach_history.length > 0
+                              ? <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '11px' }}>—</span>
+                              : '—'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1536,6 +1638,79 @@ function AuthenticatedApp({ session }) {
                   <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '14px', lineHeight: '36px' }}>Page {pipelinePage + 1} of {Math.ceil(pipelineTotalCount / PIPELINE_PAGE_SIZE)}</span>
                   <button onClick={() => setPipelinePage(p => p + 1)} disabled={(pipelinePage + 1) * PIPELINE_PAGE_SIZE >= pipelineTotalCount}
                     style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', cursor: 'pointer' }}>Next ⟩</button>
+                </div>
+              )}
+
+              {/* ── Email Detail Modal ── */}
+              {emailDetailLead && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+                  onClick={() => setEmailDetailLead(null)}>
+                  <div style={{ backgroundColor: '#0d1530', borderRadius: '18px', padding: '32px', maxWidth: '700px', width: '90%', maxHeight: '80vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)' }}
+                    onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                      <div>
+                        <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '18px', fontWeight: 700, marginBottom: '4px' }}>
+                          {emailDetailLead.website}
+                        </h3>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <span className={`status-badge ${emailDetailLead.status}`}>{emailDetailLead.status}</span>
+                          {emailDetailLead.icp_fit && <span className={`icp-badge ${emailDetailLead.icp_fit.toLowerCase()}`}>{emailDetailLead.icp_fit}</span>}
+                          <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{emailDetailLead.industry}</span>
+                        </div>
+                      </div>
+                      <button onClick={() => setEmailDetailLead(null)}
+                        style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: '20px', cursor: 'pointer', padding: '4px 8px' }}>✕</button>
+                    </div>
+
+                    <div style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.35)', marginBottom: '12px' }}>
+                      {emailDetailData.length} Email{emailDetailData.length !== 1 ? 's' : ''} Sent
+                    </div>
+
+                    {emailDetailData.map((o, i) => (
+                      <div key={i} style={{
+                        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+                        borderRadius: '12px', padding: '16px', marginBottom: '12px',
+                        borderLeft: o.replied_at ? '3px solid #245ef9' : '3px solid rgba(144,21,237,0.3)',
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                          <div>
+                            <span style={{ fontWeight: 600, fontSize: '13px' }}>{o.contact_name || 'Contact'}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.3)', marginLeft: '8px', fontSize: '12px', fontFamily: "'JetBrains Mono', monospace" }}>
+                              {o.contact_email}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {o.replied_at && (
+                              <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 600, background: 'rgba(36,94,249,0.15)', color: '#245ef9' }}>
+                                💬 REPLIED
+                              </span>
+                            )}
+                            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: "'JetBrains Mono', monospace" }}>
+                              {new Date(o.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} at {new Date(o.sent_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                          </div>
+                        </div>
+                        {o.email_subject && (
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '8px' }}>
+                            Subject: {o.email_subject}
+                          </div>
+                        )}
+                        {o.email_body && (
+                          <div style={{
+                            fontSize: '12px', lineHeight: 1.6, color: 'rgba(255,255,255,0.5)',
+                            background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '12px',
+                            whiteSpace: 'pre-wrap', fontFamily: "'Raleway', sans-serif",
+                          }}>
+                            {o.email_body}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+                      <button className="secondary-btn" onClick={() => setEmailDetailLead(null)}>Close</button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
