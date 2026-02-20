@@ -128,23 +128,53 @@ export const addLead = async (website) => {
 };
 
 // Bulk add leads (deduplicating)
-export const bulkAddLeads = async (websites, source = 'bulk_add') => {
-  const { data: existing } = await supabase
-    .from('leads')
-    .select('website')
-    .in('website', websites);
+export const bulkAddLeads = async (leads, source = 'bulk_add') => {
+  // Support both array of strings (legacy) and array of objects (new)
+  const rows = leads.map(l => typeof l === 'string' ? { website: l } : l);
+  const websites = rows.map(r => r.website).filter(Boolean);
 
-  const existingSet = new Set(existing?.map(l => l.website) || []);
-  const newWebsites = websites
-    .filter(w => !existingSet.has(w))
-    .map(w => ({ website: w, source, status: 'new' }));
+  if (!websites.length) return { added: 0, skipped: 0 };
 
-  if (newWebsites.length === 0) return { added: 0, skipped: websites.length };
+  // Check existing in batches (supabase .in() has limits)
+  const existingSet = new Set();
+  for (let i = 0; i < websites.length; i += 200) {
+    const batch = websites.slice(i, i + 200);
+    const { data } = await supabase.from('leads').select('website').in('website', batch);
+    (data || []).forEach(l => existingSet.add(l.website));
+  }
 
-  const { error } = await supabase.from('leads').insert(newWebsites);
-  if (error) throw error;
+  const newRows = rows
+    .filter(r => r.website && !existingSet.has(r.website))
+    .map(r => ({
+      website: r.website,
+      source,
+      status: 'new',
+      industry: r.industry || null,
+      country: r.country || null,
+      sells_d2c: r.sells_d2c || null,
+      icp_fit: r.icp_fit || null,
+      headquarters: r.headquarters || null,
+      platform: r.platform || null,
+      catalog_size: r.catalog_size || null,
+      city: r.city || null,
+      state: r.state || null,
+    }));
 
-  return { added: newWebsites.length, skipped: websites.length - newWebsites.length };
+  if (newRows.length === 0) return { added: 0, skipped: websites.length };
+
+  // Insert in batches of 100
+  let added = 0;
+  for (let i = 0; i < newRows.length; i += 100) {
+    const batch = newRows.slice(i, i + 100);
+    const { error } = await supabase.from('leads').insert(batch);
+    if (error) {
+      console.error('Batch insert error:', error);
+    } else {
+      added += batch.length;
+    }
+  }
+
+  return { added, skipped: websites.length - added };
 };
 
 // Log activity
