@@ -255,7 +255,7 @@ function AuthenticatedApp({ session }) {
       let query = supabase
         .from('leads')
         .select('*', { count: 'exact' })
-        .in('status', ['enriched', 'contacted']);
+        .in('status', ['enriched', 'contacted', 'replied']);
 
       if (s && s.trim()) {
         query = query.or(`website.ilike.%${s.trim()}%,research_notes.ilike.%${s.trim()}%,industry.ilike.%${s.trim()}%`);
@@ -277,7 +277,29 @@ function AuthenticatedApp({ session }) {
 
       const { data, error, count } = await query;
       if (error) throw error;
-      setManualLeads(data || []);
+
+      // Enrich leads with outreach history
+      const websites = (data || []).map(l => l.website);
+      let outreachMap = {};
+      if (websites.length > 0) {
+        const { data: outreachData } = await supabase
+          .from('outreach_log')
+          .select('website, contact_email, contact_name, sent_at, replied_at')
+          .in('website', websites)
+          .order('sent_at', { ascending: false });
+
+        for (const o of (outreachData || [])) {
+          if (!outreachMap[o.website]) outreachMap[o.website] = [];
+          outreachMap[o.website].push(o);
+        }
+      }
+
+      const enrichedLeads = (data || []).map(lead => ({
+        ...lead,
+        outreach_history: outreachMap[lead.website] || [],
+      }));
+
+      setManualLeads(enrichedLeads);
       setManualTotalCount(count || 0);
     } catch (e) { console.error(e); }
     setIsLoadingManual(false);
@@ -597,6 +619,7 @@ function AuthenticatedApp({ session }) {
         <h4>{lead.website}</h4>
         {lead.status === 'enriched' && <span className="status-badge enriched">ENRICHED</span>}
         {lead.status === 'contacted' && <span className="status-badge contacted" style={{ backgroundColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>CONTACTED</span>}
+        {lead.status === 'replied' && <span className="status-badge contacted" style={{ backgroundColor: 'rgba(36,94,249,0.2)', color: '#245ef9' }}>REPLIED</span>}
         {lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}
         <CountryBadge country={lead.country} />
       </div>
@@ -612,17 +635,37 @@ function AuthenticatedApp({ session }) {
           {lead.google_shopping && ` · GShop: ${lead.google_shopping}`}
         </div>
       )}
-      {showContacted && lead.status === 'contacted' && (
-        <div style={{ marginTop: '4px', fontSize: '10px', color: '#4ade80' }}>
-          📧 Contacted
+
+      {/* Outreach History */}
+      {lead.outreach_history && lead.outreach_history.length > 0 ? (
+        <div style={{ marginTop: '6px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '6px' }}>
+          {lead.outreach_history.map((o, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', marginTop: i > 0 ? '3px' : 0 }}>
+              <span style={{ color: o.replied_at ? '#245ef9' : '#4ade80' }}>
+                {o.replied_at ? '💬' : '✓'}
+              </span>
+              <span style={{ color: o.replied_at ? '#245ef9' : '#4ade80', fontWeight: 500 }}>
+                {o.contact_name || o.contact_email}
+              </span>
+              {o.contact_name && (
+                <span style={{ color: 'rgba(255,255,255,0.25)' }}>
+                  {o.contact_email}
+                </span>
+              )}
+              <span style={{ color: 'rgba(255,255,255,0.2)', marginLeft: 'auto', fontFamily: "'JetBrains Mono', monospace", fontSize: '9px' }}>
+                {new Date(o.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </span>
+              {o.replied_at && (
+                <span style={{ color: '#245ef9', fontSize: '9px', fontWeight: 600 }}>REPLIED</span>
+              )}
+            </div>
+          ))}
         </div>
-      )}
-      {lead.has_contacts && (
+      ) : lead.has_contacts ? (
         <div style={{ marginTop: '4px', fontSize: '10px', color: '#9015ed' }}>
           📧 {lead.contact_name || 'Contact available'}{lead.contact_email ? ` · ${lead.contact_email}` : ''}
         </div>
-      )}
-      {!lead.has_contacts && (
+      ) : (
         <div style={{ marginTop: '4px', fontSize: '10px', color: 'rgba(255,255,255,0.25)' }}>
           ⚠️ No contact email
         </div>
