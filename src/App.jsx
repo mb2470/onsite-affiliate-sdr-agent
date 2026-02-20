@@ -276,6 +276,31 @@ function App() {
     }, 1000);
   };
 
+  const handleExportFromContacts = async () => {
+    if (!selectedLeadForManual || selectedManualContacts.length === 0) return;
+
+    // Find the first selected contact to personalize the greeting
+    const selectedContact = manualContacts.find(c => selectedManualContacts.includes(c.email));
+    let personalizedEmail = manualEmail;
+
+    if (selectedContact && selectedContact.name) {
+      const firstName = selectedContact.name.split(' ')[0];
+      personalizedEmail = personalizedEmail.replace(/Hey \w+ -/i, `Hey ${firstName} -`);
+      personalizedEmail = personalizedEmail.replace(/Hey there -/i, `Hey ${firstName} -`);
+    }
+
+    await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts);
+    
+    // Reset UI and refresh data
+    setManualStep(1);
+    setSelectedLeadForManual(null);
+    setManualEmail('');
+    setManualContacts([]);
+    setSelectedManualContacts([]);
+    await loadGlobalData();
+    await loadManualLeads();
+  };
+
   // ═══════════════════════════════════════════
   // ADD LEADS
   // ═══════════════════════════════════════════
@@ -769,8 +794,8 @@ function App() {
                           </div>
                         ))}
                       </div>
-                      <button className="primary-btn" onClick={() => setManualStep(4)} disabled={selectedManualContacts.length === 0} style={{ width: '100%', padding: '14px' }}>
-                        Next: Export {selectedManualContacts.length} Contact(s) →
+                      <button className="primary-btn" onClick={handleExportFromContacts} disabled={selectedManualContacts.length === 0} style={{ width: '100%', padding: '14px' }}>
+                        📧 Open in Gmail — {selectedManualContacts.length} Contact(s)
                       </button>
                     </>
                   )}
