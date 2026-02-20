@@ -54,6 +54,9 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
   try {
     const { error } = await supabase.from('leads').update({
       status: 'contacted',
+      has_contacts: true,
+      contact_name: contactDetails?.[0]?.name || null,
+      contact_email: contactEmails[0] || null,
       updated_at: new Date().toISOString(),
     }).eq('id', leadId);
 
