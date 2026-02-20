@@ -6,7 +6,7 @@ import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLe
 import { enrichLeads } from './services/enrichService';
 import { generateEmail } from './services/emailService';
 import { findContacts } from './services/contactService';
-import { exportToGmail } from './services/exportService';
+import { sendEmail, exportToGmail } from './services/exportService';
 
 function App() {
   // Global state
@@ -311,10 +311,48 @@ function App() {
     }, 1000);
   };
 
+  const [isSending, setIsSending] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+
+  const handleSendDirect = async () => {
+    if (!selectedLeadForManual || selectedManualContacts.length === 0) return;
+
+    const selectedContact = manualContacts.find(c => selectedManualContacts.includes(c.email));
+    let personalizedEmail = manualEmail;
+
+    if (selectedContact && selectedContact.name) {
+      const firstName = selectedContact.name.split(' ')[0];
+      personalizedEmail = personalizedEmail.replace(/Hey \w+ -/i, `Hey ${firstName} -`);
+      personalizedEmail = personalizedEmail.replace(/Hey there -/i, `Hey ${firstName} -`);
+    }
+
+    setIsSending(true);
+    setSendResult(null);
+    try {
+      const result = await sendEmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
+      setSendResult({ success: true, recipients: result.recipients });
+      
+      // Reset UI after brief delay to show success
+      setTimeout(async () => {
+        setManualStep(1);
+        setSelectedLeadForManual(null);
+        setManualEmail('');
+        setManualContacts([]);
+        setSelectedManualContacts([]);
+        setSendResult(null);
+        await loadGlobalData();
+        await loadManualLeads();
+      }, 1500);
+    } catch (e) {
+      console.error(e);
+      setSendResult({ error: e.message });
+    }
+    setIsSending(false);
+  };
+
   const handleExportFromContacts = async () => {
     if (!selectedLeadForManual || selectedManualContacts.length === 0) return;
 
-    // Find the first selected contact to personalize the greeting
     const selectedContact = manualContacts.find(c => selectedManualContacts.includes(c.email));
     let personalizedEmail = manualEmail;
 
@@ -326,7 +364,6 @@ function App() {
 
     await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
     
-    // Reset UI and refresh data
     setManualStep(1);
     setSelectedLeadForManual(null);
     setManualEmail('');
@@ -847,8 +884,22 @@ function App() {
                           </div>
                         ))}
                       </div>
-                      <button className="primary-btn" onClick={handleExportFromContacts} disabled={selectedManualContacts.length === 0} style={{ width: '100%', padding: '14px' }}>
-                        📧 Open in Gmail — {selectedManualContacts.length} Contact(s)
+                      {sendResult?.success && (
+                        <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', marginBottom: '12px', textAlign: 'center', color: '#4ade80' }}>
+                          ✅ Email sent to {sendResult.recipients?.join(', ')}
+                        </div>
+                      )}
+                      {sendResult?.error && (
+                        <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', marginBottom: '12px', textAlign: 'center', color: '#f87171', fontSize: '13px' }}>
+                          ❌ {sendResult.error}
+                        </div>
+                      )}
+                      <button className="primary-btn" onClick={handleSendDirect} disabled={selectedManualContacts.length === 0 || isSending} style={{ width: '100%', padding: '14px' }}>
+                        {isSending ? '⏳ Sending...' : `📧 Send Email — ${selectedManualContacts.length} Contact(s)`}
+                      </button>
+                      <button onClick={handleExportFromContacts} disabled={selectedManualContacts.length === 0}
+                        style={{ width: '100%', padding: '10px', marginTop: '8px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px' }}>
+                        Or open in Gmail →
                       </button>
                     </>
                   )}
