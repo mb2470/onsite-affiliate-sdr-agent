@@ -1,75 +1,105 @@
 graph TD
     %% LEAD SOURCES
-    A[📥 CSV Upload] -->|Bulk import| B[leads table<br/>status: new]
-    A2[➕ Manual Add] -->|Single website| B
-    A3[🔍 StoreLeads Discovery] -->|Top stores by category| B2[leads table<br/>status: enriched]
+    A[🌐 Single Website] -->|Manual add| B[leads table<br/>status: new]
+    A2[📋 Bulk Add] -->|Multiple websites| B
+    A3[📄 CSV Import] -->|Bulk import| B
+    A4[🔍 StoreLeads Discovery] -->|Top stores by category| B2[leads table<br/>status: enriched]
 
-    %% ENRICHMENT
-    B -->|Batch 50 domains| C{StoreLeads<br/>Bulk API}
+    %% ENRICHMENT WATERFALL: StoreLeads → Apollo → Claude
+    B -->|Batch 50 domains| C{Step 1:<br/>StoreLeads Bulk API<br/>free, fast}
     C -->|Found| D[Store Data<br/>products, sales, category<br/>country, platform, rank]
-    C -->|Not Found| E[status: new<br/>unenriched]
-    
-    D --> F{ICP Scoring<br/>3 Factors}
-    
-    %% SCORING
+    C -->|Not Found| C2{Step 2:<br/>Apollo Org Enrichment<br/>cheap fallback}
+    C2 -->|Found| D2[Company Data<br/>revenue, employees<br/>industry, keywords]
+    C2 -->|Not Found| C3{Step 3:<br/>Claude AI + Web Search<br/>expensive, thorough}
+    C3 -->|Found| D3[AI Research<br/>ICP fit, industry<br/>catalog, HQ, pain points]
+    C3 -->|Not Found| E[status: new<br/>unenriched]
+
+    %% ICP SCORING — Two models by source
+    D --> F{StoreLeads<br/>ICP Scoring}
     F --> G1[✅ Products ≥ 250]
-    F --> G2[✅ Sales ≥ $1M/mo]
+    F --> G2[✅ Sales ≥ $50K/mo]
     F --> G3[✅ Target Category]
-    
     G1 & G2 & G3 --> H{US/CA + 3/3?}
+
+    D2 --> F2{Apollo<br/>ICP Scoring}
+    F2 --> G4[✅ Revenue ≥ $12M/yr]
+    F2 --> G5[✅ Target Category]
+    F2 --> G6[✅ Employees ≥ 50]
+    G4 & G5 & G6 --> H
+
+    D3 --> H2[Claude assigns<br/>ICP fit directly]
+    H2 --> I
+    H2 --> J
+    H2 --> K
+
     H -->|Yes| I[🟢 HIGH]
-    H -->|US/CA + 2/3| J[🟡 MEDIUM]
-    H -->|Non-US/CA 2-3/3| J
+    H -->|US/CA + 2/3<br/>or non-US 2-3/3| J[🟡 MEDIUM]
     H -->|0-1/3| K[🔴 LOW]
 
     %% CONTACT MATCHING
     I --> L{Contact Database<br/>509k contacts}
     J --> L
-    L -->|Match on domain| M[has_contacts: true<br/>431 HIGH leads ready]
+    L -->|Match on domain| M[has_contacts: true]
     L -->|No match| N[has_contacts: false]
 
-    %% APOLLO DISCOVERY
+    %% APOLLO CONTACT DISCOVERY
     N --> AP{🚀 Apollo API<br/>Contact Discovery}
     AP -->|Step 1: Search| AP1[Search by domain +<br/>senior titles<br/>1 credit]
-    AP1 -->|Filter has_email| AP2[Step 2: Enrich<br/>bulk_match top 3<br/>3 credits]
+    AP1 -->|Filter verified emails| AP2[Step 2: Enrich<br/>bulk_match top 3<br/>3 credits]
     AP2 -->|Full name + email| AP3[Add to<br/>contact_database]
     AP3 --> M
-    AP2 -->|No results| AP4[❌ No contacts<br/>available]
+    AP2 -->|No results| AP4[❌ No contacts<br/>status: no_contacts]
 
     %% OUTREACH FLOW
     M --> O[📋 Step 1: Select Lead<br/>Filter: HIGH + Has Contacts]
     O --> P[✨ Step 2: Generate Email<br/>Claude AI + lead context]
     P --> Q[👥 Step 3: Find Contacts<br/>Scored by title relevance]
-    
-    Q --> R1[🔥 Creator/Social — 95]
+
     Q --> R2[🎯 Marketing Leader — 100]
+    Q --> R1[🔥 Creator/Social — 95]
     Q --> R3[🎯 Digital/Ecommerce — 90]
     Q --> R4[🟢 Brand/Content — 70]
     Q --> R5[👔 Executive — 60]
-    
-    R1 & R2 & R3 & R4 & R5 --> EV
+    Q --> R6[🔵 Mid-Level — 30]
+
+    R1 & R2 & R3 & R4 & R5 & R6 --> EV
 
     %% EMAIL VERIFICATION
     EV{✉️ EmailListVerify<br/>Pre-Send Check}
     EV -->|ok, ok_for_all,<br/>accept_all| S{Send Method}
-    EV -->|invalid, disabled,<br/>dead_server| EV2[🗑️ Remove from<br/>contact_database<br/>Skip to next contact]
+    EV -->|invalid, email_disabled,<br/>dead_server, syntax_error| EV2[🗑️ Remove from<br/>contact_database<br/>Skip to next contact]
     EV -->|API error| S
-    
+
     S -->|Direct| T[📧 Gmail API Send<br/>Instant, no tab switch]
     S -->|Fallback| U[📧 Open in Gmail<br/>Compose window]
-    
+
     T --> V[✅ Lead: contacted<br/>outreach_log entry]
     U --> V
 
     %% BOUNCE HANDLING
     V --> W{Bounce Check<br/>Gmail mailer-daemon}
     W -->|Bounced| X[🗑️ Remove bad contact<br/>↩️ Reset lead to enriched]
-    W -->|Delivered| Y[✅ Awaiting Reply]
+    W -->|Delivered| RD
+
+    %% REPLY DETECTION
+    RD{📬 Reply Check<br/>Gmail inbox scan}
+    RD -->|Auto-responder<br/>OOO, auto-reply headers| RD1[🤖 Filtered out<br/>Ignored]
+    RD -->|Real reply| RD2[📩 Lead: replied<br/>outreach_log.replied_at set]
+    RD -->|No reply yet| MC
 
     %% AGENT AUTOMATION
-    Y -.->|Next day| MC{Multi-Contact<br/>Logic}
-    MC -->|1 contact/company/day| O
-    MC -->|All contacts emailed| Z[✅ Fully Contacted]
+    MC{🤖 Agent Automation<br/>Mon-Fri, 9am-5pm EST}
+    MC -->|1 contact/company/day<br/>2+ min delay between sends<br/>Daily email budget| O
+    MC -->|All contacts emailed| NXT[➡️ Move to next lead]
+    MC -.->|auto_send: false| DR[📝 Save as Draft<br/>for manual review]
+
+    %% LEAD STATUS LIFECYCLE
+    subgraph Status Lifecycle
+        LS1[new] --> LS2[enriched]
+        LS2 --> LS3[contacted]
+        LS3 --> LS4[replied]
+        LS2 -.-> LS5[no_contacts]
+    end
 
     %% STYLING
     style I fill:#166534,color:#fff
@@ -78,12 +108,27 @@ graph TD
     style T fill:#6d28d9,color:#fff
     style V fill:#166534,color:#fff
     style X fill:#991b1b,color:#fff
-    style Y fill:#166534,color:#fff
-    style Z fill:#166534,color:#fff
+    style RD2 fill:#166534,color:#fff
+    style NXT fill:#166534,color:#fff
     style B fill:#1e293b,color:#fff
     style B2 fill:#1e293b,color:#fff
     style AP fill:#1e40af,color:#fff
     style AP3 fill:#1e40af,color:#fff
+    style AP4 fill:#991b1b,color:#fff
     style EV fill:#7c3aed,color:#fff
     style EV2 fill:#991b1b,color:#fff
     style MC fill:#6d28d9,color:#fff
+    style C2 fill:#1e40af,color:#fff
+    style C3 fill:#7c3aed,color:#fff
+    style D2 fill:#1e40af,color:#fff
+    style D3 fill:#7c3aed,color:#fff
+    style RD fill:#6d28d9,color:#fff
+    style RD1 fill:#854d0e,color:#fff
+    style DR fill:#854d0e,color:#fff
+    style LS1 fill:#1e293b,color:#fff
+    style LS2 fill:#1e40af,color:#fff
+    style LS3 fill:#6d28d9,color:#fff
+    style LS4 fill:#166534,color:#fff
+    style LS5 fill:#991b1b,color:#fff
+    style F2 fill:#1e40af,color:#fff
+    style H2 fill:#7c3aed,color:#fff
