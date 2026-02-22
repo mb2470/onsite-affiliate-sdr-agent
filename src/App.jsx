@@ -710,16 +710,17 @@ function AuthenticatedApp({ session }) {
         // Get domains from leads
         const domains = leads.map(l => (l.website || '').replace(/^www\./, '').toLowerCase());
 
-        // Fetch contacts from contact_database matching these domains (batch in groups of 200)
+        // Fetch contacts from contact_database matching these domains
         let allContacts = [];
         for (let i = 0; i < domains.length; i += 200) {
-          const batch = domains.slice(i, i + 200);
-          const orConditions = batch.map(d => `website.ilike.%${d}%,email_domain.ilike.%${d}%`).join(',');
-          const { data: contacts } = await supabase
+          const batch = domains.slice(i, i + 200).filter(d => d);
+          if (batch.length === 0) continue;
+          const { data: contacts, error } = await supabase
             .from('contact_database')
             .select('*')
-            .or(orConditions)
+            .in('email_domain', batch)
             .limit(5000);
+          if (error) console.error('Contact fetch error:', error);
           if (contacts) allContacts = allContacts.concat(contacts);
         }
 
