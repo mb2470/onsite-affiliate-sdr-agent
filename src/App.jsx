@@ -154,6 +154,14 @@ function AuthenticatedApp({ session }) {
     champion_persona: '',
     // Part 4: Summary
     perfect_fit_narrative: '',
+    // Part 5: Messaging & Tone
+    sender_name: '',
+    sender_url: '',
+    email_tone: '',
+    social_proof: '',
+    messaging_do: [],
+    messaging_dont: [],
+    email_example: '',
   });
   const [icpSaving, setIcpSaving] = useState(false);
   const [icpSaved, setIcpSaved] = useState(false);
@@ -166,6 +174,8 @@ function AuthenticatedApp({ session }) {
   const [icpTechInput, setIcpTechInput] = useState('');
   const [icpTriggerInput, setIcpTriggerInput] = useState('');
   const [icpTitleInput, setIcpTitleInput] = useState('');
+  const [icpMsgDoInput, setIcpMsgDoInput] = useState('');
+  const [icpMsgDontInput, setIcpMsgDontInput] = useState('');
 
   // Create Audience state
   const [audienceFit, setAudienceFit] = useState([]);
@@ -856,6 +866,13 @@ function AuthenticatedApp({ session }) {
           gatekeeper_persona: data.gatekeeper_persona || '',
           champion_persona: data.champion_persona || '',
           perfect_fit_narrative: data.perfect_fit_narrative || '',
+          sender_name: data.sender_name || '',
+          sender_url: data.sender_url || '',
+          email_tone: data.email_tone || '',
+          social_proof: data.social_proof || '',
+          messaging_do: data.messaging_do || [],
+          messaging_dont: data.messaging_dont || [],
+          email_example: data.email_example || '',
         };
         setIcpProfile(profile);
         setIcpContext(profile);
@@ -1122,7 +1139,8 @@ function AuthenticatedApp({ session }) {
                   { num: 1, label: 'Product & UVPs' },
                   { num: 2, label: 'Firmographics' },
                   { num: 3, label: 'Buyer Persona' },
-                  { num: 4, label: 'Summary' },
+                  { num: 4, label: 'Messaging & Tone' },
+                  { num: 5, label: 'Summary' },
                 ].map(s => (
                   <div key={s.num} onClick={() => setIcpStep(s.num)} style={{
                     display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer',
@@ -1619,11 +1637,196 @@ function AuthenticatedApp({ session }) {
                 </div>
               )}
 
-              {/* ─── Part 4: Summary — Perfect Fit Narrative ─── */}
+              {/* ─── Part 4: Messaging & Tone ─── */}
               {icpStep === 4 && (
                 <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
                   <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
-                    Part 4: The "Perfect Fit" Narrative
+                    Part 4: Messaging & Tone
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
+                    This drives how your SDR agent writes emails. Your phrasing rules, social proof, and tone all flow directly into AI-generated outreach.
+                  </p>
+
+                  {/* Sender Name */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                        Sender Name
+                      </label>
+                      <input
+                        type="text"
+                        value={icpProfile.sender_name}
+                        onChange={(e) => updateIcpField('sender_name', e.target.value)}
+                        placeholder="e.g., Sam Reid"
+                        style={{
+                          width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                        Sender URL
+                      </label>
+                      <input
+                        type="text"
+                        value={icpProfile.sender_url}
+                        onChange={(e) => updateIcpField('sender_url', e.target.value)}
+                        placeholder="e.g., OnsiteAffiliate.com"
+                        style={{
+                          width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Social Proof */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Social Proof / Comparison
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      A well-known program or company your ICP already understands. The AI will reference this to position your product.
+                    </p>
+                    <input
+                      type="text"
+                      value={icpProfile.social_proof}
+                      onChange={(e) => updateIcpField('social_proof', e.target.value)}
+                      placeholder={`e.g., Amazon's Onsite Associates program`}
+                      style={{
+                        width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                      }}
+                    />
+                  </div>
+
+                  {/* Correct Messaging */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Correct Phrases (Always Say)
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      Exact phrasing the AI should use. These become hard rules in the email prompt.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        value={icpMsgDoInput}
+                        onChange={(e) => setIcpMsgDoInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && addIcpTag('messaging_do', icpMsgDoInput, setIcpMsgDoInput)}
+                        placeholder={`e.g., "onsite commissions" (not "performance commissions") — press Enter`}
+                        style={{
+                          flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                      <button onClick={() => addIcpTag('messaging_do', icpMsgDoInput, setIcpMsgDoInput)}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(34,197,94,0.3)', background: 'rgba(34,197,94,0.1)', color: '#4ade80', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                        + Add
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {icpProfile.messaging_do.map(tag => (
+                        <span key={tag} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                          background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px',
+                        }}>
+                          {tag}
+                          <span onClick={() => removeIcpTag('messaging_do', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Incorrect Messaging */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Banned Phrases (Never Say)
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      Phrasing that misrepresents your product or confuses prospects.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        value={icpMsgDontInput}
+                        onChange={(e) => setIcpMsgDontInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && addIcpTag('messaging_dont', icpMsgDontInput, setIcpMsgDontInput)}
+                        placeholder={`e.g., "performance commissions" — ALWAYS say "onsite commissions" — press Enter`}
+                        style={{
+                          flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                      <button onClick={() => addIcpTag('messaging_dont', icpMsgDontInput, setIcpMsgDontInput)}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.1)', color: '#f87171', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                        + Add
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {icpProfile.messaging_dont.map(tag => (
+                        <span key={tag} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                          background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171', fontSize: '12px',
+                        }}>
+                          {tag}
+                          <span onClick={() => removeIcpTag('messaging_dont', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Email Tone */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Email Tone
+                    </label>
+                    <input
+                      type="text"
+                      value={icpProfile.email_tone}
+                      onChange={(e) => updateIcpField('email_tone', e.target.value)}
+                      placeholder="e.g., Conversational, direct, no fluff. Like messaging a coworker on Slack."
+                      style={{
+                        width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                      }}
+                    />
+                  </div>
+
+                  {/* Example Email */}
+                  <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Example Email
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      Paste a real email you love. The AI will match this style and structure.
+                    </p>
+                    <textarea
+                      value={icpProfile.email_example}
+                      onChange={(e) => updateIcpField('email_example', e.target.value)}
+                      placeholder={`Hey Sarah -\n\nSpending thousands upfront on creator UGC before knowing if it converts?\n\nAmazon cracked this with onsite commissions - creators review products, only get paid after their videos drive actual sales. Zero upfront risk.\n\nWe help home brands copy that exact onsite commission structure for their own site. Same model Amazon uses, but for your lighting products.\n\nQuick call to walk through how it works?\n\nSam Reid\nOnsiteAffiliate.com`}
+                      rows={10}
+                      style={{
+                        width: '100%', padding: '14px 16px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: "'Courier New', monospace", fontSize: '12px',
+                        resize: 'vertical', lineHeight: 1.6,
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <button className="secondary-btn" onClick={() => setIcpStep(3)}>← Back</button>
+                    <button className="primary-btn" onClick={() => { saveIcpProfile(); setIcpStep(5); }}>Save & Continue →</button>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Part 5: Summary — Perfect Fit Narrative ─── */}
+              {icpStep === 5 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+                    Part 5: The "Perfect Fit" Narrative
                   </h3>
                   <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
                     This summary ties everything together. It's used as context for your SDR agent's scoring and email generation.
@@ -1693,6 +1896,18 @@ function AuthenticatedApp({ session }) {
                           {[icpProfile.uvp_1, icpProfile.uvp_2, icpProfile.uvp_3].filter(Boolean).join(' | ') || '—'}
                         </span>
                       </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Sender</span>
+                        <span style={{ color: '#f6f6f7' }}>{[icpProfile.sender_name, icpProfile.sender_url].filter(Boolean).join(' / ') || '—'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Social Proof</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.social_proof || '—'}</span>
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Tone</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.email_tone || '—'}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -1700,14 +1915,14 @@ function AuthenticatedApp({ session }) {
                   <div style={{ padding: '16px 20px', borderRadius: '10px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', marginBottom: '24px', fontSize: '12px', lineHeight: 1.6 }}>
                     <strong style={{ color: '#4ade80', display: 'block', marginBottom: '6px' }}>How this affects your pipeline:</strong>
                     <ul style={{ color: 'rgba(255,255,255,0.5)', paddingLeft: '16px', margin: 0 }}>
-                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Lead Scoring</strong> — Your industries, geography, and company size will be used to score new leads as HIGH / MEDIUM / LOW fit.</li>
-                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Email Generation</strong> — Your elevator pitch, UVPs, pain points, and buyer persona details will personalize outreach emails.</li>
-                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Contact Matching</strong> — Your target titles will prioritize which contacts to surface for each company.</li>
+                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Lead Scoring</strong> — Your industries, geography, and company size drive HIGH / MEDIUM / LOW scoring.</li>
+                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Email Generation</strong> — Your elevator pitch, UVPs, social proof, tone, and do/don't phrases are the AI's system prompt. No hardcoded messaging.</li>
+                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Contact Matching</strong> — Your target titles prioritize which contacts to surface for each company.</li>
                     </ul>
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <button className="secondary-btn" onClick={() => setIcpStep(3)}>← Back</button>
+                    <button className="secondary-btn" onClick={() => setIcpStep(4)}>← Back</button>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       {icpSaved && (
                         <span style={{ fontSize: '13px', color: '#4ade80', fontWeight: 600 }}>Saved</span>

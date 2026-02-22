@@ -357,6 +357,15 @@ CREATE TABLE icp_profiles (
   -- Part 4: Summary
   perfect_fit_narrative TEXT,
 
+  -- Part 5: Messaging & Tone
+  sender_name TEXT,              -- e.g., "Sam Reid"
+  sender_url TEXT,               -- e.g., "OnsiteAffiliate.com"
+  email_tone TEXT,               -- e.g., "Conversational, direct, no fluff. Like a Slack message."
+  social_proof TEXT,             -- e.g., "Amazon's Onsite Associates program"
+  messaging_do TEXT[],           -- Correct phrases: "onsite commissions", "creator UGC"
+  messaging_dont TEXT[],         -- Incorrect phrases: "performance commissions", "Hey there"
+  email_example TEXT,            -- Full example email for the AI to reference
+
   -- Status
   is_active BOOLEAN DEFAULT TRUE,
 

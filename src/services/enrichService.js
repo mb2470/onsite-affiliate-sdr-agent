@@ -1,57 +1,51 @@
 import { supabase } from '../supabaseClient';
 import { logActivity } from './leadService';
 
-const SYSTEM_PROMPT = `You are a B2B sales researcher for Onsite Affiliate. You have web search available — USE IT to look up the company website and check Google Shopping.
+// ═══ BUILD ENRICHMENT SYSTEM PROMPT DYNAMICALLY FROM ICP PROFILE ═══
+
+function buildEnrichSystemPrompt() {
+  const ctx = _icpContext;
+
+  const industriesList = ctx?.industries?.length ? ctx.industries.join(', ') : 'Fashion/Apparel, Home Goods, Outdoor/Lifestyle, Electronics';
+  const geoList = ctx?.geography?.length ? ctx.geography.join(', ') : 'US, Canada';
+  const elevatorPitch = ctx?.elevator_pitch || 'We help companies grow.';
+  const coreProblem = ctx?.core_problem || '';
+  const titles = ctx?.primary_titles?.length ? ctx.primary_titles.join(', ') : 'CMO, VP Marketing, Head of Ecommerce';
+
+  return `You are a B2B sales researcher. You have web search available — USE IT to look up the company website and check Google Shopping.
 
 Return ONLY plain text in the exact format requested. No markdown, no code fences, no extra explanation.
 
-WHAT ONSITE AFFILIATE DOES:
-We help D2C ecommerce brands run performance-based creator/UGC programs on their own website. Brands get video content with no upfront costs — creators earn commissions on sales they drive.
+WHAT WE DO:
+${elevatorPitch}
 
 ICP SCORING RULES (follow these EXACTLY):
 
 HIGH FIT — ALL of these must be true:
-1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — Nike, Coach, Nordstrom all count as D2C because they sell on their own site)
+1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — they count as D2C if they sell on their own site)
 2. Large product catalog (estimate 250+ products)
-3. Primary category is one of: Fashion/Apparel, Home Goods, Outdoor/Lifestyle, Electronics
-4. Headquartered in US or Canada
+3. Primary category is one of: ${industriesList}
+4. Headquartered in ${geoList}
 5. BONUS: If found on Google Shopping, this is a strong HIGH signal
 
 MEDIUM FIT — has a D2C website BUT one or more:
 - Catalog under 250 products in a target category
-- Large catalog but in a non-target category (Beauty, Pet, Food, Health, Sports, Toys, etc.)
-- Headquartered outside US/Canada
+- Large catalog but in a non-target category
+- Headquartered outside ${geoList}
 
 LOW FIT — any of these:
 - No D2C ecommerce (B2B only, SaaS, services, marketplace-only seller with no own store)
 - Brick-and-mortar only with no online store
 - Non-profit, government, media company, blog
-- No product sales at all
+- No product sales at all`;
+}
 
-IMPORTANT EXAMPLES:
-- Wayfair.com → HIGH (D2C ecommerce, huge Home Goods catalog, US-based)
-- Nordstrom.com → HIGH (D2C ecommerce, huge Fashion catalog, US-based, sells on own site)
-- Nike.com → HIGH (D2C ecommerce, large Fashion/Apparel catalog, US-based)
-- Coach.com → HIGH (D2C ecommerce, large Fashion/Accessories catalog, US-based)
-- A small Shopify jewelry store with 30 products → MEDIUM (D2C but small catalog)
-- A UK-based home goods brand → MEDIUM (D2C but non-US/CA)
-- A B2B industrial supplier → LOW (not D2C consumer)
-- A SaaS company → LOW (no product sales)`;
+function buildEnrichPrompt(website) {
+  const ctx = _icpContext;
+  const titles = ctx?.primary_titles?.length ? ctx.primary_titles.join(', ') : 'CMO, VP Marketing, Head of Ecommerce';
+  const painContext = ctx?.core_problem || 'their potential business challenges';
 
-const buildIcpContext = () => {
-  if (!_icpContext) return '';
-  const parts = [];
-  if (_icpContext.industries?.length) parts.push(`Target Industries: ${_icpContext.industries.join(', ')}`);
-  if (_icpContext.geography?.length) parts.push(`Target Geography: ${_icpContext.geography.join(', ')}`);
-  if (_icpContext.company_size) parts.push(`Ideal Company Size: ${_icpContext.company_size}`);
-  if (_icpContext.revenue_range) parts.push(`Ideal Revenue Range: ${_icpContext.revenue_range}`);
-  if (_icpContext.primary_titles?.length) parts.push(`Target Decision Makers: ${_icpContext.primary_titles.join(', ')}`);
-  if (_icpContext.core_problem) parts.push(`Core Problem We Solve: ${_icpContext.core_problem}`);
-  if (_icpContext.elevator_pitch) parts.push(`Our Product: ${_icpContext.elevator_pitch}`);
-  return parts.length > 0 ? `\n\nCUSTOM ICP CRITERIA (use these to adjust scoring):\n${parts.join('\n')}` : '';
-};
-
-const buildPrompt = (website) => `Research the company at ${website} for B2B sales qualification.
+  return `Research the company at ${website} for B2B sales qualification.
 
 TASKS:
 1. Visit or search for ${website} to understand what they sell
@@ -67,8 +61,9 @@ Headquarters: [City, State/Country]
 Google Shopping: [YES/NO/UNKNOWN - are their products listed on Google Shopping?]
 ICP Fit: [HIGH/MEDIUM/LOW]
 Fit Reason: [one sentence explaining why this score]
-Decision Makers: [comma-separated likely titles e.g. CMO, VP Marketing, Head of Ecommerce]
-Pain Points: [2-3 pain points related to creator content, UGC costs, or influencer spend]`;
+Decision Makers: [comma-separated likely titles e.g. ${titles}]
+Pain Points: [2-3 pain points related to ${painContext}]`;
+}
 
 // Parse a field from the enrichment response
 const parseField = (text, fieldName) => {
@@ -206,12 +201,13 @@ async function tryApollo(domain) {
     const factors = [];
     const fitReason = [];
     if (revenue >= 12000000) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
-    if (TARGET_CATEGORIES.some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
+    if (getTargetCategories().some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
     if (employees >= 50) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
 
     const c = (org.country || '').toUpperCase();
-    const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA'].some(x => c.includes(x));
-    let icp_fit = factors.length >= 3 && isUSCA ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
+    const targetGeo = getTargetGeography();
+    const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
+    let icp_fit = factors.length >= 3 && isTargetGeo ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
 
     return {
       source: 'apollo',
@@ -233,14 +229,13 @@ async function tryApollo(domain) {
 
 // ═══ STEP 3: Fall back to Claude AI ═══
 async function tryClaude(lead) {
-  const icpContext = buildIcpContext();
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       useWebSearch: true,
-      prompt: buildPrompt(lead.website),
-      systemPrompt: SYSTEM_PROMPT + icpContext
+      prompt: buildEnrichPrompt(lead.website),
+      systemPrompt: buildEnrichSystemPrompt()
     })
   });
 
