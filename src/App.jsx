@@ -127,6 +127,14 @@ function AuthenticatedApp({ session }) {
   const [emailDetailData, setEmailDetailData] = useState([]);
   const PIPELINE_PAGE_SIZE = 100;
 
+  // Create Audience state
+  const [audienceFit, setAudienceFit] = useState([]);
+  const [audienceExportType, setAudienceExportType] = useState(null); // 'company' or 'email'
+  const [audienceStep, setAudienceStep] = useState(1);
+  const [audienceLoading, setAudienceLoading] = useState(false);
+  const [audiencePreviewCount, setAudiencePreviewCount] = useState(0);
+  const [audienceDownloaded, setAudienceDownloaded] = useState(false);
+
   // ═══════════════════════════════════════════
   // DATA LOADING
   // ═══════════════════════════════════════════
@@ -631,6 +639,144 @@ function AuthenticatedApp({ session }) {
   useEffect(() => { if (activeView === 'pipeline') loadPipeline(); }, [activeView, pipelineFilter, pipelinePage, pipelineSearch]);
 
   // ═══════════════════════════════════════════
+  // CREATE AUDIENCE
+  // ═══════════════════════════════════════════
+
+  const toggleAudienceFit = (fit) => {
+    setAudienceFit(prev => prev.includes(fit) ? prev.filter(f => f !== fit) : [...prev, fit]);
+  };
+
+  // Load preview count when fit selection changes
+  useEffect(() => {
+    if (audienceFit.length === 0) { setAudiencePreviewCount(0); return; }
+    (async () => {
+      const { count } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['enriched', 'contacted', 'replied'])
+        .in('icp_fit', audienceFit);
+      setAudiencePreviewCount(count || 0);
+    })();
+  }, [audienceFit]);
+
+  const handleAudienceDownload = async () => {
+    if (audienceFit.length === 0 || !audienceExportType) return;
+    setAudienceLoading(true);
+    setAudienceDownloaded(false);
+
+    try {
+      // Fetch all enriched leads matching the selected fits
+      const { data: leads } = await supabase
+        .from('leads')
+        .select('*')
+        .in('status', ['enriched', 'contacted', 'replied'])
+        .in('icp_fit', audienceFit)
+        .order('icp_fit', { ascending: true });
+
+      if (!leads || leads.length === 0) {
+        alert('No leads found for the selected fit criteria.');
+        setAudienceLoading(false);
+        return;
+      }
+
+      let csvContent = '';
+
+      if (audienceExportType === 'company') {
+        // LinkedIn Company List template
+        const headers = ['companyname', 'companywebsite', 'companyemaildomain', 'linkedincompanypageurl', 'stocksymbol', 'industry', 'city', 'state', 'companycountry', 'zipcode'];
+        csvContent = headers.join(',') + '\n';
+
+        for (const lead of leads) {
+          const domain = (lead.website || '').replace(/^www\./, '').toLowerCase();
+          const row = [
+            lead.company_name || domain.replace(/\.\w+$/, ''),
+            lead.website || '',
+            domain,
+            '', // linkedincompanypageurl - not stored
+            '', // stocksymbol - not stored
+            lead.industry || '',
+            lead.city || '',
+            lead.state || '',
+            lead.country || '',
+            '', // zipcode - not stored
+          ].map(v => `"${String(v).replace(/"/g, '""')}"`);
+          csvContent += row.join(',') + '\n';
+        }
+      } else {
+        // LinkedIn Email Contact List template
+        const headers = ['email', 'firstname', 'lastname', 'jobtitle', 'employeecompany', 'country', 'googleaidid'];
+        csvContent = headers.join(',') + '\n';
+
+        // Get domains from leads
+        const domains = leads.map(l => (l.website || '').replace(/^www\./, '').toLowerCase());
+
+        // Fetch contacts from contact_database matching these domains (batch in groups of 200)
+        let allContacts = [];
+        for (let i = 0; i < domains.length; i += 200) {
+          const batch = domains.slice(i, i + 200);
+          const orConditions = batch.map(d => `website.ilike.%${d}%,email_domain.ilike.%${d}%`).join(',');
+          const { data: contacts } = await supabase
+            .from('contact_database')
+            .select('*')
+            .or(orConditions)
+            .limit(5000);
+          if (contacts) allContacts = allContacts.concat(contacts);
+        }
+
+        // Build a map of domain → lead for country lookup
+        const domainToLead = {};
+        for (const lead of leads) {
+          const d = (lead.website || '').replace(/^www\./, '').toLowerCase();
+          domainToLead[d] = lead;
+        }
+
+        // Deduplicate contacts by email
+        const seen = new Set();
+        for (const c of allContacts) {
+          if (seen.has(c.email)) continue;
+          seen.add(c.email);
+          const contactDomain = (c.email_domain || '').toLowerCase();
+          const matchedLead = domainToLead[contactDomain] || domainToLead[(c.website || '').replace(/^www\./, '').toLowerCase()];
+          const row = [
+            c.email || '',
+            c.first_name || '',
+            c.last_name || '',
+            c.title || '',
+            c.account_name || matchedLead?.company_name || (c.website || '').replace(/^www\./, '').replace(/\.\w+$/, ''),
+            matchedLead?.country || '',
+            '', // googleaidid - not stored
+          ].map(v => `"${String(v).replace(/"/g, '""')}"`);
+          csvContent += row.join(',') + '\n';
+        }
+
+        if (allContacts.length === 0) {
+          alert('No contacts found in the database for the selected leads. Try exporting a Company List instead.');
+          setAudienceLoading(false);
+          return;
+        }
+      }
+
+      // Trigger CSV download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const fitLabel = audienceFit.join('_').toLowerCase();
+      link.href = url;
+      link.download = `linkedin_${audienceExportType}_list_${fitLabel}_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setAudienceDownloaded(true);
+    } catch (e) {
+      console.error('Audience export error:', e);
+      alert('Export failed: ' + e.message);
+    }
+    setAudienceLoading(false);
+  };
+
+  // ═══════════════════════════════════════════
   // HELPERS
   // ═══════════════════════════════════════════
 
@@ -801,6 +947,7 @@ function AuthenticatedApp({ session }) {
             { key: 'manual', icon: '✉️', label: 'Manual Outreach' },
             { key: 'agent', icon: '🤖', label: 'Manage Agent' },
             { key: 'pipeline', icon: '📊', label: 'Pipeline' },
+            { key: 'audience', icon: '🎯', label: 'Create Audience' },
           ].map(item => (
             <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
               <span className="btn-icon">{item.icon}</span>
@@ -1709,6 +1856,252 @@ function AuthenticatedApp({ session }) {
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
                       <button className="secondary-btn" onClick={() => setEmailDetailLead(null)}>Close</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ═══ CREATE AUDIENCE ═══ */}
+          {activeView === 'audience' && (
+            <div className="view-container">
+              <h2>🎯 Create Audience</h2>
+              <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '13px', marginBottom: '24px' }}>
+                Export enriched leads for LinkedIn ad targeting. Select ICP fit, choose your export format, and download a ready-to-upload CSV.
+              </p>
+
+              {/* Step indicators */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '28px' }}>
+                {[
+                  { num: 1, label: 'Select Fit' },
+                  { num: 2, label: 'Export Type' },
+                  { num: 3, label: 'Download' },
+                ].map(s => (
+                  <div key={s.num} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '8px',
+                    background: audienceStep === s.num ? 'var(--brand-gradient-subtle)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${audienceStep === s.num ? 'rgba(144,21,237,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                    opacity: audienceStep >= s.num ? 1 : 0.4,
+                  }}>
+                    <span style={{
+                      width: '22px', height: '22px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '11px', fontWeight: 700, fontFamily: "'Barlow', sans-serif",
+                      background: audienceStep > s.num ? 'rgba(34,197,94,0.2)' : audienceStep === s.num ? 'rgba(144,21,237,0.25)' : 'rgba(255,255,255,0.08)',
+                      color: audienceStep > s.num ? '#4ade80' : audienceStep === s.num ? '#c6beee' : 'rgba(255,255,255,0.3)',
+                    }}>
+                      {audienceStep > s.num ? '✓' : s.num}
+                    </span>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: audienceStep === s.num ? '#c6beee' : 'rgba(255,255,255,0.5)' }}>
+                      {s.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Step 1: Select ICP Fit */}
+              {audienceStep === 1 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+                    Select ICP Fit Levels
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
+                    Choose which fit levels to include in your audience. You can select multiple.
+                  </p>
+
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+                    {[
+                      { value: 'HIGH', label: 'High Fit', count: icpCounts.high, color: '#4ade80', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.3)' },
+                      { value: 'MEDIUM', label: 'Medium Fit', count: icpCounts.medium, color: '#eab308', bg: 'rgba(234,179,8,0.1)', border: 'rgba(234,179,8,0.3)' },
+                      { value: 'LOW', label: 'Low Fit', count: icpCounts.low, color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)' },
+                    ].map(fit => {
+                      const selected = audienceFit.includes(fit.value);
+                      return (
+                        <div
+                          key={fit.value}
+                          onClick={() => toggleAudienceFit(fit.value)}
+                          style={{
+                            flex: 1, padding: '20px', borderRadius: '12px', cursor: 'pointer', textAlign: 'center',
+                            transition: 'all 0.15s ease',
+                            background: selected ? fit.bg : 'rgba(255,255,255,0.02)',
+                            border: `2px solid ${selected ? fit.border : 'rgba(255,255,255,0.08)'}`,
+                          }}
+                        >
+                          <div style={{ fontSize: '28px', fontWeight: 800, fontFamily: "'Barlow', sans-serif", color: selected ? fit.color : 'rgba(255,255,255,0.2)', marginBottom: '4px' }}>
+                            {fit.count}
+                          </div>
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: selected ? fit.color : 'rgba(255,255,255,0.4)' }}>
+                            {fit.label}
+                          </div>
+                          <div style={{ marginTop: '8px' }}>
+                            <input type="checkbox" checked={selected} readOnly style={{ accentColor: fit.color }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {audienceFit.length > 0 && (
+                    <div style={{
+                      padding: '12px 16px', borderRadius: '8px', background: 'rgba(144,21,237,0.08)', border: '1px solid rgba(144,21,237,0.15)',
+                      fontSize: '13px', color: '#c6beee', marginBottom: '20px',
+                    }}>
+                      <strong>{audiencePreviewCount}</strong> enriched lead{audiencePreviewCount !== 1 ? 's' : ''} matching: {audienceFit.join(', ')}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      className="primary-btn"
+                      disabled={audienceFit.length === 0}
+                      onClick={() => setAudienceStep(2)}
+                      style={{ opacity: audienceFit.length === 0 ? 0.4 : 1 }}
+                    >
+                      Continue →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Choose Export Type */}
+              {audienceStep === 2 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+                    Choose Export Type
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
+                    Select the LinkedIn audience format to export.
+                  </p>
+
+                  <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
+                    {[
+                      {
+                        value: 'company',
+                        icon: '🏢',
+                        label: 'Company List',
+                        desc: 'Export company names, domains, and industries for LinkedIn Company targeting.',
+                        fields: 'companyname, companywebsite, companyemaildomain, industry, city, state, country',
+                      },
+                      {
+                        value: 'email',
+                        icon: '📧',
+                        label: 'Email Contact List',
+                        desc: 'Export individual contacts with emails for LinkedIn Contact targeting.',
+                        fields: 'email, firstname, lastname, jobtitle, employeecompany, country',
+                      },
+                    ].map(opt => {
+                      const selected = audienceExportType === opt.value;
+                      return (
+                        <div
+                          key={opt.value}
+                          onClick={() => setAudienceExportType(opt.value)}
+                          style={{
+                            flex: 1, padding: '24px', borderRadius: '12px', cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            background: selected ? 'rgba(144,21,237,0.08)' : 'rgba(255,255,255,0.02)',
+                            border: `2px solid ${selected ? 'rgba(144,21,237,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                          }}
+                        >
+                          <div style={{ fontSize: '32px', marginBottom: '12px' }}>{opt.icon}</div>
+                          <div style={{ fontSize: '15px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", color: selected ? '#c6beee' : 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                            {opt.label}
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5, marginBottom: '10px' }}>
+                            {opt.desc}
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', fontFamily: "'JetBrains Mono', monospace" }}>
+                            {opt.fields}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <button className="secondary-btn" onClick={() => setAudienceStep(1)}>
+                      ← Back
+                    </button>
+                    <button
+                      className="primary-btn"
+                      disabled={!audienceExportType}
+                      onClick={() => setAudienceStep(3)}
+                      style={{ opacity: !audienceExportType ? 0.4 : 1 }}
+                    >
+                      Continue →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Download */}
+              {audienceStep === 3 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+                    Download CSV
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
+                    Review your selections and download the CSV file ready for LinkedIn Matched Audiences.
+                  </p>
+
+                  {/* Summary */}
+                  <div style={{
+                    display: 'flex', gap: '16px', marginBottom: '24px',
+                  }}>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginBottom: '8px' }}>ICP Fit</div>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {audienceFit.map(f => (
+                          <span key={f} className={`icp-badge ${f.toLowerCase()}`}>{f}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginBottom: '8px' }}>Export Type</div>
+                      <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                        {audienceExportType === 'company' ? '🏢 Company List' : '📧 Email Contact List'}
+                      </div>
+                    </div>
+                    <div style={{ flex: 1, padding: '16px', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginBottom: '8px' }}>Matching Leads</div>
+                      <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", color: '#c6beee' }}>
+                        {audiencePreviewCount}
+                      </div>
+                    </div>
+                  </div>
+
+                  {audienceDownloaded && (
+                    <div style={{
+                      padding: '12px 16px', borderRadius: '8px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)',
+                      fontSize: '13px', color: '#4ade80', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '8px',
+                    }}>
+                      <span>✅</span> CSV downloaded successfully! Upload it to LinkedIn Campaign Manager under Matched Audiences.
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <button className="secondary-btn" onClick={() => setAudienceStep(2)}>
+                      ← Back
+                    </button>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <button
+                        className="secondary-btn"
+                        onClick={() => {
+                          setAudienceStep(1);
+                          setAudienceFit([]);
+                          setAudienceExportType(null);
+                          setAudienceDownloaded(false);
+                        }}
+                      >
+                        Start Over
+                      </button>
+                      <button
+                        className="primary-btn"
+                        onClick={handleAudienceDownload}
+                        disabled={audienceLoading}
+                        style={{ minWidth: '160px' }}
+                      >
+                        {audienceLoading ? 'Exporting...' : `⬇ Download ${audienceExportType === 'company' ? 'Company' : 'Contact'} CSV`}
+                      </button>
                     </div>
                   </div>
                 </div>
