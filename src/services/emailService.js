@@ -56,15 +56,37 @@ OnsiteAffiliate.com
 
 TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.`;
 
+// Module-level ICP profile cache (set from App.jsx via setEmailIcpContext)
+let _emailIcpContext = null;
+
+export const setEmailIcpContext = (icpProfile) => {
+  _emailIcpContext = icpProfile;
+};
+
+function buildIcpEmailContext() {
+  if (!_emailIcpContext) return '';
+  const parts = [];
+  if (_emailIcpContext.elevator_pitch) parts.push(`OUR PRODUCT: ${_emailIcpContext.elevator_pitch}`);
+  if (_emailIcpContext.core_problem) parts.push(`CORE PROBLEM WE SOLVE: ${_emailIcpContext.core_problem}`);
+  const uvps = [_emailIcpContext.uvp_1, _emailIcpContext.uvp_2, _emailIcpContext.uvp_3].filter(Boolean);
+  if (uvps.length) parts.push(`OUR UVPs:\n${uvps.map((u, i) => `${i + 1}. ${u}`).join('\n')}`);
+  if (_emailIcpContext.alternative) parts.push(`THE ALTERNATIVE (what they'd use without us): ${_emailIcpContext.alternative}`);
+  if (_emailIcpContext.daily_obstacles) parts.push(`BUYER'S DAILY OBSTACLES: ${_emailIcpContext.daily_obstacles}`);
+  if (_emailIcpContext.success_metrics) parts.push(`BUYER'S SUCCESS METRICS: ${_emailIcpContext.success_metrics}`);
+  if (_emailIcpContext.key_responsibilities) parts.push(`BUYER'S RESPONSIBILITIES: ${_emailIcpContext.key_responsibilities}`);
+  return parts.length > 0 ? `\n\nICP CONTEXT (use this to personalize messaging):\n${parts.join('\n\n')}` : '';
+}
+
 // Generate a personalized outreach email for a lead
 export const generateEmail = async (lead, contactName) => {
   const firstName = contactName ? contactName.split(' ')[0] : 'there';
-  
+  const icpContext = buildIcpEmailContext();
+
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      prompt: `Write a casual outreach email for ${lead.website}. 
+      prompt: `Write a casual outreach email for ${lead.website}.
 The contact's first name is "${firstName}" — ALWAYS address them as "Hey ${firstName} -"
 
 ${lead.research_notes ? `Context: ${lead.research_notes.substring(0, 300)}` : ''}
@@ -85,7 +107,7 @@ Format:
 Subject: [subject]
 
 [body]`,
-      systemPrompt: SYSTEM_PROMPT
+      systemPrompt: SYSTEM_PROMPT + icpContext
     })
   });
 

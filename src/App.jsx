@@ -4,8 +4,8 @@ import AgentMonitor from './AgentMonitor';
 import Login from './Login';
 import { supabase } from './supabaseClient';
 import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
-import { enrichLeads } from './services/enrichService';
-import { generateEmail } from './services/emailService';
+import { enrichLeads, setIcpContext } from './services/enrichService';
+import { generateEmail, setEmailIcpContext } from './services/emailService';
 import { findContacts } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
 
@@ -127,6 +127,46 @@ function AuthenticatedApp({ session }) {
   const [emailDetailData, setEmailDetailData] = useState([]);
   const PIPELINE_PAGE_SIZE = 100;
 
+  // ICP Profile state
+  const [icpStep, setIcpStep] = useState(1);
+  const [icpProfile, setIcpProfile] = useState({
+    // Part 1: Product & Value Propositions
+    elevator_pitch: '',
+    core_problem: '',
+    uvp_1: '',
+    uvp_2: '',
+    uvp_3: '',
+    alternative: '',
+    // Part 2: Firmographics
+    industries: [],
+    company_size: '',
+    geography: [],
+    revenue_range: '',
+    tech_stack: [],
+    trigger_events: [],
+    // Part 3: Buyer Persona
+    primary_titles: [],
+    key_responsibilities: '',
+    daily_obstacles: '',
+    success_metrics: '',
+    user_persona: '',
+    gatekeeper_persona: '',
+    champion_persona: '',
+    // Part 4: Summary
+    perfect_fit_narrative: '',
+  });
+  const [icpSaving, setIcpSaving] = useState(false);
+  const [icpSaved, setIcpSaved] = useState(false);
+  const [icpProfileId, setIcpProfileId] = useState(null);
+  const [icpLoaded, setIcpLoaded] = useState(false);
+
+  // ICP tag input helpers
+  const [icpIndustryInput, setIcpIndustryInput] = useState('');
+  const [icpGeoInput, setIcpGeoInput] = useState('');
+  const [icpTechInput, setIcpTechInput] = useState('');
+  const [icpTriggerInput, setIcpTriggerInput] = useState('');
+  const [icpTitleInput, setIcpTitleInput] = useState('');
+
   // Create Audience state
   const [audienceFit, setAudienceFit] = useState([]);
   const [audienceExportType, setAudienceExportType] = useState(null); // 'company' or 'email'
@@ -143,6 +183,7 @@ function AuthenticatedApp({ session }) {
     loadGlobalData();
     loadEnrichLeads();
     loadManualLeads();
+    loadIcpProfile();
   }, []);
 
   const loadGlobalData = async () => {
@@ -778,6 +819,108 @@ function AuthenticatedApp({ session }) {
   };
 
   // ═══════════════════════════════════════════
+  // ICP PROFILE
+  // ═══════════════════════════════════════════
+
+  const loadIcpProfile = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('icp_profiles')
+        .select('*')
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) { console.error('ICP load error:', error); return; }
+      if (data) {
+        setIcpProfileId(data.id);
+        const profile = {
+          elevator_pitch: data.elevator_pitch || '',
+          core_problem: data.core_problem || '',
+          uvp_1: data.uvp_1 || '',
+          uvp_2: data.uvp_2 || '',
+          uvp_3: data.uvp_3 || '',
+          alternative: data.alternative || '',
+          industries: data.industries || [],
+          company_size: data.company_size || '',
+          geography: data.geography || [],
+          revenue_range: data.revenue_range || '',
+          tech_stack: data.tech_stack || [],
+          trigger_events: data.trigger_events || [],
+          primary_titles: data.primary_titles || [],
+          key_responsibilities: data.key_responsibilities || '',
+          daily_obstacles: data.daily_obstacles || '',
+          success_metrics: data.success_metrics || '',
+          user_persona: data.user_persona || '',
+          gatekeeper_persona: data.gatekeeper_persona || '',
+          champion_persona: data.champion_persona || '',
+          perfect_fit_narrative: data.perfect_fit_narrative || '',
+        };
+        setIcpProfile(profile);
+        setIcpContext(profile);
+        setEmailIcpContext(profile);
+      }
+    } catch (e) { console.error('ICP load error:', e); }
+    setIcpLoaded(true);
+  };
+
+  const updateIcpField = (field, value) => {
+    setIcpProfile(prev => ({ ...prev, [field]: value }));
+    setIcpSaved(false);
+  };
+
+  const addIcpTag = (field, value, setInput) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (!icpProfile[field].includes(trimmed)) {
+      updateIcpField(field, [...icpProfile[field], trimmed]);
+    }
+    setInput('');
+  };
+
+  const removeIcpTag = (field, value) => {
+    updateIcpField(field, icpProfile[field].filter(v => v !== value));
+  };
+
+  const saveIcpProfile = async () => {
+    setIcpSaving(true);
+    try {
+      const payload = { ...icpProfile, is_active: true };
+
+      if (icpProfileId) {
+        const { error } = await supabase.from('icp_profiles').update(payload).eq('id', icpProfileId);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.from('icp_profiles').insert(payload).select().single();
+        if (error) throw error;
+        setIcpProfileId(data.id);
+      }
+      // Push ICP context to downstream services
+      setIcpContext(icpProfile);
+      setEmailIcpContext(icpProfile);
+      setIcpSaved(true);
+      setTimeout(() => setIcpSaved(false), 3000);
+    } catch (e) {
+      console.error('ICP save error:', e);
+      alert('Failed to save ICP profile: ' + e.message);
+    }
+    setIcpSaving(false);
+  };
+
+  const generatePerfectFitNarrative = () => {
+    const size = icpProfile.company_size || '[Company Size]';
+    const industry = icpProfile.industries.length > 0 ? icpProfile.industries.join('/') : '[Industry]';
+    const problem = icpProfile.core_problem || '[Main Pain Point]';
+    const title = icpProfile.primary_titles.length > 0 ? icpProfile.primary_titles[0] : '[Job Title]';
+    const kpi = icpProfile.success_metrics || '[Key Benefit/KPI]';
+    const uvp = icpProfile.uvp_1 || '[Unique Value Prop]';
+
+    const narrative = `Our ideal customer is a ${size} ${industry} company that is currently struggling with ${problem}. The ${title} is looking for a way to ${kpi} and chooses us because of our ${uvp}.`;
+    updateIcpField('perfect_fit_narrative', narrative);
+  };
+
+  // ═══════════════════════════════════════════
   // HELPERS
   // ═══════════════════════════════════════════
 
@@ -943,6 +1086,7 @@ function AuthenticatedApp({ session }) {
       <div className="main-layout">
         <aside className="vertical-sidebar">
           {[
+            { key: 'icp', icon: '🧭', label: 'ICP Setup' },
             { key: 'add', icon: '➕', label: 'Add Leads' },
             { key: 'enrich', icon: '🔬', label: 'Enrich Leads' },
             { key: 'manual', icon: '✉️', label: 'Manual Outreach' },
@@ -958,6 +1102,625 @@ function AuthenticatedApp({ session }) {
         </aside>
 
         <main className="main-content">
+
+          {/* ═══ ICP SETUP ═══ */}
+          {activeView === 'icp' && (
+            <div className="view-container">
+              <h2>ICP Discovery</h2>
+              <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '13px', marginBottom: '8px', maxWidth: '700px', lineHeight: 1.6 }}>
+                Nailing your Ideal Customer Profile is the difference between emailing into a void and high-conversion messaging. Complete each section below to train your SDR agent.
+              </p>
+              {icpProfileId && (
+                <p style={{ fontSize: '11px', color: 'rgba(144,21,237,0.6)', marginBottom: '16px' }}>
+                  Profile loaded — edits auto-update downstream scoring & email generation.
+                </p>
+              )}
+
+              {/* Step indicators */}
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '28px', flexWrap: 'wrap' }}>
+                {[
+                  { num: 1, label: 'Product & UVPs' },
+                  { num: 2, label: 'Firmographics' },
+                  { num: 3, label: 'Buyer Persona' },
+                  { num: 4, label: 'Summary' },
+                ].map(s => (
+                  <div key={s.num} onClick={() => setIcpStep(s.num)} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer',
+                    background: icpStep === s.num ? 'var(--brand-gradient-subtle)' : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${icpStep === s.num ? 'rgba(144,21,237,0.3)' : 'rgba(255,255,255,0.06)'}`,
+                    transition: 'all 0.15s',
+                  }}>
+                    <span style={{
+                      width: '22px', height: '22px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '11px', fontWeight: 700, fontFamily: "'Barlow', sans-serif",
+                      background: icpStep > s.num ? 'rgba(34,197,94,0.2)' : icpStep === s.num ? 'rgba(144,21,237,0.25)' : 'rgba(255,255,255,0.08)',
+                      color: icpStep > s.num ? '#4ade80' : icpStep === s.num ? '#c6beee' : 'rgba(255,255,255,0.3)',
+                    }}>
+                      {icpStep > s.num ? '✓' : s.num}
+                    </span>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: icpStep === s.num ? '#c6beee' : 'rgba(255,255,255,0.5)' }}>
+                      {s.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* ─── Part 1: Product & Unique Value Propositions ─── */}
+              {icpStep === 1 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+                    Part 1: Product & Unique Value Propositions
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
+                    Focus on the "Why." What makes your solution the obvious choice over the status quo?
+                  </p>
+
+                  {/* Elevator Pitch */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Elevator Pitch
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      Describe your product in 2 sentences as if explaining it to a peer.
+                    </p>
+                    <textarea
+                      value={icpProfile.elevator_pitch}
+                      onChange={(e) => updateIcpField('elevator_pitch', e.target.value)}
+                      placeholder="e.g., We help D2C brands copy Amazon's onsite commission model for their own website. Creators review products and earn commissions on sales they drive — zero upfront costs for brands."
+                      rows={3}
+                      style={{
+                        width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        resize: 'vertical', lineHeight: 1.5,
+                      }}
+                    />
+                  </div>
+
+                  {/* Core Problem */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      The "Core" Problem
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      What is the single biggest pain point your product solves?
+                    </p>
+                    <textarea
+                      value={icpProfile.core_problem}
+                      onChange={(e) => updateIcpField('core_problem', e.target.value)}
+                      placeholder="e.g., Brands spend thousands upfront on creator UGC content with no guarantee of ROI — the 'leaky bucket' problem."
+                      rows={2}
+                      style={{
+                        width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        resize: 'vertical', lineHeight: 1.5,
+                      }}
+                    />
+                  </div>
+
+                  {/* UVPs */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Unique Value Propositions (UVPs)
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      List 3 things you do better than anyone else.
+                    </p>
+                    {[
+                      { field: 'uvp_1', num: 1, placeholder: 'e.g., Zero upfront costs — brands only pay onsite commissions when creator videos drive actual sales' },
+                      { field: 'uvp_2', num: 2, placeholder: 'e.g., Permanent UGC on PDPs — extend creator content ROI from 48 hours to forever' },
+                      { field: 'uvp_3', num: 3, placeholder: 'e.g., Proven Amazon model adapted for D2C — not a new concept, just a new application' },
+                    ].map(uvp => (
+                      <div key={uvp.field} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '10px' }}>
+                        <span style={{
+                          minWidth: '22px', height: '22px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: '11px', fontWeight: 700, fontFamily: "'Barlow', sans-serif",
+                          background: 'rgba(144,21,237,0.15)', color: '#c6beee', marginTop: '10px',
+                        }}>{uvp.num}</span>
+                        <input
+                          type="text"
+                          value={icpProfile[uvp.field]}
+                          onChange={(e) => updateIcpField(uvp.field, e.target.value)}
+                          placeholder={uvp.placeholder}
+                          style={{
+                            flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* The Alternative */}
+                  <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      The Alternative
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      If your product didn't exist, what would they use?
+                    </p>
+                    <input
+                      type="text"
+                      value={icpProfile.alternative}
+                      onChange={(e) => updateIcpField('alternative', e.target.value)}
+                      placeholder="e.g., Paying creators flat fees for UGC, traditional affiliate networks, or doing nothing"
+                      style={{
+                        width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                    <button className="primary-btn" onClick={() => { saveIcpProfile(); setIcpStep(2); }}>
+                      Save & Continue →
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Part 2: Firmographics ─── */}
+              {icpStep === 2 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+                    Part 2: Firmographics (The Ideal Company)
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
+                    Focus on the "Where." What does the ideal organization look like from the outside?
+                  </p>
+
+                  {/* Industry/Vertical */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Industry / Vertical
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        value={icpIndustryInput}
+                        onChange={(e) => setIcpIndustryInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && addIcpTag('industries', icpIndustryInput, setIcpIndustryInput)}
+                        placeholder="e.g., Fashion & Apparel — press Enter to add"
+                        style={{
+                          flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                      <button onClick={() => addIcpTag('industries', icpIndustryInput, setIcpIndustryInput)}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(144,21,237,0.3)', background: 'rgba(144,21,237,0.1)', color: '#c6beee', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                        + Add
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {icpProfile.industries.map(tag => (
+                        <span key={tag} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                          background: 'rgba(144,21,237,0.12)', border: '1px solid rgba(144,21,237,0.25)', color: '#c6beee', fontSize: '12px',
+                        }}>
+                          {tag}
+                          <span onClick={() => removeIcpTag('industries', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Company Size */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Company Size
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {['Startup (1–50)', 'Mid-market (50–500)', 'Growth (500–5000)', 'Enterprise (5000+)'].map(size => {
+                        const selected = icpProfile.company_size === size;
+                        return (
+                          <div key={size} onClick={() => updateIcpField('company_size', size)}
+                            style={{
+                              padding: '10px 18px', borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: selected ? 600 : 400,
+                              transition: 'all 0.15s',
+                              background: selected ? 'rgba(144,21,237,0.12)' : 'rgba(255,255,255,0.03)',
+                              border: `1px solid ${selected ? 'rgba(144,21,237,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                              color: selected ? '#c6beee' : 'rgba(255,255,255,0.5)',
+                            }}>
+                            {size}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Geography */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Geography
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        value={icpGeoInput}
+                        onChange={(e) => setIcpGeoInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && addIcpTag('geography', icpGeoInput, setIcpGeoInput)}
+                        placeholder="e.g., North America — press Enter to add"
+                        style={{
+                          flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                      <button onClick={() => addIcpTag('geography', icpGeoInput, setIcpGeoInput)}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(144,21,237,0.3)', background: 'rgba(144,21,237,0.1)', color: '#c6beee', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                        + Add
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {icpProfile.geography.map(tag => (
+                        <span key={tag} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                          background: 'rgba(36,94,249,0.12)', border: '1px solid rgba(36,94,249,0.25)', color: '#7da3fc', fontSize: '12px',
+                        }}>
+                          {tag}
+                          <span onClick={() => removeIcpTag('geography', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Revenue Range */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Revenue Range
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {['<$1M', '$1M–$10M', '$10M–$50M', '$50M–$200M', '$200M+'].map(range => {
+                        const selected = icpProfile.revenue_range === range;
+                        return (
+                          <div key={range} onClick={() => updateIcpField('revenue_range', range)}
+                            style={{
+                              padding: '10px 18px', borderRadius: '10px', cursor: 'pointer', fontSize: '13px', fontWeight: selected ? 600 : 400,
+                              transition: 'all 0.15s',
+                              background: selected ? 'rgba(144,21,237,0.12)' : 'rgba(255,255,255,0.03)',
+                              border: `1px solid ${selected ? 'rgba(144,21,237,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                              color: selected ? '#c6beee' : 'rgba(255,255,255,0.5)',
+                            }}>
+                            {range}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Tech Stack */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Tech Stack (Must-haves)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        value={icpTechInput}
+                        onChange={(e) => setIcpTechInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && addIcpTag('tech_stack', icpTechInput, setIcpTechInput)}
+                        placeholder="e.g., Shopify — press Enter to add"
+                        style={{
+                          flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                      <button onClick={() => addIcpTag('tech_stack', icpTechInput, setIcpTechInput)}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(144,21,237,0.3)', background: 'rgba(144,21,237,0.1)', color: '#c6beee', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                        + Add
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {icpProfile.tech_stack.map(tag => (
+                        <span key={tag} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                          background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px',
+                        }}>
+                          {tag}
+                          <span onClick={() => removeIcpTag('tech_stack', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Trigger Events */}
+                  <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                      Trigger Events
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                      Events that signal a company is ready to buy (e.g., "Just raised Series B", "Hiring a new CMO").
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                      <input
+                        type="text"
+                        value={icpTriggerInput}
+                        onChange={(e) => setIcpTriggerInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && addIcpTag('trigger_events', icpTriggerInput, setIcpTriggerInput)}
+                        placeholder="e.g., Launching new product line — press Enter to add"
+                        style={{
+                          flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                        }}
+                      />
+                      <button onClick={() => addIcpTag('trigger_events', icpTriggerInput, setIcpTriggerInput)}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(144,21,237,0.3)', background: 'rgba(144,21,237,0.1)', color: '#c6beee', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                        + Add
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {icpProfile.trigger_events.map(tag => (
+                        <span key={tag} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                          background: 'rgba(234,179,8,0.12)', border: '1px solid rgba(234,179,8,0.25)', color: '#eab308', fontSize: '12px',
+                        }}>
+                          {tag}
+                          <span onClick={() => removeIcpTag('trigger_events', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <button className="secondary-btn" onClick={() => setIcpStep(1)}>← Back</button>
+                    <button className="primary-btn" onClick={() => { saveIcpProfile(); setIcpStep(3); }}>Save & Continue →</button>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Part 3: Buyer Persona ─── */}
+              {icpStep === 3 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+                    Part 3: The Buyer Persona (The "Who")
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
+                    Focus on the "Who." Identify the specific human being who signs the check.
+                  </p>
+
+                  {/* Primary Decision Maker section */}
+                  <div style={{ padding: '20px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px' }}>
+                    <h4 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '14px', fontWeight: 700, color: '#c6beee', marginBottom: '16px' }}>
+                      The Primary Decision Maker
+                    </h4>
+
+                    {/* Job Titles */}
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                        Job Title(s)
+                      </label>
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                        <input
+                          type="text"
+                          value={icpTitleInput}
+                          onChange={(e) => setIcpTitleInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && addIcpTag('primary_titles', icpTitleInput, setIcpTitleInput)}
+                          placeholder="e.g., VP of E-Commerce — press Enter to add"
+                          style={{
+                            flex: 1, padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          }}
+                        />
+                        <button onClick={() => addIcpTag('primary_titles', icpTitleInput, setIcpTitleInput)}
+                          style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(144,21,237,0.3)', background: 'rgba(144,21,237,0.1)', color: '#c6beee', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600 }}>
+                          + Add
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {icpProfile.primary_titles.map(tag => (
+                          <span key={tag} style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '6px',
+                            background: 'rgba(144,21,237,0.12)', border: '1px solid rgba(144,21,237,0.25)', color: '#c6beee', fontSize: '12px',
+                          }}>
+                            {tag}
+                            <span onClick={() => removeIcpTag('primary_titles', tag)} style={{ cursor: 'pointer', opacity: 0.6, fontWeight: 700 }}>×</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Key Responsibilities */}
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                        Key Responsibilities
+                      </label>
+                      <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                        What are they held accountable for in their annual review?
+                      </p>
+                      <textarea
+                        value={icpProfile.key_responsibilities}
+                        onChange={(e) => updateIcpField('key_responsibilities', e.target.value)}
+                        placeholder="e.g., Growing D2C revenue, reducing customer acquisition cost, managing creator/influencer programs, increasing conversion rates on PDPs"
+                        rows={2}
+                        style={{
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          resize: 'vertical', lineHeight: 1.5,
+                        }}
+                      />
+                    </div>
+
+                    {/* Daily Obstacles */}
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                        Daily Obstacles
+                      </label>
+                      <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                        What frustrates them or keeps them working late?
+                      </p>
+                      <textarea
+                        value={icpProfile.daily_obstacles}
+                        onChange={(e) => updateIcpField('daily_obstacles', e.target.value)}
+                        placeholder="e.g., Rising creator costs with no ROI guarantee, content that only lasts 48hrs on social, difficulty attributing sales to influencer spend"
+                        rows={2}
+                        style={{
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          resize: 'vertical', lineHeight: 1.5,
+                        }}
+                      />
+                    </div>
+
+                    {/* Success Metrics */}
+                    <div>
+                      <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '6px' }}>
+                        Success Metrics (KPIs)
+                      </label>
+                      <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>
+                        How do they measure their own success?
+                      </p>
+                      <textarea
+                        value={icpProfile.success_metrics}
+                        onChange={(e) => updateIcpField('success_metrics', e.target.value)}
+                        placeholder="e.g., CAC (Customer Acquisition Cost), ROAS on creator spend, PDP conversion rate, D2C revenue growth"
+                        rows={2}
+                        style={{
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                          backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          resize: 'vertical', lineHeight: 1.5,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Buying Committee (Optional) */}
+                  <div style={{ padding: '20px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '24px' }}>
+                    <h4 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '14px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+                      The Buying Committee
+                    </h4>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginBottom: '16px' }}>Optional but recommended.</p>
+
+                    {[
+                      { field: 'user_persona', label: 'The User', desc: 'Who actually uses the tool day-to-day?', placeholder: 'e.g., Marketing Coordinator or Content Manager who manages the creator dashboard' },
+                      { field: 'gatekeeper_persona', label: 'The Gatekeeper', desc: 'Who might block this? (e.g., IT Security, Procurement)', placeholder: 'e.g., IT team evaluating script/tag impact on site speed, Legal reviewing commission terms' },
+                      { field: 'champion_persona', label: 'The Champion', desc: 'Who will get excited about this and "sell" it internally?', placeholder: 'e.g., Social Media Manager who sees the content value, or Influencer Marketing lead tired of upfront fees' },
+                    ].map(persona => (
+                      <div key={persona.field} style={{ marginBottom: persona.field !== 'champion_persona' ? '16px' : 0 }}>
+                        <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: '4px' }}>
+                          {persona.label}
+                        </label>
+                        <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px' }}>{persona.desc}</p>
+                        <input
+                          type="text"
+                          value={icpProfile[persona.field]}
+                          onChange={(e) => updateIcpField(persona.field, e.target.value)}
+                          placeholder={persona.placeholder}
+                          style={{
+                            width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <button className="secondary-btn" onClick={() => setIcpStep(2)}>← Back</button>
+                    <button className="primary-btn" onClick={() => { saveIcpProfile(); setIcpStep(4); }}>Save & Continue →</button>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Part 4: Summary — Perfect Fit Narrative ─── */}
+              {icpStep === 4 && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '28px' }}>
+                  <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+                    Part 4: The "Perfect Fit" Narrative
+                  </h3>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '24px' }}>
+                    This summary ties everything together. It's used as context for your SDR agent's scoring and email generation.
+                  </p>
+
+                  {/* Auto-generate button */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <button onClick={generatePerfectFitNarrative}
+                      style={{
+                        padding: '10px 20px', borderRadius: '10px', border: '1px solid rgba(144,21,237,0.3)',
+                        background: 'rgba(144,21,237,0.1)', color: '#c6beee', cursor: 'pointer',
+                        fontFamily: 'inherit', fontSize: '13px', fontWeight: 600, transition: 'all 0.15s',
+                      }}>
+                      Auto-generate from my answers
+                    </button>
+                  </div>
+
+                  <textarea
+                    value={icpProfile.perfect_fit_narrative}
+                    onChange={(e) => updateIcpField('perfect_fit_narrative', e.target.value)}
+                    placeholder={`Our ideal customer is a [Company Size] [Industry] company that is currently struggling with [Main Pain Point]. The [Job Title] is looking for a way to [Key Benefit/KPI] and chooses us because of our [Unique Value Prop].`}
+                    rows={5}
+                    style={{
+                      width: '100%', padding: '14px 16px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                      backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '14px',
+                      resize: 'vertical', lineHeight: 1.6, marginBottom: '24px',
+                    }}
+                  />
+
+                  {/* ICP Profile Summary Card */}
+                  <div style={{ padding: '20px', borderRadius: '12px', background: 'rgba(144,21,237,0.06)', border: '1px solid rgba(144,21,237,0.15)', marginBottom: '24px' }}>
+                    <h4 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '14px', fontWeight: 700, color: '#c6beee', marginBottom: '16px' }}>
+                      ICP Profile Summary
+                    </h4>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '12px' }}>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Industries</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.industries.join(', ') || '—'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Company Size</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.company_size || '—'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Geography</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.geography.join(', ') || '—'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Revenue</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.revenue_range || '—'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Target Titles</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.primary_titles.join(', ') || '—'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Tech Stack</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.tech_stack.join(', ') || '—'}</span>
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Core Problem</span>
+                        <span style={{ color: '#f6f6f7' }}>{icpProfile.core_problem || '—'}</span>
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>UVPs</span>
+                        <span style={{ color: '#f6f6f7' }}>
+                          {[icpProfile.uvp_1, icpProfile.uvp_2, icpProfile.uvp_3].filter(Boolean).join(' | ') || '—'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* How This Affects Downstream */}
+                  <div style={{ padding: '16px 20px', borderRadius: '10px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', marginBottom: '24px', fontSize: '12px', lineHeight: 1.6 }}>
+                    <strong style={{ color: '#4ade80', display: 'block', marginBottom: '6px' }}>How this affects your pipeline:</strong>
+                    <ul style={{ color: 'rgba(255,255,255,0.5)', paddingLeft: '16px', margin: 0 }}>
+                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Lead Scoring</strong> — Your industries, geography, and company size will be used to score new leads as HIGH / MEDIUM / LOW fit.</li>
+                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Email Generation</strong> — Your elevator pitch, UVPs, pain points, and buyer persona details will personalize outreach emails.</li>
+                      <li><strong style={{ color: 'rgba(255,255,255,0.7)' }}>Contact Matching</strong> — Your target titles will prioritize which contacts to surface for each company.</li>
+                    </ul>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <button className="secondary-btn" onClick={() => setIcpStep(3)}>← Back</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      {icpSaved && (
+                        <span style={{ fontSize: '13px', color: '#4ade80', fontWeight: 600 }}>Saved</span>
+                      )}
+                      <button className="primary-btn" onClick={saveIcpProfile} disabled={icpSaving}>
+                        {icpSaving ? 'Saving...' : 'Save ICP Profile'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ═══ ADD LEADS ═══ */}
           {activeView === 'add' && (

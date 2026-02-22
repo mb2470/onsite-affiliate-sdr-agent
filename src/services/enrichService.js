@@ -38,6 +38,19 @@ IMPORTANT EXAMPLES:
 - A B2B industrial supplier → LOW (not D2C consumer)
 - A SaaS company → LOW (no product sales)`;
 
+const buildIcpContext = () => {
+  if (!_icpContext) return '';
+  const parts = [];
+  if (_icpContext.industries?.length) parts.push(`Target Industries: ${_icpContext.industries.join(', ')}`);
+  if (_icpContext.geography?.length) parts.push(`Target Geography: ${_icpContext.geography.join(', ')}`);
+  if (_icpContext.company_size) parts.push(`Ideal Company Size: ${_icpContext.company_size}`);
+  if (_icpContext.revenue_range) parts.push(`Ideal Revenue Range: ${_icpContext.revenue_range}`);
+  if (_icpContext.primary_titles?.length) parts.push(`Target Decision Makers: ${_icpContext.primary_titles.join(', ')}`);
+  if (_icpContext.core_problem) parts.push(`Core Problem We Solve: ${_icpContext.core_problem}`);
+  if (_icpContext.elevator_pitch) parts.push(`Our Product: ${_icpContext.elevator_pitch}`);
+  return parts.length > 0 ? `\n\nCUSTOM ICP CRITERIA (use these to adjust scoring):\n${parts.join('\n')}` : '';
+};
+
 const buildPrompt = (website) => `Research the company at ${website} for B2B sales qualification.
 
 TASKS:
@@ -63,15 +76,57 @@ const parseField = (text, fieldName) => {
   return match ? match[1].trim() : null;
 };
 
-// ═══ ICP SCORING (same as StoreLeads/Apollo functions) ═══
-const TARGET_CATEGORIES = [
+// ═══ ICP SCORING (dynamic from ICP profile) ═══
+const DEFAULT_TARGET_CATEGORIES = [
   'apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
   'home & garden', 'furniture', 'kitchen', 'decor', 'outdoor',
   'sporting', 'fitness', 'travel',
   'electronics', 'computers', 'phones',
 ];
 
+const DEFAULT_GEOGRAPHY = ['US', 'CA', 'UNITED STATES', 'CANADA'];
+
+// Module-level ICP profile cache (set from App.jsx via setIcpContext)
+let _icpContext = null;
+
+export const setIcpContext = (icpProfile) => {
+  _icpContext = icpProfile;
+};
+
+function getTargetCategories() {
+  if (_icpContext && _icpContext.industries && _icpContext.industries.length > 0) {
+    // Build category keywords from ICP profile industries
+    const keywords = [];
+    for (const industry of _icpContext.industries) {
+      // Split on common separators and add lowercase keywords
+      const parts = industry.toLowerCase().split(/[&,/]+/).map(s => s.trim()).filter(Boolean);
+      keywords.push(...parts);
+    }
+    return keywords.length > 0 ? keywords : DEFAULT_TARGET_CATEGORIES;
+  }
+  return DEFAULT_TARGET_CATEGORIES;
+}
+
+function getTargetGeography() {
+  if (_icpContext && _icpContext.geography && _icpContext.geography.length > 0) {
+    const geoKeywords = [];
+    for (const geo of _icpContext.geography) {
+      const g = geo.toUpperCase();
+      geoKeywords.push(g);
+      // Expand common shorthand
+      if (g.includes('NORTH AMERICA')) { geoKeywords.push('US', 'CA', 'UNITED STATES', 'CANADA'); }
+      if (g.includes('EMEA')) { geoKeywords.push('UK', 'UNITED KINGDOM', 'GERMANY', 'FRANCE', 'SPAIN', 'ITALY', 'NETHERLANDS'); }
+      if (g.includes('GLOBAL')) { return null; } // null = accept all
+    }
+    return geoKeywords.length > 0 ? geoKeywords : DEFAULT_GEOGRAPHY;
+  }
+  return DEFAULT_GEOGRAPHY;
+}
+
 function scoreICP(productCount, estimatedSales, categories, country) {
+  const targetCategories = getTargetCategories();
+  const targetGeo = getTargetGeography();
+
   const factors = [];
   const fitReason = [];
 
@@ -79,13 +134,14 @@ function scoreICP(productCount, estimatedSales, categories, country) {
   if (estimatedSales >= 100000000) { factors.push('sales'); fitReason.push(`Sales: $${(estimatedSales / 100).toLocaleString()}/mo`); }
 
   const catText = (categories || []).join(' ').toLowerCase();
-  if (TARGET_CATEGORIES.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
+  if (targetCategories.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
 
   const c = (country || '').toUpperCase();
-  const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA'].some(x => c.includes(x));
+  // If targetGeo is null, accept all geographies (global)
+  const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
 
   let icp_fit;
-  if (factors.length >= 3 && isUSCA) icp_fit = 'HIGH';
+  if (factors.length >= 3 && isTargetGeo) icp_fit = 'HIGH';
   else if (factors.length >= 2) icp_fit = 'MEDIUM';
   else icp_fit = 'LOW';
 
@@ -177,13 +233,14 @@ async function tryApollo(domain) {
 
 // ═══ STEP 3: Fall back to Claude AI ═══
 async function tryClaude(lead) {
+  const icpContext = buildIcpContext();
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       useWebSearch: true,
       prompt: buildPrompt(lead.website),
-      systemPrompt: SYSTEM_PROMPT
+      systemPrompt: SYSTEM_PROMPT + icpContext
     })
   });
 

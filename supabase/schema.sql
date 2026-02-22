@@ -322,5 +322,60 @@ FROM leads
 GROUP BY status;
 
 -- ============================================
+-- 10. ICP_PROFILES TABLE (ICP Onboarding)
+-- ============================================
+CREATE TABLE icp_profiles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Part 1: Product & Value Propositions
+  elevator_pitch TEXT,
+  core_problem TEXT,
+  uvp_1 TEXT,
+  uvp_2 TEXT,
+  uvp_3 TEXT,
+  alternative TEXT,
+
+  -- Part 2: Firmographics
+  industries TEXT[],
+  company_size TEXT,
+  geography TEXT[],
+  revenue_range TEXT,
+  tech_stack TEXT[],
+  trigger_events TEXT[],
+
+  -- Part 3: Buyer Persona
+  primary_titles TEXT[],
+  key_responsibilities TEXT,
+  daily_obstacles TEXT,
+  success_metrics TEXT,
+  user_persona TEXT,
+  gatekeeper_persona TEXT,
+  champion_persona TEXT,
+
+  -- Part 4: Summary
+  perfect_fit_narrative TEXT,
+
+  -- Status
+  is_active BOOLEAN DEFAULT TRUE,
+
+  -- Metadata
+  metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Trigger for updated_at
+CREATE TRIGGER update_icp_profiles_updated_at
+  BEFORE UPDATE ON icp_profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- RLS
+ALTER TABLE icp_profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all for authenticated users" ON icp_profiles
+  FOR ALL USING (auth.role() = 'authenticated');
+
+-- ============================================
 -- DONE! Database schema ready for AI SDR Agent
 -- ============================================
