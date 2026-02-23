@@ -1,44 +1,51 @@
 import { supabase } from '../supabaseClient';
 import { logActivity } from './leadService';
 
-const SYSTEM_PROMPT = `You are a B2B sales researcher for Onsite Affiliate. You have web search available — USE IT to look up the company website and check Google Shopping.
+// ═══ BUILD ENRICHMENT SYSTEM PROMPT DYNAMICALLY FROM ICP PROFILE ═══
+
+function buildEnrichSystemPrompt() {
+  const ctx = _icpContext;
+
+  const industriesList = ctx?.industries?.length ? ctx.industries.join(', ') : 'Fashion/Apparel, Home Goods, Outdoor/Lifestyle, Electronics';
+  const geoList = ctx?.geography?.length ? ctx.geography.join(', ') : 'US, Canada';
+  const elevatorPitch = ctx?.elevator_pitch || 'We help companies grow.';
+  const coreProblem = ctx?.core_problem || '';
+  const titles = ctx?.primary_titles?.length ? ctx.primary_titles.join(', ') : 'CMO, VP Marketing, Head of Ecommerce';
+
+  return `You are a B2B sales researcher. You have web search available — USE IT to look up the company website and check Google Shopping.
 
 Return ONLY plain text in the exact format requested. No markdown, no code fences, no extra explanation.
 
-WHAT ONSITE AFFILIATE DOES:
-We help D2C ecommerce brands run performance-based creator/UGC programs on their own website. Brands get video content with no upfront costs — creators earn commissions on sales they drive.
+WHAT WE DO:
+${elevatorPitch}
 
 ICP SCORING RULES (follow these EXACTLY):
 
 HIGH FIT — ALL of these must be true:
-1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — Nike, Coach, Nordstrom all count as D2C because they sell on their own site)
+1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — they count as D2C if they sell on their own site)
 2. Large product catalog (estimate 250+ products)
-3. Primary category is one of: Fashion/Apparel, Home Goods, Outdoor/Lifestyle, Electronics
-4. Headquartered in US or Canada
+3. Primary category is one of: ${industriesList}
+4. Headquartered in ${geoList}
 5. BONUS: If found on Google Shopping, this is a strong HIGH signal
 
 MEDIUM FIT — has a D2C website BUT one or more:
 - Catalog under 250 products in a target category
-- Large catalog but in a non-target category (Beauty, Pet, Food, Health, Sports, Toys, etc.)
-- Headquartered outside US/Canada
+- Large catalog but in a non-target category
+- Headquartered outside ${geoList}
 
 LOW FIT — any of these:
 - No D2C ecommerce (B2B only, SaaS, services, marketplace-only seller with no own store)
 - Brick-and-mortar only with no online store
 - Non-profit, government, media company, blog
-- No product sales at all
+- No product sales at all`;
+}
 
-IMPORTANT EXAMPLES:
-- Wayfair.com → HIGH (D2C ecommerce, huge Home Goods catalog, US-based)
-- Nordstrom.com → HIGH (D2C ecommerce, huge Fashion catalog, US-based, sells on own site)
-- Nike.com → HIGH (D2C ecommerce, large Fashion/Apparel catalog, US-based)
-- Coach.com → HIGH (D2C ecommerce, large Fashion/Accessories catalog, US-based)
-- A small Shopify jewelry store with 30 products → MEDIUM (D2C but small catalog)
-- A UK-based home goods brand → MEDIUM (D2C but non-US/CA)
-- A B2B industrial supplier → LOW (not D2C consumer)
-- A SaaS company → LOW (no product sales)`;
+function buildEnrichPrompt(website) {
+  const ctx = _icpContext;
+  const titles = ctx?.primary_titles?.length ? ctx.primary_titles.join(', ') : 'CMO, VP Marketing, Head of Ecommerce';
+  const painContext = ctx?.core_problem || 'their potential business challenges';
 
-const buildPrompt = (website) => `Research the company at ${website} for B2B sales qualification.
+  return `Research the company at ${website} for B2B sales qualification.
 
 TASKS:
 1. Visit or search for ${website} to understand what they sell
@@ -54,8 +61,9 @@ Headquarters: [City, State/Country]
 Google Shopping: [YES/NO/UNKNOWN - are their products listed on Google Shopping?]
 ICP Fit: [HIGH/MEDIUM/LOW]
 Fit Reason: [one sentence explaining why this score]
-Decision Makers: [comma-separated likely titles e.g. CMO, VP Marketing, Head of Ecommerce]
-Pain Points: [2-3 pain points related to creator content, UGC costs, or influencer spend]`;
+Decision Makers: [comma-separated likely titles e.g. ${titles}]
+Pain Points: [2-3 pain points related to ${painContext}]`;
+}
 
 // Parse a field from the enrichment response
 const parseField = (text, fieldName) => {
@@ -63,15 +71,57 @@ const parseField = (text, fieldName) => {
   return match ? match[1].trim() : null;
 };
 
-// ═══ ICP SCORING (same as StoreLeads/Apollo functions) ═══
-const TARGET_CATEGORIES = [
+// ═══ ICP SCORING (dynamic from ICP profile) ═══
+const DEFAULT_TARGET_CATEGORIES = [
   'apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
   'home & garden', 'furniture', 'kitchen', 'decor', 'outdoor',
   'sporting', 'fitness', 'travel',
   'electronics', 'computers', 'phones',
 ];
 
+const DEFAULT_GEOGRAPHY = ['US', 'CA', 'UNITED STATES', 'CANADA'];
+
+// Module-level ICP profile cache (set from App.jsx via setIcpContext)
+let _icpContext = null;
+
+export const setIcpContext = (icpProfile) => {
+  _icpContext = icpProfile;
+};
+
+function getTargetCategories() {
+  if (_icpContext && _icpContext.industries && _icpContext.industries.length > 0) {
+    // Build category keywords from ICP profile industries
+    const keywords = [];
+    for (const industry of _icpContext.industries) {
+      // Split on common separators and add lowercase keywords
+      const parts = industry.toLowerCase().split(/[&,/]+/).map(s => s.trim()).filter(Boolean);
+      keywords.push(...parts);
+    }
+    return keywords.length > 0 ? keywords : DEFAULT_TARGET_CATEGORIES;
+  }
+  return DEFAULT_TARGET_CATEGORIES;
+}
+
+function getTargetGeography() {
+  if (_icpContext && _icpContext.geography && _icpContext.geography.length > 0) {
+    const geoKeywords = [];
+    for (const geo of _icpContext.geography) {
+      const g = geo.toUpperCase();
+      geoKeywords.push(g);
+      // Expand common shorthand
+      if (g.includes('NORTH AMERICA')) { geoKeywords.push('US', 'CA', 'UNITED STATES', 'CANADA'); }
+      if (g.includes('EMEA')) { geoKeywords.push('UK', 'UNITED KINGDOM', 'GERMANY', 'FRANCE', 'SPAIN', 'ITALY', 'NETHERLANDS'); }
+      if (g.includes('GLOBAL')) { return null; } // null = accept all
+    }
+    return geoKeywords.length > 0 ? geoKeywords : DEFAULT_GEOGRAPHY;
+  }
+  return DEFAULT_GEOGRAPHY;
+}
+
 function scoreICP(productCount, estimatedSales, categories, country) {
+  const targetCategories = getTargetCategories();
+  const targetGeo = getTargetGeography();
+
   const factors = [];
   const fitReason = [];
 
@@ -79,13 +129,14 @@ function scoreICP(productCount, estimatedSales, categories, country) {
   if (estimatedSales >= 100000000) { factors.push('sales'); fitReason.push(`Sales: $${(estimatedSales / 100).toLocaleString()}/mo`); }
 
   const catText = (categories || []).join(' ').toLowerCase();
-  if (TARGET_CATEGORIES.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
+  if (targetCategories.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
 
   const c = (country || '').toUpperCase();
-  const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA'].some(x => c.includes(x));
+  // If targetGeo is null, accept all geographies (global)
+  const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
 
   let icp_fit;
-  if (factors.length >= 3 && isUSCA) icp_fit = 'HIGH';
+  if (factors.length >= 3 && isTargetGeo) icp_fit = 'HIGH';
   else if (factors.length >= 2) icp_fit = 'MEDIUM';
   else icp_fit = 'LOW';
 
@@ -150,12 +201,13 @@ async function tryApollo(domain) {
     const factors = [];
     const fitReason = [];
     if (revenue >= 12000000) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
-    if (TARGET_CATEGORIES.some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
+    if (getTargetCategories().some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
     if (employees >= 50) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
 
     const c = (org.country || '').toUpperCase();
-    const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA'].some(x => c.includes(x));
-    let icp_fit = factors.length >= 3 && isUSCA ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
+    const targetGeo = getTargetGeography();
+    const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
+    let icp_fit = factors.length >= 3 && isTargetGeo ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
 
     return {
       source: 'apollo',
@@ -182,8 +234,8 @@ async function tryClaude(lead) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       useWebSearch: true,
-      prompt: buildPrompt(lead.website),
-      systemPrompt: SYSTEM_PROMPT
+      prompt: buildEnrichPrompt(lead.website),
+      systemPrompt: buildEnrichSystemPrompt()
     })
   });
 

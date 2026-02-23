@@ -322,5 +322,69 @@ FROM leads
 GROUP BY status;
 
 -- ============================================
+-- 10. ICP_PROFILES TABLE (ICP Onboarding)
+-- ============================================
+CREATE TABLE icp_profiles (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Part 1: Product & Value Propositions
+  elevator_pitch TEXT,
+  core_problem TEXT,
+  uvp_1 TEXT,
+  uvp_2 TEXT,
+  uvp_3 TEXT,
+  alternative TEXT,
+
+  -- Part 2: Firmographics
+  industries TEXT[],
+  company_size TEXT,
+  geography TEXT[],
+  revenue_range TEXT,
+  tech_stack TEXT[],
+  trigger_events TEXT[],
+
+  -- Part 3: Buyer Persona
+  primary_titles TEXT[],
+  key_responsibilities TEXT,
+  daily_obstacles TEXT,
+  success_metrics TEXT,
+  user_persona TEXT,
+  gatekeeper_persona TEXT,
+  champion_persona TEXT,
+
+  -- Part 4: Summary
+  perfect_fit_narrative TEXT,
+
+  -- Part 5: Messaging & Tone
+  sender_name TEXT,              -- e.g., "Sam Reid"
+  sender_url TEXT,               -- e.g., "OnsiteAffiliate.com"
+  email_tone TEXT,               -- e.g., "Conversational, direct, no fluff. Like a Slack message."
+  social_proof TEXT,             -- e.g., "Amazon's Onsite Associates program"
+  messaging_do TEXT[],           -- Correct phrases: "onsite commissions", "creator UGC"
+  messaging_dont TEXT[],         -- Incorrect phrases: "performance commissions", "Hey there"
+  email_example TEXT,            -- Full example email for the AI to reference
+
+  -- Status
+  is_active BOOLEAN DEFAULT TRUE,
+
+  -- Metadata
+  metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Trigger for updated_at
+CREATE TRIGGER update_icp_profiles_updated_at
+  BEFORE UPDATE ON icp_profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- RLS
+ALTER TABLE icp_profiles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all for authenticated users" ON icp_profiles
+  FOR ALL USING (auth.role() = 'authenticated');
+
+-- ============================================
 -- DONE! Database schema ready for AI SDR Agent
 -- ============================================
