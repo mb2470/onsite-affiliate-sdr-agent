@@ -19,7 +19,7 @@ import base64
 import urllib.request
 import urllib.parse
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 from supabase import create_client, Client
 from anthropic import Anthropic
@@ -38,6 +38,10 @@ ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
 # Initialize clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Workflow timeout: stop processing 5 min before the GitHub Actions timeout
+# so the agent can log results and exit cleanly
+WORKFLOW_TIMEOUT_MINUTES = 25  # Leave 5 min buffer for the 30 min GH Actions timeout
 
 # Safe email statuses from EmailListVerify
 SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all']
@@ -123,7 +127,7 @@ class GmailService:
             req.data = json.dumps(body).encode()
 
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             if e.code == 401 and retry:
@@ -262,7 +266,8 @@ Subject: [subject]
         model="claude-sonnet-4-20250514",
         max_tokens=500,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
+        timeout=30.0,
     )
 
     email_text = response.content[0].text
@@ -373,9 +378,12 @@ class AISDRAgent:
 
     # ─── SEND BATCH ────────────────────────────────
 
-    def send_batch(self, count: int = 10):
+    def send_batch(self, count: int = 10, deadline: datetime = None):
         print(f"\n{'=' * 60}")
         print(f"📤 SENDING BATCH: up to {count} emails")
+        if deadline:
+            remaining_min = (deadline - datetime.now(timezone.utc)).total_seconds() / 60
+            print(f"   ⏱️  Time remaining: {remaining_min:.1f} min")
         print(f"{'=' * 60}\n")
 
         settings = self._get_settings()
@@ -439,6 +447,11 @@ class AISDRAgent:
 
         for i, lead in enumerate(leads.data):
             if sent >= count:
+                break
+
+            # Check deadline before processing next email
+            if deadline and datetime.now(timezone.utc) >= deadline:
+                print(f"\n⏰ Approaching workflow timeout — stopping to exit cleanly.")
                 break
 
             print(f"\n{'─' * 50}")
@@ -539,9 +552,14 @@ class AISDRAgent:
             self._log('email_sent', lead['id'],
                        f"Sent to {contact['name']} <{contact['email']}> at {lead['website']}")
 
-            # Wait between sends
+            # Wait between sends (skip if we're near the deadline)
             if sent < count:
                 wait = (min_gap * 60) + random.randint(10, 60)
+                if deadline:
+                    secs_left = (deadline - datetime.now(timezone.utc)).total_seconds()
+                    if secs_left <= wait + 60:
+                        print(f"  ⏰ Only {secs_left:.0f}s left — skipping wait to finish cleanly.")
+                        continue
                 print(f"  ⏳ Waiting {wait // 60}m {wait % 60}s...")
                 time.sleep(wait)
 
@@ -588,9 +606,13 @@ class AISDRAgent:
     # ─── FULL AUTO ─────────────────────────────────
 
     def run_autonomous(self):
+        run_start = datetime.now(timezone.utc)
+        deadline = run_start + timedelta(minutes=WORKFLOW_TIMEOUT_MINUTES)
+
         print(f"\n{'=' * 80}")
         print(f"🤖 AUTONOMOUS MODE")
-        print(f"   {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+        print(f"   {run_start.strftime('%Y-%m-%d %H:%M UTC')}")
+        print(f"   Deadline: {deadline.strftime('%H:%M UTC')} ({WORKFLOW_TIMEOUT_MINUTES} min)")
         print(f"{'=' * 80}\n")
 
         try:
@@ -656,9 +678,21 @@ class AISDRAgent:
         except Exception as e:
             print(f"  ⚠️ {e}")
 
-        # Phase 2: Send
-        print(f"\n📤 Phase 2: Sending up to {remaining}...")
-        self.send_batch(count=remaining)
+        # Check if we still have time after bounces
+        if datetime.now(timezone.utc) >= deadline:
+            print("⏰ No time left after bounce check — exiting.")
+            self._log('autonomous_run', summary=f"Timeout after bounces. {sent_today}/{max_per_day} today")
+            return
+
+        # Phase 2: Send — cap batch to fit within remaining time
+        min_gap = settings.get('min_minutes_between_emails', 2)
+        mins_left = (deadline - datetime.now(timezone.utc)).total_seconds() / 60
+        # Each email takes ~min_gap minutes of sleep + ~1 min of API calls
+        max_for_time = max(1, int(mins_left / (min_gap + 1)))
+        batch_size = min(remaining, max_for_time)
+
+        print(f"\n📤 Phase 2: Sending up to {batch_size} (budget: {remaining}, time-cap: {max_for_time})...")
+        self.send_batch(count=batch_size, deadline=deadline)
 
         self.show_status()
         self._log('autonomous_run', summary=f"Auto complete. {sent_today}/{max_per_day} today")
