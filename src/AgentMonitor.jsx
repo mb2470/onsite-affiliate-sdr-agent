@@ -153,6 +153,9 @@ export default function AgentMonitor() {
   const statBoxStyle = { background: 'rgba(0,0,0,0.2)', borderRadius: '10px', padding: '16px', flex: 1 };
   const statNumStyle = { fontSize: '28px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", display: 'block', letterSpacing: '-0.5px' };
   const statLabelStyle = { fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600, marginTop: '4px', display: 'block' };
+  const settingLabelStyle = { fontSize: '12px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.5px' };
+  const selectStyle = { flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontFamily: 'inherit' };
+  const inputStyle = { width: '100%', marginTop: '8px', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.08)', color: 'inherit', fontSize: '16px', fontFamily: 'inherit', boxSizing: 'border-box' };
 
   return (
     <div>
@@ -271,22 +274,119 @@ export default function AgentMonitor() {
         </div>
       </div>
 
-      {/* ── Agent Settings ── */}
+      {/* ── Agent Settings (Editable) ── */}
       {settings && (
         <div style={{ ...cardStyle, marginBottom: '20px' }}>
           <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>⚙️ Agent Settings</h3>
-          <div style={{ display: 'grid', gap: '12px' }}>
-            {[
-              { label: 'Send Hours:', value: `${settings.send_hour_start || 8}:00 – ${settings.send_hour_end || 17}:00 EST` },
-              { label: 'Min Between Emails:', value: `${settings.min_minutes_between_emails || 10} minutes` },
-              { label: 'ICP Filters:', value: (settings.allowed_icp_fits || ['HIGH']).join(', ') },
-              { label: 'Auto-Send:', value: settings.agent_enabled ? '⚡ Enabled' : '⏸ Disabled', color: settings.agent_enabled ? '#4ade80' : '#f87171' },
-            ].map(row => (
-              <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>{row.label}</span>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: row.color || 'rgba(255,255,255,0.8)' }}>{row.value}</span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            {/* Send Hours */}
+            <div style={{ ...statBoxStyle, flex: 'unset' }}>
+              <label style={settingLabelStyle}>Send Hours (EST)</label>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                <select value={settings.send_hour_start ?? settings.send_hours_start ?? 9} onChange={e => handleSaveSettings({ send_hour_start: parseInt(e.target.value), send_hours_start: parseInt(e.target.value) })}
+                  style={selectStyle}>
+                  {Array.from({length: 24}, (_, i) => <option key={i} value={i}>{i}:00</option>)}
+                </select>
+                <span style={{ opacity: 0.5, fontSize: '12px' }}>to</span>
+                <select value={settings.send_hour_end ?? settings.send_hours_end ?? 17} onChange={e => handleSaveSettings({ send_hour_end: parseInt(e.target.value), send_hours_end: parseInt(e.target.value) })}
+                  style={selectStyle}>
+                  {Array.from({length: 24}, (_, i) => <option key={i} value={i}>{i}:00</option>)}
+                </select>
               </div>
-            ))}
+            </div>
+
+            {/* Max Emails Per Day */}
+            <div style={{ ...statBoxStyle, flex: 'unset' }}>
+              <label style={settingLabelStyle}>Max Emails Per Day</label>
+              <input type="number" value={settings.max_emails_per_day || 10}
+                onChange={e => handleSaveSettings({ max_emails_per_day: parseInt(e.target.value) })}
+                style={inputStyle} />
+            </div>
+
+            {/* Min Minutes Between Emails */}
+            <div style={{ ...statBoxStyle, flex: 'unset' }}>
+              <label style={settingLabelStyle}>Min Minutes Between Emails</label>
+              <input type="number" value={settings.min_minutes_between_emails || 10}
+                onChange={e => handleSaveSettings({ min_minutes_between_emails: parseInt(e.target.value) })}
+                style={inputStyle} />
+            </div>
+
+            {/* ICP Filter */}
+            <div style={{ ...statBoxStyle, flex: 'unset' }}>
+              <label style={settingLabelStyle}>ICP Fit Filter</label>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                {['HIGH', 'MEDIUM', 'LOW'].map(fit => {
+                  const allowed = settings.allowed_icp_fits || ['HIGH'];
+                  const isActive = allowed.includes(fit);
+                  return (
+                    <button key={fit} onClick={() => {
+                      const newFits = isActive ? allowed.filter(f => f !== fit) : [...allowed, fit];
+                      if (newFits.length > 0) handleSaveSettings({ allowed_icp_fits: newFits });
+                    }} style={{
+                      flex: 1, padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
+                      border: isActive ? '1px solid' : '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: isActive ? (fit === 'HIGH' ? 'rgba(34,197,94,0.2)' : fit === 'MEDIUM' ? 'rgba(234,179,8,0.2)' : 'rgba(239,68,68,0.2)') : 'transparent',
+                      color: isActive ? (fit === 'HIGH' ? '#4ade80' : fit === 'MEDIUM' ? '#facc15' : '#f87171') : 'rgba(255,255,255,0.3)',
+                      borderColor: isActive ? (fit === 'HIGH' ? 'rgba(34,197,94,0.5)' : fit === 'MEDIUM' ? 'rgba(234,179,8,0.5)' : 'rgba(239,68,68,0.5)') : 'rgba(255,255,255,0.15)',
+                      fontFamily: 'inherit',
+                    }}>{fit}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Max Contacts Per Lead Per Day */}
+            <div style={{ ...statBoxStyle, flex: 'unset' }}>
+              <label style={settingLabelStyle}>Max Contacts Per Lead Per Day</label>
+              <input type="number" value={settings.max_contacts_per_lead_per_day || 1} min={1} max={5}
+                onChange={e => handleSaveSettings({ max_contacts_per_lead_per_day: parseInt(e.target.value) })}
+                style={inputStyle} />
+              <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>Sends to multiple contacts at a company over multiple days</div>
+            </div>
+
+            {/* Send Days */}
+            <div style={{ ...statBoxStyle, flex: 'unset' }}>
+              <label style={settingLabelStyle}>Send Days</label>
+              <div style={{ display: 'flex', gap: '4px', marginTop: '8px' }}>
+                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, i) => {
+                  const sendDays = settings.send_days || [1, 2, 3, 4, 5];
+                  const dayNum = i + 1;
+                  const isDayActive = sendDays.includes(dayNum);
+                  return (
+                    <button key={day} onClick={() => {
+                      const newDays = isDayActive ? sendDays.filter(d => d !== dayNum) : [...sendDays, dayNum].sort();
+                      if (newDays.length > 0) handleSaveSettings({ send_days: newDays });
+                    }} style={{
+                      flex: 1, padding: '6px 2px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold',
+                      border: isDayActive ? '1px solid rgba(144,21,237,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                      backgroundColor: isDayActive ? 'rgba(144,21,237,0.2)' : 'transparent',
+                      color: isDayActive ? '#a78bfa' : 'rgba(255,255,255,0.3)',
+                      fontFamily: 'inherit',
+                    }}>{day}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Auto-Send Toggle */}
+            <div style={{ ...statBoxStyle, flex: 'unset', gridColumn: 'span 2' }}>
+              <label style={settingLabelStyle}>Auto-Send</label>
+              <div style={{ marginTop: '8px' }}>
+                <button onClick={() => handleSaveSettings({ auto_send: !settings.auto_send })}
+                  style={{
+                    width: '100%', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold',
+                    border: settings.auto_send ? '1px solid rgba(234,179,8,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: settings.auto_send ? 'rgba(234,179,8,0.2)' : 'transparent',
+                    color: settings.auto_send ? '#facc15' : 'rgba(255,255,255,0.4)',
+                    fontFamily: 'inherit',
+                  }}>
+                  {settings.auto_send ? '⚠️ Auto-Send ON' : '📝 Draft Only'}
+                </button>
+                <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>
+                  {settings.auto_send ? 'Agent sends emails automatically' : 'Agent drafts emails for your review'}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
