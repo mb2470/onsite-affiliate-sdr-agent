@@ -971,13 +971,36 @@ function AuthenticatedApp({ session }) {
     );
   };
 
+  // Delete a lead and refresh the list it came from
+  const deleteLead = async (leadId, e) => {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    if (!confirm('Delete this lead? This will also remove its contacts, emails, and outreach history.')) return;
+    try {
+      const { error } = await supabase.from('leads').delete().eq('id', leadId);
+      if (error) throw error;
+      // Remove from local state immediately
+      setEnrichLeadsList(prev => prev.filter(l => l.id !== leadId));
+      setManualLeads(prev => prev.filter(l => l.id !== leadId));
+      if (selectedLeadForManual?.id === leadId) setSelectedLeadForManual(null);
+    } catch (err) {
+      alert('Failed to delete lead: ' + err.message);
+    }
+  };
+
   // Lead card component used in both Enrich and Manual
   const LeadCard = ({ lead, selected, onClick, showContacted }) => (
     <div
       className={`lead-enrich-card ${selected ? 'selected' : ''}`}
       onClick={onClick}
-      style={{ cursor: 'pointer' }}
+      style={{ cursor: 'pointer', position: 'relative' }}
     >
+      <button
+        className="lead-delete-btn"
+        title="Delete lead"
+        onClick={(e) => deleteLead(lead.id, e)}
+      >
+        &times;
+      </button>
       {onClick && (
         <div className="lead-checkbox">
           <input type="checkbox" checked={selected} readOnly />

@@ -294,6 +294,21 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'delete_lead',
+    description:
+      'Delete a lead by website. Also removes its contacts, emails, and outreach history (cascade). Always confirm with the user before deleting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        website: {
+          type: 'string',
+          description: 'The website of the lead to delete (e.g. "example.com")',
+        },
+      },
+      required: ['website'],
+    },
+  },
 ];
 
 // ── Tool execution ───────────────────────────────────────────────────────────
@@ -692,6 +707,22 @@ Subject: [subject]
       const { data, error } = await query;
       if (error) return { error: error.message };
       return { activities: data };
+    }
+
+    case 'delete_lead': {
+      const website = input.website.trim();
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('id, website, status')
+        .ilike('website', `%${website}%`)
+        .limit(1)
+        .single();
+
+      if (!lead) return { error: `No lead found matching "${website}"` };
+
+      const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+      if (error) return { error: error.message };
+      return { success: true, message: `Deleted lead ${lead.website} and all associated data.` };
     }
 
     default:
