@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { getIcpScoringConfig, scoreApollo } = require('./lib/icp-scoring');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -6,61 +7,6 @@ const supabase = createClient(
 );
 
 const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
-
-// ICP scoring - same logic as StoreLeads enrichment
-const TARGET_CATEGORIES = [
-  'apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
-  'home & garden', 'furniture', 'kitchen', 'decor', 'outdoor',
-  'sporting', 'fitness', 'travel',
-  'electronics', 'computers', 'phones',
-];
-
-function scoreICP(org, country) {
-  const factors = [];
-  let fitReason = [];
-
-  // Factor 1: Product count (Apollo doesn't have this, so skip or use employee count as proxy)
-  // We'll mark this as unknown
-
-  // Factor 2: Revenue >= $1M/mo ($12M/yr)
-  const annualRevenue = org.annual_revenue || 0;
-  const hasRevenue = annualRevenue >= 12000000; // $12M/year = $1M/month
-  if (hasRevenue) {
-    factors.push('revenue');
-    fitReason.push(`Revenue: $${(annualRevenue / 1000000).toFixed(1)}M/yr`);
-  }
-
-  // Factor 3: Target industry/category
-  const industry = (org.industry || '').toLowerCase();
-  const keywords = (org.keywords || []).map(k => k.toLowerCase());
-  const allText = [industry, ...keywords].join(' ');
-  const hasCategory = TARGET_CATEGORIES.some(cat => allText.includes(cat));
-  if (hasCategory) {
-    factors.push('category');
-    fitReason.push(`Industry: ${org.industry || 'target category'}`);
-  }
-
-  // Factor 4: Size (employee count as proxy for catalog)
-  const employees = org.estimated_num_employees || 0;
-  const hasSize = employees >= 50;
-  if (hasSize) {
-    factors.push('size');
-    fitReason.push(`Employees: ${employees}`);
-  }
-
-  // Country check
-  const orgCountry = (country || org.country || '').toUpperCase();
-  const isUSCA = ['US', 'CA', 'UNITED STATES', 'CANADA', 'US (ASSUMED)'].some(c => orgCountry.includes(c));
-
-  // Scoring
-  const score = factors.length;
-  let icp_fit;
-  if (score >= 3 && isUSCA) icp_fit = 'HIGH';
-  else if (score >= 2) icp_fit = 'MEDIUM';
-  else icp_fit = 'LOW';
-
-  return { icp_fit, fitReason: fitReason.join('; '), factors: score };
-}
 
 async function enrichBatch(domains) {
   const response = await fetch('https://api.apollo.io/api/v1/organizations/bulk_enrich', {
@@ -89,6 +35,10 @@ exports.handler = async (event, context) => {
   }
 
   try {
+    // Load scoring config from ICP profile
+    const config = await getIcpScoringConfig(supabase);
+    console.log(`📐 Scoring thresholds: revenue≥$${config.minAnnualRevenue/1000000}M/yr, employees≥${config.minEmployeeCount}, categories: ${config.targetCategories.length} keywords`);
+
     // Get leads that StoreLeads couldn't enrich (status = 'new')
     const { data: leads, error } = await supabase
       .from('leads')
@@ -145,8 +95,8 @@ exports.handler = async (event, context) => {
             continue;
           }
 
-          // Score ICP
-          const { icp_fit, fitReason, factors } = scoreICP(org, lead.country);
+          // Score ICP using shared config
+          const { icp_fit, fitReason, factors } = scoreApollo(org, lead.country, config);
 
           if (icp_fit === 'HIGH') highCount++;
           else if (icp_fit === 'MEDIUM') medCount++;

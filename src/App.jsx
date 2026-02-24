@@ -145,6 +145,11 @@ function AuthenticatedApp({ session }) {
     revenue_range: '',
     tech_stack: [],
     trigger_events: [],
+    // Part 2b: Scoring Thresholds
+    min_product_count: 250,
+    min_monthly_sales: 1000000,
+    min_annual_revenue: 12000000,
+    min_employee_count: 50,
     // Part 3: Buyer Persona
     primary_titles: [],
     key_responsibilities: '',
@@ -859,6 +864,10 @@ function AuthenticatedApp({ session }) {
           revenue_range: data.revenue_range || '',
           tech_stack: data.tech_stack || [],
           trigger_events: data.trigger_events || [],
+          min_product_count: data.min_product_count ?? 250,
+          min_monthly_sales: data.min_monthly_sales ?? 1000000,
+          min_annual_revenue: data.min_annual_revenue ?? 12000000,
+          min_employee_count: data.min_employee_count ?? 50,
           primary_titles: data.primary_titles || [],
           key_responsibilities: data.key_responsibilities || '',
           daily_obstacles: data.daily_obstacles || '',
@@ -1479,6 +1488,88 @@ function AuthenticatedApp({ session }) {
                     </div>
                   </div>
 
+                  {/* Scoring Thresholds */}
+                  <div style={{ marginBottom: '24px', padding: '20px', borderRadius: '12px', background: 'rgba(36,94,249,0.04)', border: '1px solid rgba(36,94,249,0.12)' }}>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: 700, color: 'rgba(255,255,255,0.8)', marginBottom: '4px' }}>
+                      Scoring Thresholds
+                    </label>
+                    <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginBottom: '16px' }}>
+                      These thresholds determine how leads get scored as HIGH / MEDIUM / LOW. A lead must meet 3 thresholds + geography for HIGH, or 2 for MEDIUM.
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+                          Min. Product Count
+                        </label>
+                        <input
+                          type="number"
+                          value={icpProfile.min_product_count}
+                          onChange={(e) => updateIcpField('min_product_count', parseInt(e.target.value) || 0)}
+                          placeholder="250"
+                          style={{
+                            width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          }}
+                        />
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>StoreLeads catalog size</span>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+                          Min. Monthly Sales
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                          <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>$</span>
+                          <input
+                            type="number"
+                            value={icpProfile.min_monthly_sales}
+                            onChange={(e) => updateIcpField('min_monthly_sales', parseInt(e.target.value) || 0)}
+                            placeholder="1000000"
+                            style={{
+                              width: '100%', padding: '10px 14px 10px 24px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                              backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>StoreLeads est. monthly revenue</span>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+                          Min. Annual Revenue
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                          <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>$</span>
+                          <input
+                            type="number"
+                            value={icpProfile.min_annual_revenue}
+                            onChange={(e) => updateIcpField('min_annual_revenue', parseInt(e.target.value) || 0)}
+                            placeholder="12000000"
+                            style={{
+                              width: '100%', padding: '10px 14px 10px 24px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                              backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>Apollo company revenue ($/yr)</span>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
+                          Min. Employee Count
+                        </label>
+                        <input
+                          type="number"
+                          value={icpProfile.min_employee_count}
+                          onChange={(e) => updateIcpField('min_employee_count', parseInt(e.target.value) || 0)}
+                          placeholder="50"
+                          style={{
+                            width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
+                          }}
+                        />
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>Apollo headcount proxy</span>
+                      </div>
+                    </div>
+                  </div>
+
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <button className="secondary-btn" onClick={() => setIcpStep(1)}>← Back</button>
                     <button className="primary-btn" onClick={() => { saveIcpProfile(); setIcpStep(3); }}>Save & Continue →</button>
@@ -1887,6 +1978,12 @@ function AuthenticatedApp({ session }) {
                       <div>
                         <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Tech Stack</span>
                         <span style={{ color: '#f6f6f7' }}>{icpProfile.tech_stack.join(', ') || '—'}</span>
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Scoring Thresholds</span>
+                        <span style={{ color: '#f6f6f7', fontSize: '11px' }}>
+                          Products: {icpProfile.min_product_count}+ | Sales: ${(icpProfile.min_monthly_sales || 0).toLocaleString()}/mo | Revenue: ${(icpProfile.min_annual_revenue || 0).toLocaleString()}/yr | Employees: {icpProfile.min_employee_count}+
+                        </span>
                       </div>
                       <div style={{ gridColumn: '1 / -1' }}>
                         <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block', marginBottom: '2px' }}>Core Problem</span>
