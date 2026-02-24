@@ -43,9 +43,18 @@ GMAIL_CREDENTIALS = os.getenv("GMAIL_OAUTH_CREDENTIALS")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "sam@onsiteaffiliate.com")
 ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
 
-# Initialize clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+# Initialize clients (defer crash to runtime with clear error messages)
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as _init_err:
+    print(f"❌ Supabase init failed (check SUPABASE_URL and SUPABASE_SERVICE_KEY): {_init_err}")
+    raise SystemExit(1)
+
+try:
+    anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+except Exception as _init_err:
+    print(f"❌ Anthropic init failed (check ANTHROPIC_API_KEY): {_init_err}")
+    raise SystemExit(1)
 
 # GitHub Actions timeout buffer — stop 10 min before the hard limit
 GH_ACTIONS_TIMEOUT_MINUTES = 350
@@ -531,6 +540,21 @@ class AISDRAgent:
     def __init__(self):
         self.gmail = GmailService()
         self._settings = None
+
+    @staticmethod
+    def _parse_send_days(raw) -> List[int]:
+        """Safely parse send_days from Supabase (handles list, string, or mixed types)."""
+        default = [1, 2, 3, 4, 5]
+        if raw is None:
+            return default
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        if isinstance(raw, list):
+            return [int(d) for d in raw]
+        return default
 
     def _get_settings(self, refresh=False) -> Dict:
         if not self._settings or refresh:
