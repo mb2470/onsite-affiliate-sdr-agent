@@ -1,8 +1,8 @@
 name: AI SDR Agent
 on:
   schedule:
-    # Runs every hour from 9am-5pm EST (14:00-22:00 UTC), Mon-Fri
-    - cron: '0 14-22 * * 1-5'
+    # Runs once at 9am EST (14:00 UTC), Mon-Fri
+    - cron: '0 14 * * 1-5'
   workflow_dispatch:  # Manual trigger button in GitHub UI
 
 jobs:
