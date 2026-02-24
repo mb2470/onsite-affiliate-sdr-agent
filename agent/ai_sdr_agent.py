@@ -43,9 +43,18 @@ GMAIL_CREDENTIALS = os.getenv("GMAIL_OAUTH_CREDENTIALS")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "sam@onsiteaffiliate.com")
 ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
 
-# Initialize clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+# Initialize clients (defer crash to runtime with clear error messages)
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as _init_err:
+    print(f"❌ Supabase init failed (check SUPABASE_URL and SUPABASE_SERVICE_KEY): {_init_err}")
+    raise SystemExit(1)
+
+try:
+    anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+except Exception as _init_err:
+    print(f"❌ Anthropic init failed (check ANTHROPIC_API_KEY): {_init_err}")
+    raise SystemExit(1)
 
 # GitHub Actions timeout buffer — stop 10 min before the hard limit
 GH_ACTIONS_TIMEOUT_MINUTES = 350
@@ -113,7 +122,7 @@ class GmailService:
         req = urllib.request.Request('https://oauth2.googleapis.com/token', data=data)
         req.add_header('Content-Type', 'application/x-www-form-urlencoded')
 
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
 
         if 'access_token' not in result:
@@ -532,6 +541,21 @@ class AISDRAgent:
         self.gmail = GmailService()
         self._settings = None
 
+    @staticmethod
+    def _parse_send_days(raw) -> List[int]:
+        """Safely parse send_days from Supabase (handles list, string, or mixed types)."""
+        default = [1, 2, 3, 4, 5]
+        if raw is None:
+            return default
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        if isinstance(raw, list):
+            return [int(d) for d in raw]
+        return default
+
     def _get_settings(self, refresh=False) -> Dict:
         if not self._settings or refresh:
             result = supabase.table("agent_settings").select("*").eq(
@@ -557,7 +581,7 @@ class AISDRAgent:
     def _is_within_send_hours(self, settings) -> bool:
         send_start = settings.get('send_hour_start', 9)
         send_end = settings.get('send_hour_end', 17)
-        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
+        send_days = self._parse_send_days(settings.get('send_days'))
 
         try:
             import pytz
@@ -570,7 +594,7 @@ class AISDRAgent:
 
         if current_dow not in send_days:
             return False
-        if current_hour < send_start or current_hour >= send_end:
+        if current_hour < send_start or current_hour > send_end:
             return False
         return True
 
@@ -1196,6 +1220,7 @@ class AISDRAgent:
             print(f"✅ Gmail: {email}")
         except Exception as e:
             print(f"❌ Gmail error: {e}")
+            self._log('autonomous_run', summary=f"Gmail auth failed: {e}", status='failed')
             return
 
         # Phase 1: Check bounces once at start
