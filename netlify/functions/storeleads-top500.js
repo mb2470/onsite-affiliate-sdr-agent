@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel } = require('./lib/icp-scoring');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -33,30 +34,6 @@ async function fetchTopDomains(page, pageSize = 50) {
   return data.domains || [];
 }
 
-function scoreICP(d) {
-  const categories = (d.categories || []).map(c => c.toLowerCase());
-  const productCount = d.product_count || 0;
-  const estSales = d.estimated_sales || 0;
-  const country = (d.country || '').toUpperCase();
-
-  const targetPatterns = ['apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
-    'home & garden', 'home furnish', 'furniture', 'kitchen', 'decor', 'bed & bath', 'laundry',
-    'outdoor', 'sporting', 'sports', 'recreation', 'fitness', 'travel',
-    'electronics', 'computers', 'consumer electronics', 'phones', 'networking'];
-
-  const isTarget = categories.some(c => targetPatterns.some(t => c.includes(t))) ? 1 : 0;
-  const hasLargeCatalog = productCount >= 250 ? 1 : 0;
-  const hasGoodSales = estSales >= 100000000 ? 1 : 0; // $1M/mo in cents
-
-  const score = hasLargeCatalog + hasGoodSales + isTarget;
-  const isUSCA = ['US', 'CA'].includes(country);
-
-  if (isUSCA && score === 3) return 'HIGH';
-  if (score >= 2) return 'MEDIUM';
-  if (score === 1) return 'LOW';
-  return 'LOW';
-}
-
 exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -67,6 +44,10 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
+    // Load scoring config from ICP profile
+    const config = await getIcpScoringConfig(supabase);
+    console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
+
     // Get existing websites
     let existingWebsites = new Set();
     let from = 0;
@@ -103,52 +84,34 @@ exports.handler = async (event) => {
           continue;
         }
 
-        const icpScore = scoreICP(d);
-        const productCount = d.product_count || 0;
-        const estSales = d.estimated_sales || 0;
-        const salesFormatted = estSales ? `$${Math.round(estSales / 100).toLocaleString()}/mo` : 'Unknown';
-        const categories = d.categories || [];
-
-        const targetPatterns = ['apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
-          'home & garden', 'home furnish', 'furniture', 'kitchen', 'decor', 'bed & bath', 'laundry',
-          'outdoor', 'sporting', 'sports', 'recreation', 'fitness', 'travel',
-          'electronics', 'computers', 'consumer electronics', 'phones', 'networking'];
-        const cats = categories.map(c => c.toLowerCase());
-        const isTarget = cats.some(c => targetPatterns.some(t => c.includes(t)));
-
-        const factors = [];
-        factors.push(productCount >= 250 ? `✅ ${productCount} products` : `❌ ${productCount} products (<250)`);
-        factors.push(estSales >= 100000000 ? `✅ ${salesFormatted} sales` : `❌ ${salesFormatted} sales`);
-        factors.push(isTarget ? `✅ ${categories.join(', ')}` : `❌ ${categories.join(', ') || 'no target category'}`);
-
-        const catalogLabel = productCount < 100 ? `Small (${productCount} products)` :
-          productCount < 250 ? `Medium (${productCount} products)` : `Large (${productCount} products)`;
+        const icpScore = scoreStoreLeads(d, config);
+        const fitReason = buildStoreLeadsFitReason(d, config);
 
         const { error: insertError } = await supabase.from('leads').insert({
           website: cleanName,
           status: 'enriched',
           source: 'storeleads_top500',
           icp_fit: icpScore,
-          industry: categories.join('; ') || null,
-          catalog_size: catalogLabel,
+          industry: (d.categories || []).join('; ') || null,
+          catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
           sells_d2c: d.platform ? 'YES' : 'UNKNOWN',
           headquarters: [d.city, d.state, d.country].filter(Boolean).join(', ') || null,
           country: d.country || null,
-          fit_reason: factors.join(' | '),
+          fit_reason: fitReason,
           platform: d.platform || null,
-          product_count: productCount || null,
+          product_count: d.product_count || null,
           store_rank: d.rank || null,
-          estimated_sales: estSales ? estSales.toString() : null,
+          estimated_sales: d.estimated_sales ? d.estimated_sales.toString() : null,
           city: d.city || null,
           state: d.state || null,
           research_notes: [
             `Platform: ${d.platform || 'Unknown'}`,
-            `Products: ${productCount}`,
-            `Categories: ${categories.join('; ') || 'Unknown'}`,
+            `Products: ${d.product_count || 0}`,
+            `Categories: ${(d.categories || []).join('; ') || 'Unknown'}`,
             `Country: ${d.country || 'Unknown'}`,
             `Location: ${[d.city, d.state].filter(Boolean).join(', ') || 'Unknown'}`,
             `Rank: ${d.rank || 'Unknown'}`,
-            `Est Monthly Sales: ${salesFormatted}`,
+            `Est Monthly Sales: ${d.estimated_sales ? `$${Math.round(d.estimated_sales / 100).toLocaleString()}/mo` : 'Unknown'}`,
             `Plan: ${d.plan || 'Unknown'}`,
           ].join('\n'),
         });

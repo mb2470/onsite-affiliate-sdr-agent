@@ -23,13 +23,13 @@ ICP SCORING RULES (follow these EXACTLY):
 
 HIGH FIT — ALL of these must be true:
 1. Sells products D2C on their own website (having retail/wholesale channels too is FINE — they count as D2C if they sell on their own site)
-2. Large product catalog (estimate 250+ products)
+2. Large product catalog (estimate ${getThreshold('min_product_count')}+ products)
 3. Primary category is one of: ${industriesList}
 4. Headquartered in ${geoList}
 5. BONUS: If found on Google Shopping, this is a strong HIGH signal
 
 MEDIUM FIT — has a D2C website BUT one or more:
-- Catalog under 250 products in a target category
+- Catalog under ${getThreshold('min_product_count')} products in a target category
 - Large catalog but in a non-target category
 - Headquartered outside ${geoList}
 
@@ -55,7 +55,7 @@ TASKS:
 Provide in this EXACT format (return ONLY plain text, no markdown code fences, no extra commentary):
 
 Industry: [specific industry/vertical]
-Catalog Size: [Small (<100 products) / Medium (100-250) / Large (250+)]
+Catalog Size: [Small (<100 products) / Medium (100-${getThreshold('min_product_count')}) / Large (${getThreshold('min_product_count')}+)]
 Sells D2C: [YES/NO - do they sell direct to consumer on their own website?]
 Headquarters: [City, State/Country]
 Google Shopping: [YES/NO/UNKNOWN - are their products listed on Google Shopping?]
@@ -81,12 +81,27 @@ const DEFAULT_TARGET_CATEGORIES = [
 
 const DEFAULT_GEOGRAPHY = ['US', 'CA', 'UNITED STATES', 'CANADA'];
 
+// Default scoring thresholds
+const DEFAULT_THRESHOLDS = {
+  min_product_count: 250,
+  min_monthly_sales: 1000000,    // $1M/mo in dollars
+  min_annual_revenue: 12000000,  // $12M/yr
+  min_employee_count: 50,
+};
+
 // Module-level ICP profile cache (set from App.jsx via setIcpContext)
 let _icpContext = null;
 
 export const setIcpContext = (icpProfile) => {
   _icpContext = icpProfile;
 };
+
+function getThreshold(key) {
+  if (_icpContext && _icpContext[key] != null && _icpContext[key] !== '') {
+    return Number(_icpContext[key]);
+  }
+  return DEFAULT_THRESHOLDS[key];
+}
 
 function getTargetCategories() {
   if (_icpContext && _icpContext.industries && _icpContext.industries.length > 0) {
@@ -121,12 +136,14 @@ function getTargetGeography() {
 function scoreICP(productCount, estimatedSales, categories, country) {
   const targetCategories = getTargetCategories();
   const targetGeo = getTargetGeography();
+  const minProducts = getThreshold('min_product_count');
+  const minSalesCents = getThreshold('min_monthly_sales') * 100; // DB stores dollars, StoreLeads uses cents
 
   const factors = [];
   const fitReason = [];
 
-  if (productCount >= 250) { factors.push('products'); fitReason.push(`Products: ${productCount}`); }
-  if (estimatedSales >= 100000000) { factors.push('sales'); fitReason.push(`Sales: $${(estimatedSales / 100).toLocaleString()}/mo`); }
+  if (productCount >= minProducts) { factors.push('products'); fitReason.push(`Products: ${productCount}`); }
+  if (estimatedSales >= minSalesCents) { factors.push('sales'); fitReason.push(`Sales: $${(estimatedSales / 100).toLocaleString()}/mo`); }
 
   const catText = (categories || []).join(' ').toLowerCase();
   if (targetCategories.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
@@ -200,9 +217,11 @@ async function tryApollo(domain) {
 
     const factors = [];
     const fitReason = [];
-    if (revenue >= 12000000) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
+    const minRevenue = getThreshold('min_annual_revenue');
+    const minEmployees = getThreshold('min_employee_count');
+    if (revenue >= minRevenue) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
     if (getTargetCategories().some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
-    if (employees >= 50) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
+    if (employees >= minEmployees) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
 
     const c = (org.country || '').toUpperCase();
     const targetGeo = getTargetGeography();

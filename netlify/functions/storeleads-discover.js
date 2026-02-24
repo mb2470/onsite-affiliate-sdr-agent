@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel } = require('./lib/icp-scoring');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -16,19 +17,19 @@ const TARGET_CATEGORIES = [
 ];
 
 // Fetch top domains for a category from StoreLeads
-async function fetchTopDomains(category, country, pageSize = 50, page = 0) {
+async function fetchTopDomains(category, country, pageSize = 50, page = 0, minProducts = 250) {
   const params = new URLSearchParams({
     'f:categories': category,
     'f:country': country,
-    'f:pcmin': '250',           // min 250 products
-    'sort': 'rank',              // best ranked first
+    'f:pcmin': minProducts.toString(),
+    'sort': 'rank',
     'page_size': pageSize.toString(),
     'page': page.toString(),
     'fields': 'name,categories,country,product_count,estimated_sales,rank,city,state,platform,plan',
   });
 
   const url = `https://storeleads.app/json/api/v1/all/domain?${params}`;
-  
+
   const response = await fetch(url, {
     headers: { 'Authorization': `Bearer ${STORELEADS_API_KEY}` },
   });
@@ -36,7 +37,7 @@ async function fetchTopDomains(category, country, pageSize = 50, page = 0) {
   if (response.status === 429) {
     const retryAfter = response.headers.get('Retry-After') || 5;
     await new Promise(r => setTimeout(r, retryAfter * 1000));
-    return fetchTopDomains(category, country, pageSize, page); // retry
+    return fetchTopDomains(category, country, pageSize, page, minProducts); // retry
   }
 
   if (!response.ok) {
@@ -61,6 +62,10 @@ exports.handler = async (event) => {
   }
 
   try {
+    // Load scoring config from ICP profile
+    const config = await getIcpScoringConfig(supabase);
+    console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
+
     // Get all existing websites to check for duplicates
     let existingWebsites = new Set();
     let from = 0;
@@ -90,10 +95,10 @@ exports.handler = async (event) => {
     for (const category of TARGET_CATEGORIES) {
       for (const country of ['US', 'CA']) {
         console.log(`🔍 Searching: ${category} in ${country}...`);
-        
+
         try {
-          // Get top 50 for each category/country combo
-          const domains = await fetchTopDomains(category, country, 50, 0);
+          // Get top 50 for each category/country combo, using ICP min product count
+          const domains = await fetchTopDomains(category, country, 50, 0, config.minProductCount);
           console.log(`   Found ${domains.length} domains`);
 
           for (const d of domains) {
@@ -107,55 +112,29 @@ exports.handler = async (event) => {
               continue;
             }
 
-            // Add to database with full enrichment data
-            const estSales = d.estimated_sales || 0;
-            const salesFormatted = estSales ? `$${Math.round(estSales / 100).toLocaleString()}/mo` : 'Unknown';
-            const productCount = d.product_count || 0;
-            const categories = (d.categories || []);
-            
-            // Score ICP
-            const targetPatterns = ['apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
-              'home & garden', 'home furnish', 'furniture', 'kitchen', 'decor', 'bed & bath', 'laundry',
-              'outdoor', 'sporting', 'sports', 'recreation', 'fitness', 'travel',
-              'electronics', 'computers', 'consumer electronics', 'phones', 'networking'];
-            const cats = categories.map(c => c.toLowerCase());
-            const isTarget = cats.some(c => targetPatterns.some(t => c.includes(t))) ? 1 : 0;
-            const hasLargeCatalog = productCount >= 250 ? 1 : 0;
-            const hasGoodSales = estSales >= 100000000 ? 1 : 0; // $1M/mo in cents
-            const score = hasLargeCatalog + hasGoodSales + isTarget;
-            const isUSCA = ['US', 'CA'].includes((d.country || '').toUpperCase());
-            
-            let icpFit = 'LOW';
-            if (isUSCA && score === 3) icpFit = 'HIGH';
-            else if (score >= 2) icpFit = 'MEDIUM';
-
-            const factors = [];
-            factors.push(productCount >= 250 ? `✅ ${productCount} products` : `❌ ${productCount} products (<250)`);
-            factors.push(estSales >= 100000000 ? `✅ ${salesFormatted} sales` : `❌ ${salesFormatted} sales`);
-            factors.push(isTarget ? `✅ ${categories.join(', ')}` : `❌ ${categories.join(', ') || 'no target category'}`);
-
-            const catalogLabel = productCount < 100 ? `Small (${productCount} products)` :
-              productCount < 250 ? `Medium (${productCount} products)` : `Large (${productCount} products)`;
+            // Score ICP using shared config
+            const icpFit = scoreStoreLeads(d, config);
+            const fitReason = buildStoreLeadsFitReason(d, config);
 
             const { error: insertError } = await supabase.from('leads').insert({
               website: cleanName,
               status: 'enriched',
               source: 'storeleads_discovery',
               icp_fit: icpFit,
-              industry: categories.join('; ') || null,
-              catalog_size: catalogLabel,
+              industry: (d.categories || []).join('; ') || null,
+              catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
               sells_d2c: d.platform ? 'YES' : 'UNKNOWN',
               headquarters: [d.city, d.state, d.country].filter(Boolean).join(', ') || null,
               country: d.country || null,
-              fit_reason: factors.join(' | '),
+              fit_reason: fitReason,
               research_notes: [
                 `Platform: ${d.platform || 'Unknown'}`,
-                `Products: ${productCount}`,
-                `Categories: ${categories.join('; ') || 'Unknown'}`,
+                `Products: ${d.product_count || 0}`,
+                `Categories: ${(d.categories || []).join('; ') || 'Unknown'}`,
                 `Country: ${d.country || 'Unknown'}`,
                 `Location: ${[d.city, d.state].filter(Boolean).join(', ') || 'Unknown'}`,
                 `Rank: ${d.rank || 'Unknown'}`,
-                `Est Monthly Sales: ${salesFormatted}`,
+                `Est Monthly Sales: ${d.estimated_sales ? `$${Math.round(d.estimated_sales / 100).toLocaleString()}/mo` : 'Unknown'}`,
                 `Plan: ${d.plan || 'Unknown'}`,
               ].filter(Boolean).join('\n'),
             });

@@ -345,6 +345,12 @@ CREATE TABLE icp_profiles (
   tech_stack TEXT[],
   trigger_events TEXT[],
 
+  -- Part 2b: Scoring Thresholds
+  min_product_count INTEGER DEFAULT 250,
+  min_monthly_sales INTEGER DEFAULT 1000000,
+  min_annual_revenue INTEGER DEFAULT 12000000,
+  min_employee_count INTEGER DEFAULT 50,
+
   -- Part 3: Buyer Persona
   primary_titles TEXT[],
   key_responsibilities TEXT,
