@@ -113,7 +113,7 @@ class GmailService:
         req = urllib.request.Request('https://oauth2.googleapis.com/token', data=data)
         req.add_header('Content-Type', 'application/x-www-form-urlencoded')
 
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
 
         if 'access_token' not in result:
@@ -557,7 +557,7 @@ class AISDRAgent:
     def _is_within_send_hours(self, settings) -> bool:
         send_start = settings.get('send_hour_start', 9)
         send_end = settings.get('send_hour_end', 17)
-        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
+        send_days = self._parse_send_days(settings.get('send_days'))
 
         try:
             import pytz
@@ -570,7 +570,7 @@ class AISDRAgent:
 
         if current_dow not in send_days:
             return False
-        if current_hour < send_start or current_hour >= send_end:
+        if current_hour < send_start or current_hour > send_end:
             return False
         return True
 
@@ -1196,6 +1196,7 @@ class AISDRAgent:
             print(f"✅ Gmail: {email}")
         except Exception as e:
             print(f"❌ Gmail error: {e}")
+            self._log('autonomous_run', summary=f"Gmail auth failed: {e}", status='failed')
             return
 
         # Phase 1: Check bounces once at start
