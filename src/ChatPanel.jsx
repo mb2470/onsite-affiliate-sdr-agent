@@ -36,24 +36,70 @@ export default function ChatPanel() {
 
     try {
       // Build the messages array for the API (only role + content)
-      const apiMessages = updatedMessages.map((m) => ({
+      // Messages with string content are display messages; messages with array
+      // content are tool exchanges from previous turns.
+      let apiMessages = updatedMessages.map((m) => ({
         role: m.role,
         content: m.content,
       }));
 
-      const res = await fetch('/.netlify/functions/claude-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages }),
-      });
+      let maxIterations = 8;
+      let finalContent = '';
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || `API error: ${res.status}`);
+      while (maxIterations-- > 0) {
+        // Step 1: Single Claude API call
+        const res = await fetch('/.netlify/functions/claude-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: apiMessages }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `API error: ${res.status}`);
+        }
+
+        const data = await res.json();
+
+        // If no tool calls, we have the final answer
+        if (!data.tool_calls || data.tool_calls.length === 0) {
+          finalContent = data.content;
+          break;
+        }
+
+        // Step 2: Execute tool calls server-side
+        const toolRes = await fetch('/.netlify/functions/claude-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tool_calls: data.tool_calls }),
+        });
+
+        if (!toolRes.ok) {
+          const err = await toolRes.json().catch(() => ({}));
+          throw new Error(err.error || `Tool execution error: ${toolRes.status}`);
+        }
+
+        const toolData = await toolRes.json();
+
+        // Step 3: Append assistant response + tool results, then loop
+        apiMessages = [
+          ...apiMessages,
+          { role: 'assistant', content: data.raw_content },
+          { role: 'user', content: toolData.tool_results },
+        ];
+
+        // If Claude also produced text alongside tools, keep it as a fallback
+        if (data.content) {
+          finalContent = data.content;
+        }
       }
 
-      const data = await res.json();
-      setMessages((prev) => [...prev, { role: 'assistant', content: data.content }]);
+      if (!finalContent) {
+        finalContent =
+          'I ran into my processing limit. Please try a simpler question or break it into steps.';
+      }
+
+      setMessages((prev) => [...prev, { role: 'assistant', content: finalContent }]);
     } catch (err) {
       setMessages((prev) => [
         ...prev,

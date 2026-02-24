@@ -294,6 +294,21 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'delete_lead',
+    description:
+      'Delete a lead by website. Also removes its contacts, emails, and outreach history (cascade). Always confirm with the user before deleting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        website: {
+          type: 'string',
+          description: 'The website of the lead to delete (e.g. "example.com")',
+        },
+      },
+      required: ['website'],
+    },
+  },
 ];
 
 // ── Tool execution ───────────────────────────────────────────────────────────
@@ -694,6 +709,22 @@ Subject: [subject]
       return { activities: data };
     }
 
+    case 'delete_lead': {
+      const website = input.website.trim();
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('id, website, status')
+        .ilike('website', `%${website}%`)
+        .limit(1)
+        .single();
+
+      if (!lead) return { error: `No lead found matching "${website}"` };
+
+      const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+      if (error) return { error: error.message };
+      return { success: true, message: `Deleted lead ${lead.website} and all associated data.` };
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -723,6 +754,10 @@ GUIDELINES:
 - Use markdown formatting for readability.`;
 
 // ── Main handler ─────────────────────────────────────────────────────────────
+// Two modes:
+//   { messages }    → Single Claude API call, returns response (may include tool_use blocks)
+//   { tool_calls }  → Execute tools server-side, return results
+// The agentic loop lives in the frontend (ChatPanel.jsx) to avoid Netlify's 26s timeout.
 
 exports.handler = async (event) => {
   const headers = {
@@ -736,7 +771,29 @@ exports.handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) };
 
   try {
-    const { messages } = JSON.parse(event.body);
+    const body = JSON.parse(event.body);
+
+    // ── Mode: Execute tool calls ──────────────────────────────────────────
+    if (body.tool_calls) {
+      const results = [];
+      for (const call of body.tool_calls) {
+        console.log(`Tool call: ${call.name}`, JSON.stringify(call.input));
+        const result = await executeTool(call.name, call.input);
+        results.push({
+          type: 'tool_result',
+          tool_use_id: call.id,
+          content: JSON.stringify(result),
+        });
+      }
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ tool_results: results }),
+      };
+    }
+
+    // ── Mode: Single Claude API call ──────────────────────────────────────
+    const { messages } = body;
 
     if (!messages || !messages.length) {
       return {
@@ -746,61 +803,39 @@ exports.handler = async (event) => {
       };
     }
 
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: 25_000,
+    });
 
-    // Agentic loop: keep going while Claude wants to use tools
-    let currentMessages = [...messages];
-    let maxIterations = 10;
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      tools: TOOLS,
+      messages,
+    });
 
-    while (maxIterations-- > 0) {
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
-        tools: TOOLS,
-        messages: currentMessages,
-      });
+    // Extract text content
+    const text = response.content
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
 
-      // If no tool use, we're done — return the final response
-      if (response.stop_reason === 'end_turn' || !response.content.some((b) => b.type === 'tool_use')) {
-        const text = response.content
-          .filter((b) => b.type === 'text')
-          .map((b) => b.text)
-          .join('\n');
+    // Extract tool calls for the frontend to execute
+    const toolCalls = response.content
+      .filter((b) => b.type === 'tool_use')
+      .map((b) => ({ id: b.id, name: b.name, input: b.input }));
 
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ role: 'assistant', content: text, raw_content: response.content }),
-        };
-      }
-
-      // Process tool calls
-      const toolResults = [];
-      for (const block of response.content) {
-        if (block.type === 'tool_use') {
-          console.log(`🔧 Tool call: ${block.name}`, JSON.stringify(block.input));
-          const result = await executeTool(block.name, block.input);
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: JSON.stringify(result),
-          });
-        }
-      }
-
-      // Add assistant message + tool results, then loop
-      currentMessages.push({ role: 'assistant', content: response.content });
-      currentMessages.push({ role: 'user', content: toolResults });
-    }
-
-    // If we hit max iterations, return what we have
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
         role: 'assistant',
-        content: 'I ran into my processing limit. Please try a simpler question or break it into steps.',
+        content: text,
+        raw_content: response.content,
+        tool_calls: toolCalls,
+        stop_reason: response.stop_reason,
       }),
     };
   } catch (error) {
