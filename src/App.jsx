@@ -8,6 +8,7 @@ import { enrichLeads, setIcpContext } from './services/enrichService';
 import { generateEmail, setEmailIcpContext } from './services/emailService';
 import { findContacts } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
+import ChatPanel from './ChatPanel';
 
 function App() {
   // Auth state
@@ -1110,6 +1111,7 @@ function AuthenticatedApp({ session }) {
             { key: 'agent', icon: '🤖', label: 'Manage Agent' },
             { key: 'pipeline', icon: '📊', label: 'Pipeline' },
             { key: 'audience', icon: '🎯', label: 'Create Audience' },
+            { key: 'chat', icon: '💬', label: 'Chat' },
           ].map(item => (
             <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
               <span className="btn-icon">{item.icon}</span>
@@ -3086,6 +3088,11 @@ function AuthenticatedApp({ session }) {
                 </div>
               )}
             </div>
+          )}
+
+          {/* ═══ CHAT ═══ */}
+          {activeView === 'chat' && (
+            <ChatPanel />
           )}
 
         </main>
