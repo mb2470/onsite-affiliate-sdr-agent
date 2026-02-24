@@ -1,9 +1,10 @@
 """
 AI SDR Agent for Onsite Affiliate
 Autonomous agent that processes leads, drafts emails, sends via Gmail, and checks bounces.
+Runs continuously through the send window (e.g., 9am-5pm EST), sleeping between emails.
 
 Usage:
-  python ai_sdr_agent.py auto                  # Full autonomous run
+  python ai_sdr_agent.py auto                  # Full autonomous run (loops until end of send window)
   python ai_sdr_agent.py send-batch N          # Send N emails to HIGH leads with contacts
   python ai_sdr_agent.py check-bounces         # Check Gmail for bounced emails
   python ai_sdr_agent.py verify-gmail          # Test Gmail connection
@@ -39,9 +40,8 @@ ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# Workflow timeout: stop processing 5 min before the GitHub Actions timeout
-# so the agent can log results and exit cleanly
-WORKFLOW_TIMEOUT_MINUTES = 25  # Leave 5 min buffer for the 30 min GH Actions timeout
+# GitHub Actions timeout buffer — stop 10 min before the hard limit
+GH_ACTIONS_TIMEOUT_MINUTES = 350
 
 # Safe email statuses from EmailListVerify
 SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all']
@@ -62,7 +62,6 @@ def verify_email(email: str) -> Dict:
         print(f"    📧 Verify {email}: {status}")
         safe = status in SAFE_STATUSES
 
-        # Remove bad emails from contact_database
         if not safe and status in BAD_STATUSES:
             print(f"    🗑️ Removing invalid email {email}")
             supabase.table('contact_database').delete().eq('email', email).execute()
@@ -70,7 +69,7 @@ def verify_email(email: str) -> Dict:
         return {'email': email, 'status': status, 'safe': safe}
     except Exception as e:
         print(f"    ⚠️ Verify error {email}: {e}")
-        return {'email': email, 'status': 'error', 'safe': True}  # Don't block on errors
+        return {'email': email, 'status': 'error', 'safe': True}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -335,8 +334,8 @@ class AISDRAgent:
         self.gmail = GmailService()
         self._settings = None
 
-    def _get_settings(self) -> Dict:
-        if not self._settings:
+    def _get_settings(self, refresh=False) -> Dict:
+        if not self._settings or refresh:
             result = supabase.table("agent_settings").select("*").eq(
                 "id", "00000000-0000-0000-0000-000000000001"
             ).single().execute()
@@ -351,6 +350,39 @@ class AISDRAgent:
             supabase.table("activity_log").insert(row).execute()
         except Exception as e:
             print(f"  ⚠️ Log error: {e}")
+
+    def _update_heartbeat(self):
+        supabase.table("agent_settings").update({
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", "00000000-0000-0000-0000-000000000001").execute()
+
+    def _is_within_send_hours(self, settings) -> bool:
+        send_start = settings.get('send_hour_start', 9)
+        send_end = settings.get('send_hour_end', 17)
+        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
+
+        try:
+            import pytz
+            now_est = datetime.now(pytz.timezone('US/Eastern'))
+        except ImportError:
+            now_est = datetime.now(timezone.utc) - timedelta(hours=5)
+
+        current_hour = now_est.hour
+        current_dow = now_est.isoweekday()
+
+        if current_dow not in send_days:
+            return False
+        if current_hour < send_start or current_hour >= send_end:
+            return False
+        return True
+
+    def _get_remaining_today(self, max_per_day: int) -> int:
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        today_count = supabase.table("outreach_log").select(
+            "id", count="exact", head=True
+        ).gte("sent_at", f"{today}T00:00:00Z").execute()
+        sent_today = today_count.count or 0
+        return max_per_day - sent_today
 
     # ─── STATUS ────────────────────────────────────
 
@@ -376,40 +408,115 @@ class AISDRAgent:
         print(f"  Outreach emails:    {outreach}")
         print(f"{'=' * 60}\n")
 
+    # ─── SEND ONE EMAIL ────────────────────────────
+
+    def _send_one(self, lead, all_emailed, today_by_website, settings) -> str:
+        """Try to send one email for a lead. Returns: 'sent', 'skipped', 'failed'."""
+        max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
+
+        # Check per-lead daily limit
+        today_contacts = today_by_website.get(lead['website'], [])
+        if len(today_contacts) >= max_contacts_per_lead_per_day:
+            return 'skipped'
+
+        # Find contacts
+        domain = lead['website'].lower().replace('www.', '')
+        result = supabase.table('contact_database').select('*').or_(
+            f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
+        ).limit(50).execute()
+
+        contacts = result.data or []
+        if not contacts:
+            return 'failed'
+
+        # Score and filter already emailed
+        scored = sorted(contacts, key=lambda c: score_contact(c.get('title', '')), reverse=True)
+        available = [c for c in scored if c.get('email') and c['email'].lower() not in all_emailed]
+
+        if not available:
+            return 'skipped'
+
+        contact_raw = available[0]
+        contact = {
+            'name': f"{contact_raw.get('first_name', '')} {contact_raw.get('last_name', '')}".strip(),
+            'email': contact_raw['email'],
+            'title': contact_raw.get('title', ''),
+            'score': score_contact(contact_raw.get('title', '')),
+        }
+
+        print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
+        print(f"  📧 {contact['email']}")
+
+        # Verify email
+        verification = verify_email(contact['email'])
+        if not verification['safe']:
+            print(f"  🚫 Failed verification: {verification['status']}")
+            all_emailed.add(contact['email'].lower())
+            return 'failed'
+
+        # Generate email
+        try:
+            email_data = generate_email(lead, contact['name'])
+            print(f"  ✍️  Subject: {email_data['subject']}")
+        except Exception as e:
+            print(f"  ❌ Email gen failed: {e}")
+            return 'failed'
+
+        # Send
+        try:
+            result = self.gmail.send_email(
+                to=contact['email'],
+                subject=email_data['subject'],
+                body=email_data['body'],
+            )
+            print(f"  ✅ SENT! ID: {result.get('id', '?')}")
+        except Exception as e:
+            print(f"  ❌ Send failed: {e}")
+            self._log('email_failed', lead['id'], f"Failed: {contact['email']} - {e}", 'failed')
+            return 'failed'
+
+        # Log outreach
+        supabase.table("outreach_log").insert({
+            "lead_id": lead['id'],
+            "website": lead['website'],
+            "contact_email": contact['email'],
+            "contact_name": contact['name'],
+            "email_subject": email_data['subject'],
+            "email_body": email_data['body'],
+        }).execute()
+
+        # Mark contacted
+        supabase.table("leads").update({
+            "status": "contacted",
+            "has_contacts": True,
+            "contact_name": contact['name'],
+            "contact_email": contact['email'],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", lead['id']).execute()
+
+        # Track
+        all_emailed.add(contact['email'].lower())
+        today_by_website.setdefault(lead['website'], []).append(contact['email'])
+
+        self._log('email_sent', lead['id'],
+                   f"Sent to {contact['name']} <{contact['email']}> at {lead['website']}")
+
+        return 'sent'
+
     # ─── SEND BATCH ────────────────────────────────
 
     def send_batch(self, count: int = 10, deadline: datetime = None):
         print(f"\n{'=' * 60}")
         print(f"📤 SENDING BATCH: up to {count} emails")
-        if deadline:
-            remaining_min = (deadline - datetime.now(timezone.utc)).total_seconds() / 60
-            print(f"   ⏱️  Time remaining: {remaining_min:.1f} min")
         print(f"{'=' * 60}\n")
 
-        settings = self._get_settings()
+        settings = self._get_settings(refresh=True)
         if not settings.get('agent_enabled', False):
-            print("⏸️  Agent is PAUSED. Enable in dashboard first.")
-            return
-
-        # Check send days (Mon=1, Sun=7)
-        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
-        try:
-            import pytz
-            now_est = datetime.now(pytz.timezone('US/Eastern'))
-            current_dow = now_est.isoweekday()  # Mon=1, Sun=7
-        except ImportError:
-            now_est = datetime.now(timezone.utc)
-            current_dow = now_est.isoweekday()
-
-        if current_dow not in send_days:
-            day_names = {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'}
-            print(f"📅 Today is {day_names.get(current_dow, '?')} — not a send day. Skipping.")
-            return
+            print("⏸️  Agent is PAUSED.")
+            return 0
 
         allowed_fits = settings.get('allowed_icp_fits', ['HIGH'])
-        max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
 
-        # Get leads that match ICP, have contacts, and are enriched OR contacted (for multi-contact)
         leads = supabase.table("leads").select("*").in_(
             "icp_fit", allowed_fits
         ).eq("has_contacts", True).in_(
@@ -417,155 +524,61 @@ class AISDRAgent:
         ).order("created_at", desc=False).limit(count * 3).execute()
 
         if not leads.data:
-            print(f"📭 No {'/'.join(allowed_fits)} leads with contacts ready.")
-            return
+            print(f"📭 No {'/'.join(allowed_fits)} leads ready.")
+            return 0
 
-        # Get today's outreach to track per-lead limits
+        # Load already-emailed contacts
+        all_outreach = supabase.table("outreach_log").select("contact_email").execute()
+        all_emailed = set(o['contact_email'].lower() for o in (all_outreach.data or []) if o.get('contact_email'))
+
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         today_outreach = supabase.table("outreach_log").select(
             "website, contact_email"
         ).gte("sent_at", f"{today}T00:00:00Z").execute()
 
         today_by_website = {}
-        all_emailed = set()
         for o in (today_outreach.data or []):
             today_by_website.setdefault(o['website'], []).append(o['contact_email'])
-            all_emailed.add(o['contact_email'])
 
-        # Also get ALL previously emailed contacts
-        all_outreach = supabase.table("outreach_log").select("contact_email").execute()
-        for o in (all_outreach.data or []):
-            all_emailed.add(o['contact_email'])
-
-        print(f"📋 Found {len(leads.data)} candidate leads")
-        print(f"📧 {len(all_emailed)} contacts already emailed globally\n")
+        print(f"📋 {len(leads.data)} candidate leads, {len(all_emailed)} contacts already emailed\n")
 
         sent = 0
         failed = 0
         skipped = 0
         min_gap = settings.get('min_minutes_between_emails', 2)
 
-        for i, lead in enumerate(leads.data):
+        for lead in leads.data:
             if sent >= count:
                 break
 
-            # Check deadline before processing next email
             if deadline and datetime.now(timezone.utc) >= deadline:
-                print(f"\n⏰ Approaching workflow timeout — stopping to exit cleanly.")
+                print(f"\n⏰ Deadline reached — stopping batch.")
                 break
 
             print(f"\n{'─' * 50}")
             print(f"[{sent + 1}/{count}] {lead['website']}")
 
-            # Check per-lead daily limit
-            today_contacts_for_lead = today_by_website.get(lead['website'], [])
-            if len(today_contacts_for_lead) >= max_contacts_per_lead_per_day:
-                print(f"  ⏭️  Already sent {len(today_contacts_for_lead)} today (limit: {max_contacts_per_lead_per_day})")
-                skipped += 1
-                continue
+            result = self._send_one(lead, all_emailed, today_by_website, settings)
 
-            # Find contacts not yet emailed
-            domain = lead['website'].lower().replace('www.', '')
-            result = supabase.table('contact_database').select('*').or_(
-                f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
-            ).limit(50).execute()
-
-            contacts = result.data or []
-            if not contacts:
-                print(f"  ❌ No contacts in database")
-                failed += 1
-                continue
-
-            # Score, filter already emailed, pick best available
-            scored = sorted(contacts, key=lambda c: score_contact(c.get('title', '')), reverse=True)
-            available = [c for c in scored if c.get('email') and c['email'].lower() not in all_emailed]
-
-            if not available:
-                print(f"  ⏭️  All contacts already emailed")
-                skipped += 1
-                continue
-
-            contact_raw = available[0]
-            contact = {
-                'name': f"{contact_raw.get('first_name', '')} {contact_raw.get('last_name', '')}".strip(),
-                'email': contact_raw['email'],
-                'title': contact_raw.get('title', ''),
-                'score': score_contact(contact_raw.get('title', '')),
-            }
-
-            print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
-            print(f"  📧 {contact['email']}")
-            print(f"  📊 {len(available) - 1} more contacts available at this company")
-
-            # Verify email before sending
-            verification = verify_email(contact['email'])
-            if not verification['safe']:
-                print(f"  🚫 Email failed verification: {verification['status']} — skipping")
-                all_emailed.add(contact['email'].lower())  # Don't retry this email
-                failed += 1
-                continue
-
-            # Generate email
-            try:
-                email_data = generate_email(lead, contact['name'])
-                print(f"  ✍️  Subject: {email_data['subject']}")
-            except Exception as e:
-                print(f"  ❌ Email gen failed: {e}")
-                failed += 1
-                continue
-
-            # Send
-            try:
-                result = self.gmail.send_email(
-                    to=contact['email'],
-                    subject=email_data['subject'],
-                    body=email_data['body'],
-                )
-                print(f"  ✅ SENT! ID: {result.get('id', '?')}")
+            if result == 'sent':
                 sent += 1
-            except Exception as e:
-                print(f"  ❌ Send failed: {e}")
-                self._log('email_failed', lead['id'], f"Failed: {contact['email']} - {e}", 'failed')
+                # Wait between sends
+                if sent < count:
+                    wait = (min_gap * 60) + random.randint(10, 60)
+                    if deadline:
+                        secs_left = (deadline - datetime.now(timezone.utc)).total_seconds()
+                        if secs_left <= wait + 60:
+                            print(f"  ⏰ Only {secs_left:.0f}s left — skipping wait.")
+                            continue
+                    print(f"  ⏳ Waiting {wait // 60}m {wait % 60}s...")
+                    time.sleep(wait)
+            elif result == 'failed':
                 failed += 1
-                continue
+            else:
+                skipped += 1
 
-            # Log outreach
-            supabase.table("outreach_log").insert({
-                "lead_id": lead['id'],
-                "website": lead['website'],
-                "contact_email": contact['email'],
-                "contact_name": contact['name'],
-                "email_subject": email_data['subject'],
-                "email_body": email_data['body'],
-            }).execute()
-
-            # Mark contacted
-            supabase.table("leads").update({
-                "status": "contacted",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("id", lead['id']).execute()
-
-            # Track so we don't re-email
-            all_emailed.add(contact['email'].lower())
-            today_by_website.setdefault(lead['website'], []).append(contact['email'])
-
-            self._log('email_sent', lead['id'],
-                       f"Sent to {contact['name']} <{contact['email']}> at {lead['website']}")
-
-            # Wait between sends (skip if we're near the deadline)
-            if sent < count:
-                wait = (min_gap * 60) + random.randint(10, 60)
-                if deadline:
-                    secs_left = (deadline - datetime.now(timezone.utc)).total_seconds()
-                    if secs_left <= wait + 60:
-                        print(f"  ⏰ Only {secs_left:.0f}s left — skipping wait to finish cleanly.")
-                        continue
-                print(f"  ⏳ Waiting {wait // 60}m {wait % 60}s...")
-                time.sleep(wait)
-
-        print(f"\n{'=' * 60}")
-        print(f"🏁 BATCH COMPLETE: {sent} sent, {failed} failed, {skipped} skipped")
-        print(f"{'=' * 60}\n")
+        print(f"\n🏁 BATCH: {sent} sent, {failed} failed, {skipped} skipped")
+        return sent
 
     # ─── CHECK BOUNCES ─────────────────────────────
 
@@ -603,18 +616,19 @@ class AISDRAgent:
 
         print(f"\n✅ Cleaned {cleaned} contacts")
 
-    # ─── FULL AUTO ─────────────────────────────────
+    # ─── FULL AUTO (CONTINUOUS LOOP) ───────────────
 
     def run_autonomous(self):
         run_start = datetime.now(timezone.utc)
-        deadline = run_start + timedelta(minutes=WORKFLOW_TIMEOUT_MINUTES)
+        hard_deadline = run_start + timedelta(minutes=GH_ACTIONS_TIMEOUT_MINUTES)
 
         print(f"\n{'=' * 80}")
-        print(f"🤖 AUTONOMOUS MODE")
-        print(f"   {run_start.strftime('%Y-%m-%d %H:%M UTC')}")
-        print(f"   Deadline: {deadline.strftime('%H:%M UTC')} ({WORKFLOW_TIMEOUT_MINUTES} min)")
+        print(f"🤖 AUTONOMOUS MODE — CONTINUOUS LOOP")
+        print(f"   Started: {run_start.strftime('%Y-%m-%d %H:%M UTC')}")
+        print(f"   Hard deadline: {hard_deadline.strftime('%H:%M UTC')} ({GH_ACTIONS_TIMEOUT_MINUTES} min)")
         print(f"{'=' * 80}\n")
 
+        # Verify Gmail
         try:
             email = self.gmail.verify()
             print(f"✅ Gmail: {email}")
@@ -622,80 +636,80 @@ class AISDRAgent:
             print(f"❌ Gmail error: {e}")
             return
 
-        # Update heartbeat so dashboard shows agent is alive
-        supabase.table("agent_settings").update({
-            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", "00000000-0000-0000-0000-000000000001").execute()
-
-        settings = self._get_settings()
-        if not settings.get('agent_enabled', False):
-            print("⏸️  Agent PAUSED.")
-            return
-
-        max_per_day = settings.get('max_emails_per_day', 50)
-        send_start = settings.get('send_hours_start', 9)
-        send_end = settings.get('send_hours_end', 17)
-
-        try:
-            import pytz
-            now_est = datetime.now(pytz.timezone('US/Eastern'))
-            current_hour = now_est.hour
-            current_dow = now_est.isoweekday()
-        except ImportError:
-            now_est = datetime.now(timezone.utc)
-            current_hour = (now_est.hour - 5) % 24
-            current_dow = now_est.isoweekday()
-
-        # Check send days
-        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
-        if current_dow not in send_days:
-            day_names = {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'}
-            print(f"📅 Today is {day_names.get(current_dow)} — not a send day.")
-            return
-
-        if current_hour < send_start or current_hour >= send_end:
-            print(f"⏰ Outside hours ({send_start}-{send_end} EST). Now: {current_hour}")
-            return
-
-        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        today_count = supabase.table("outreach_log").select(
-            "id", count="exact", head=True
-        ).gte("sent_at", f"{today}T00:00:00Z").execute()
-
-        sent_today = today_count.count or 0
-        remaining = max_per_day - sent_today
-
-        print(f"📊 Today: {sent_today}/{max_per_day} — Budget: {remaining}")
-
-        if remaining <= 0:
-            print("🛑 Daily limit reached.")
-            return
-
-        # Phase 1: Bounces
-        print("\n📬 Phase 1: Bounces...")
+        # Phase 1: Check bounces once at start
+        print("\n📬 Phase 1: Checking bounces...")
         try:
             self.check_bounces()
         except Exception as e:
-            print(f"  ⚠️ {e}")
+            print(f"  ⚠️ Bounce check error: {e}")
 
-        # Check if we still have time after bounces
-        if datetime.now(timezone.utc) >= deadline:
-            print("⏰ No time left after bounce check — exiting.")
-            self._log('autonomous_run', summary=f"Timeout after bounces. {sent_today}/{max_per_day} today")
-            return
+        # Phase 2: Continuous send loop
+        print(f"\n{'=' * 80}")
+        print(f"📤 Phase 2: Continuous sending loop")
+        print(f"{'=' * 80}")
 
-        # Phase 2: Send — cap batch to fit within remaining time
-        min_gap = settings.get('min_minutes_between_emails', 2)
-        mins_left = (deadline - datetime.now(timezone.utc)).total_seconds() / 60
-        # Each email takes ~min_gap minutes of sleep + ~1 min of API calls
-        max_for_time = max(1, int(mins_left / (min_gap + 1)))
-        batch_size = min(remaining, max_for_time)
+        total_sent_this_run = 0
+        loop_count = 0
 
-        print(f"\n📤 Phase 2: Sending up to {batch_size} (budget: {remaining}, time-cap: {max_for_time})...")
-        self.send_batch(count=batch_size, deadline=deadline)
+        while datetime.now(timezone.utc) < hard_deadline:
+            loop_count += 1
+
+            # Refresh settings each loop (so dashboard changes take effect live)
+            settings = self._get_settings(refresh=True)
+
+            # Update heartbeat so dashboard shows agent is alive
+            self._update_heartbeat()
+
+            # Check if agent is paused
+            if not settings.get('agent_enabled', False):
+                print(f"\n⏸️  Agent PAUSED. Sleeping 60s then rechecking...")
+                time.sleep(60)
+                continue
+
+            # Check send hours
+            if not self._is_within_send_hours(settings):
+                try:
+                    import pytz
+                    now_est = datetime.now(pytz.timezone('US/Eastern'))
+                except ImportError:
+                    now_est = datetime.now(timezone.utc) - timedelta(hours=5)
+
+                print(f"\n⏰ Outside send hours (now: {now_est.strftime('%I:%M %p EST')}). Sleeping 5 min...")
+                time.sleep(300)
+                continue
+
+            # Check daily limit
+            max_per_day = settings.get('max_emails_per_day', 50)
+            remaining = self._get_remaining_today(max_per_day)
+
+            if remaining <= 0:
+                print(f"\n🛑 Daily limit reached ({max_per_day}/{max_per_day}). Sleeping 30 min then rechecking...")
+                # Sleep and recheck — the date might roll over
+                time.sleep(1800)
+                continue
+
+            # Send a small batch (5 at a time to allow frequent settings checks)
+            batch_size = min(remaining, 5)
+            print(f"\n🔄 Loop #{loop_count} — Budget: {remaining}/{max_per_day}, sending up to {batch_size}")
+
+            sent = self.send_batch(count=batch_size, deadline=hard_deadline)
+            total_sent_this_run += sent
+
+            if sent == 0:
+                # No leads to send — wait before retrying
+                print(f"  📭 Nothing to send. Sleeping 10 min...")
+                time.sleep(600)
+
+        # Final summary
+        print(f"\n{'=' * 80}")
+        print(f"🏁 AUTONOMOUS RUN COMPLETE")
+        print(f"   Total sent this run: {total_sent_this_run}")
+        print(f"   Loops: {loop_count}")
+        print(f"   Runtime: {(datetime.now(timezone.utc) - run_start).total_seconds() / 60:.0f} min")
+        print(f"{'=' * 80}\n")
 
         self.show_status()
-        self._log('autonomous_run', summary=f"Auto complete. {sent_today}/{max_per_day} today")
+        self._log('autonomous_run', summary=f"Auto complete: {total_sent_this_run} sent in {loop_count} loops")
 
 
 # ═══════════════════════════════════════════════════════════
