@@ -13,6 +13,7 @@ Usage:
   python ai_sdr_agent.py send-batch N          # Send N emails to HIGH leads with contacts
   python ai_sdr_agent.py process-followups     # Send due follow-up emails
   python ai_sdr_agent.py check-bounces         # Check Gmail for bounced emails
+  python ai_sdr_agent.py batch-verify N [S]    # Pre-verify N emails (min score S, default 60)
   python ai_sdr_agent.py verify-gmail          # Test Gmail connection
   python ai_sdr_agent.py status                # Show current pipeline stats
 """
@@ -54,8 +55,8 @@ SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all']
 BAD_STATUSES = ['invalid', 'email_disabled', 'dead_server', 'syntax_error']
 
 
-def verify_email(email: str) -> Dict:
-    """Verify email via EmailListVerify API."""
+def verify_email(email: str, save_result: bool = True) -> Dict:
+    """Verify email via EmailListVerify API and optionally cache the result."""
     if not ELV_API_KEY:
         return {'email': email, 'status': 'skipped', 'safe': True}
 
@@ -71,6 +72,12 @@ def verify_email(email: str) -> Dict:
         if not safe and status in BAD_STATUSES:
             print(f"    🗑️ Removing invalid email {email}")
             supabase.table('contact_database').delete().eq('email', email).execute()
+        elif save_result:
+            # Cache the verification result on the contact row
+            supabase.table('contact_database').update({
+                'elv_status': status,
+                'elv_verified_at': datetime.now(timezone.utc).isoformat(),
+            }).eq('email', email).execute()
 
         return {'email': email, 'status': status, 'safe': safe}
     except Exception as e:
@@ -650,8 +657,13 @@ class AISDRAgent:
         print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
         print(f"  📧 {contact['email']}")
 
-        # Verify email
-        verification = verify_email(contact['email'])
+        # Verify email — skip if already batch-verified as safe
+        cached_elv = contact_raw.get('elv_status')
+        if cached_elv and cached_elv in SAFE_STATUSES:
+            print(f"  📧 Pre-verified ({cached_elv}), skipping live check")
+            verification = {'email': contact['email'], 'status': cached_elv, 'safe': True}
+        else:
+            verification = verify_email(contact['email'])
         if not verification['safe']:
             print(f"  🚫 Failed verification: {verification['status']}")
             all_emailed.add(contact['email'].lower())
@@ -834,6 +846,114 @@ class AISDRAgent:
             self._log('email_bounced', summary=f"Bounced: {email}", status='failed')
 
         print(f"\n✅ Cleaned {cleaned} contacts")
+
+    # ─── BATCH VERIFY EMAILS ─────────────────────
+
+    def batch_verify(self, limit: int = 500, min_score: int = 60):
+        """Pre-verify emails for high-scoring contacts on HIGH ICP leads.
+
+        Only verifies contacts that:
+          - Belong to a HIGH ICP-fit lead
+          - Have a title score >= min_score (default 60)
+          - Have NOT been verified yet (elv_status IS NULL)
+          - Have NOT already been emailed
+
+        Args:
+            limit: Max emails to verify (budget your ELV credits).
+            min_score: Minimum contact title score to verify.
+        """
+        print(f"\n{'=' * 60}")
+        print(f"📧 BATCH EMAIL VERIFICATION")
+        print(f"   Budget: {limit} credits  |  Min score: {min_score}")
+        print(f"{'=' * 60}\n")
+
+        # Get all HIGH ICP leads with contacts
+        leads = supabase.table("leads").select("website").eq(
+            "icp_fit", "HIGH"
+        ).eq("has_contacts", True).execute()
+        lead_websites = [l['website'] for l in (leads.data or [])]
+
+        if not lead_websites:
+            print("  No HIGH leads with contacts found.")
+            return
+
+        print(f"  Found {len(lead_websites)} HIGH leads with contacts")
+
+        # Get already-emailed addresses so we skip those
+        outreach = supabase.table("outreach_log").select("contact_email").execute()
+        already_emailed = set(
+            o['contact_email'].lower() for o in (outreach.data or []) if o.get('contact_email')
+        )
+
+        # Collect unverified contacts from HIGH leads, scored and filtered
+        candidates = []
+        for website in lead_websites:
+            domain = website.lower().replace('www.', '')
+            result = supabase.table('contact_database').select('*').or_(
+                f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
+            ).is_('elv_status', 'null').limit(50).execute()
+
+            for c in (result.data or []):
+                email = c.get('email', '')
+                if not email or email.lower() in already_emailed:
+                    continue
+                score = score_contact(c.get('title', ''))
+                if score >= min_score:
+                    candidates.append({**c, '_score': score})
+
+        # Deduplicate by email (same contact may match multiple leads)
+        seen = set()
+        unique = []
+        for c in candidates:
+            if c['email'].lower() not in seen:
+                seen.add(c['email'].lower())
+                unique.append(c)
+        candidates = unique
+
+        # Sort by score descending so we verify the best contacts first
+        candidates.sort(key=lambda c: c['_score'], reverse=True)
+        to_verify = candidates[:limit]
+
+        print(f"  Candidates found:   {len(candidates)}")
+        print(f"  Will verify:        {len(to_verify)}")
+        if not to_verify:
+            print("  Nothing to verify!")
+            return
+
+        # Verify each one
+        verified = 0
+        safe_count = 0
+        bad_count = 0
+        error_count = 0
+
+        for i, contact in enumerate(to_verify, 1):
+            email = contact['email']
+            score = contact['_score']
+            name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+
+            print(f"\n  [{i}/{len(to_verify)}] {name} ({email}) score={score}")
+
+            result = verify_email(email, save_result=True)
+            verified += 1
+
+            if result['status'] in BAD_STATUSES:
+                bad_count += 1
+            elif result['safe']:
+                safe_count += 1
+            else:
+                error_count += 1
+
+            # Small delay to stay under ELV rate limits
+            if i < len(to_verify):
+                time.sleep(0.5)
+
+        print(f"\n{'=' * 60}")
+        print(f"  BATCH VERIFY COMPLETE")
+        print(f"  Verified: {verified}")
+        print(f"  Safe:     {safe_count}")
+        print(f"  Bad:      {bad_count} (removed)")
+        print(f"  Other:    {error_count}")
+        print(f"{'=' * 60}\n")
 
     # ─── FOLLOW-UP EMAILS ─────────────────────────
 
@@ -1195,6 +1315,7 @@ if __name__ == "__main__":
         print("  python ai_sdr_agent.py send-batch 10     # Send N emails")
         print("  python ai_sdr_agent.py process-followups  # Send due follow-up emails")
         print("  python ai_sdr_agent.py check-bounces     # Check bounced emails")
+        print("  python ai_sdr_agent.py batch-verify 500  # Pre-verify N emails for HIGH leads")
         print("  python ai_sdr_agent.py verify-gmail      # Test Gmail")
         print("  python ai_sdr_agent.py status             # Pipeline stats")
         sys.exit(1)
@@ -1210,6 +1331,10 @@ if __name__ == "__main__":
         agent.process_followups()
     elif cmd == "check-bounces":
         agent.check_bounces()
+    elif cmd == "batch-verify":
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 500
+        min_score = int(sys.argv[3]) if len(sys.argv) > 3 else 60
+        agent.batch_verify(limit=n, min_score=min_score)
     elif cmd == "verify-gmail":
         try:
             print(f"✅ Gmail: {agent.gmail.verify()}")
