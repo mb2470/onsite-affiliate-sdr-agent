@@ -661,6 +661,12 @@ class AISDRAgent:
 
         contacts = result.data or []
         if not contacts:
+            # No contacts found — mark lead so it's excluded from future queries
+            print(f"  ⚠️ No contacts in DB for {lead['website']} — clearing has_contacts")
+            try:
+                supabase.table("leads").update({"has_contacts": False}).eq("id", lead['id']).execute()
+            except Exception:
+                pass
             return 'failed'
 
         # Score and filter already emailed
@@ -668,6 +674,7 @@ class AISDRAgent:
         available = [c for c in scored if c.get('email') and c['email'].lower() not in all_emailed]
 
         if not available:
+            print(f"  ⏭️  All {len(scored)} contacts already emailed for {lead['website']}")
             return 'skipped'
 
         contact_raw = available[0]
@@ -772,15 +779,28 @@ class AISDRAgent:
 
         allowed_fits = settings.get('allowed_icp_fits', ['HIGH'])
 
-        leads = supabase.table("leads").select("*").in_(
+        # Two-pass query: prioritize fresh enriched leads over contacted ones
+        enriched_leads = supabase.table("leads").select("*").in_(
             "icp_fit", allowed_fits
-        ).eq("has_contacts", True).in_(
-            "status", ["enriched", "contacted"]
-        ).order("created_at", desc=False).limit(count * 3).execute()
+        ).eq("has_contacts", True).eq(
+            "status", "enriched"
+        ).order("created_at", desc=False).limit(50).execute()
 
-        if not leads.data:
+        contacted_leads = supabase.table("leads").select("*").in_(
+            "icp_fit", allowed_fits
+        ).eq("has_contacts", True).eq(
+            "status", "contacted"
+        ).order("created_at", desc=False).limit(50).execute()
+
+        # Enriched first — they always have un-emailed contacts
+        all_leads = (enriched_leads.data or []) + (contacted_leads.data or [])
+
+        if not all_leads:
             print(f"📭 No {'/'.join(allowed_fits)} leads ready.")
             return 0
+
+        n_enriched = len(enriched_leads.data or [])
+        n_contacted = len(contacted_leads.data or [])
 
         # Load already-emailed contacts
         all_outreach = supabase.table("outreach_log").select("contact_email").execute()
@@ -795,14 +815,14 @@ class AISDRAgent:
         for o in (today_outreach.data or []):
             today_by_website.setdefault(o['website'], []).append(o['contact_email'])
 
-        print(f"📋 {len(leads.data)} candidate leads, {len(all_emailed)} contacts already emailed\n")
+        print(f"📋 {len(all_leads)} candidate leads ({n_enriched} enriched, {n_contacted} contacted), {len(all_emailed)} contacts already emailed\n")
 
         sent = 0
         failed = 0
         skipped = 0
         min_gap = settings.get('min_minutes_between_emails', 2)
 
-        for lead in leads.data:
+        for lead in all_leads:
             if sent >= count:
                 break
 
@@ -1275,7 +1295,9 @@ class AISDRAgent:
                     now_est = datetime.now(timezone.utc) - timedelta(hours=5)
 
                 print(f"\n⏰ Outside send hours (now: {now_est.strftime('%I:%M %p EST')}). Sleeping 5 min...")
-                time.sleep(300)
+                for _ in range(5):
+                    time.sleep(60)
+                    self._update_heartbeat()
                 continue
 
             # Check daily limit
@@ -1284,8 +1306,10 @@ class AISDRAgent:
 
             if remaining <= 0:
                 print(f"\n🛑 Daily limit reached ({max_per_day}/{max_per_day}). Sleeping 30 min then rechecking...")
-                # Sleep and recheck — the date might roll over
-                time.sleep(1800)
+                # Sleep in intervals with heartbeat — the date might roll over
+                for _ in range(30):
+                    time.sleep(60)
+                    self._update_heartbeat()
                 continue
 
             # Periodically process follow-ups during the send loop
@@ -1306,9 +1330,11 @@ class AISDRAgent:
             total_sent_this_run += sent
 
             if sent == 0:
-                # No leads to send — wait before retrying
-                print(f"  📭 Nothing to send. Sleeping 10 min...")
-                time.sleep(600)
+                # No leads to send — sleep in short intervals with heartbeat
+                print(f"  📭 Nothing to send. Sleeping 5 min...")
+                for _ in range(5):
+                    time.sleep(60)
+                    self._update_heartbeat()
 
         # Final summary
         print(f"\n{'=' * 80}")
