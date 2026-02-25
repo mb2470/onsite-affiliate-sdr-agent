@@ -221,9 +221,9 @@ function AuthenticatedApp({ session }) {
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
-    // Emails sent (contacted leads)
+    // Emails sent (all-time from outreach_log)
     try {
-      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'contacted');
+      const { count } = await supabase.from('outreach_log').select('*', { count: 'exact', head: true });
       setEmailsSent(count || 0);
     } catch (e) { console.error(e); }
 
