@@ -585,10 +585,10 @@ def score_contact(title: str) -> int:
 
 
 def find_best_contact(website: str) -> Optional[Dict]:
-    domain = website.lower().replace('www.', '').replace('https://', '').replace('http://', '')
+    domain = website.lower().replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
 
     result = supabase.table('contact_database').select('*').or_(
-        f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
+        f"website.eq.{domain},website.eq.www.{domain},email_domain.eq.{domain}"
     ).limit(50).execute()
 
     contacts = result.data or []
@@ -728,10 +728,10 @@ class AISDRAgent:
         if len(today_contacts) >= max_contacts_per_lead_per_day:
             return 'skipped'
 
-        # Find contacts
-        domain = lead['website'].lower().replace('www.', '')
+        # Find contacts — use exact matches so B-tree indexes are used
+        domain = lead['website'].lower().replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
         result = supabase.table('contact_database').select('*').or_(
-            f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
+            f"website.eq.{domain},website.eq.www.{domain},email_domain.eq.{domain}"
         ).limit(50).execute()
 
         contacts = result.data or []
@@ -1008,10 +1008,10 @@ class AISDRAgent:
         expiry_cutoff = (datetime.now(timezone.utc) - timedelta(days=VERIFICATION_MAX_AGE_DAYS)).isoformat()
         candidates = []
         for website in lead_websites:
-            domain = website.lower().replace('www.', '')
+            domain = website.lower().replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
             # Get contacts that are unverified OR whose verification has expired
             result = supabase.table('contact_database').select('*').or_(
-                f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
+                f"website.eq.{domain},website.eq.www.{domain},email_domain.eq.{domain}"
             ).or_(
                 f"elv_status.is.null,elv_verified_at.lt.{expiry_cutoff}"
             ).limit(50).execute()
