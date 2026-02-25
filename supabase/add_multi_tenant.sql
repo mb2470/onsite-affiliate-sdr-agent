@@ -11,6 +11,19 @@
 
 
 -- ============================================
+-- 0. PREREQUISITES
+-- ============================================
+-- Ensure the trigger function exists before we reference it.
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ============================================
 -- 1. ORGANIZATIONS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS organizations (
@@ -29,6 +42,7 @@ CREATE TABLE IF NOT EXISTS organizations (
   metadata JSONB DEFAULT '{}'::jsonb
 );
 
+DROP TRIGGER IF EXISTS update_organizations_updated_at ON organizations;
 CREATE TRIGGER update_organizations_updated_at
   BEFORE UPDATE ON organizations
   FOR EACH ROW
