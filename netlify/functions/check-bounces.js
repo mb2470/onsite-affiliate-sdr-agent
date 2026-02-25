@@ -221,24 +221,27 @@ exports.handler = async (event) => {
 
 function getMessageBody(message) {
   let body = '';
-  
-  if (message.payload?.body?.data) {
-    body = Buffer.from(message.payload.body.data, 'base64').toString('utf-8');
-  }
-  
-  if (message.payload?.parts) {
-    for (const part of message.payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body?.data) {
-        body += Buffer.from(part.body.data, 'base64').toString('utf-8');
-      }
-      if (part.parts) {
-        for (const subpart of part.parts) {
-          if (subpart.mimeType === 'text/plain' && subpart.body?.data) {
-            body += Buffer.from(subpart.body.data, 'base64').toString('utf-8');
-          }
-        }
+
+  function extractParts(payload) {
+    if (!payload) return;
+    // Extract data from this part's body
+    if (payload.body?.data) {
+      const decoded = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+      body += decoded + '\n';
+    }
+    // Recurse into sub-parts (handles deeply nested multipart/report bounces)
+    if (payload.parts) {
+      for (const part of payload.parts) {
+        extractParts(part);
       }
     }
+  }
+
+  extractParts(message.payload);
+
+  // Also include snippet as fallback — it contains the bounce summary
+  if (message.snippet) {
+    body += '\n' + message.snippet;
   }
 
   return body;

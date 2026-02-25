@@ -260,19 +260,24 @@ class GmailService:
         return list(set(bounced_emails))
 
     def _extract_body(self, message):
-        body = ''
-        payload = message.get('payload', {})
+        """Recursively extract all text from a Gmail message (handles deeply nested bounce emails)."""
+        parts = []
 
-        if payload.get('body', {}).get('data'):
-            body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace')
+        def _walk(payload):
+            if not payload:
+                return
+            if payload.get('body', {}).get('data'):
+                parts.append(base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace'))
+            for part in payload.get('parts', []):
+                _walk(part)
 
-        for part in payload.get('parts', []):
-            if part.get('mimeType') == 'text/plain' and part.get('body', {}).get('data'):
-                body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='replace')
-            for subpart in part.get('parts', []):
-                if subpart.get('mimeType') == 'text/plain' and subpart.get('body', {}).get('data'):
-                    body += base64.urlsafe_b64decode(subpart['body']['data']).decode('utf-8', errors='replace')
+        _walk(message.get('payload', {}))
 
+        body = '\n'.join(parts)
+        # Include snippet as fallback — contains the bounce summary
+        snippet = message.get('snippet', '')
+        if snippet:
+            body += '\n' + snippet
         return body
 
     def verify(self) -> str:
