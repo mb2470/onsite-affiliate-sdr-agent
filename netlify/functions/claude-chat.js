@@ -1,9 +1,16 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 
+// Use service role key (bypasses RLS) for server-side function,
+// falling back to anon key if not set.
+const supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY;
+
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  supabaseKey
 );
 
 // ── Tool definitions for Claude ──────────────────────────────────────────────
@@ -402,9 +409,8 @@ async function executeTool(name, input) {
         icpHigh,
         icpMedium,
         icpLow,
-        recentEmails,
-        emailReplies,
-        recentOutreach,
+        outreachAll,
+        outreachRecent,
         outreachReplies,
       ] = await Promise.all([
         supabase.from('leads').select('*', { count: 'exact', head: true }),
@@ -416,18 +422,10 @@ async function executeTool(name, input) {
         supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'HIGH'),
         supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'MEDIUM'),
         supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'LOW'),
-        // Query emails table for sent emails in last 7 days
+        // outreach_log is the primary source — send-email.js writes here
         supabase
-          .from('emails')
-          .select('*', { count: 'exact', head: true })
-          .eq('status', 'sent')
-          .gte('sent_at', new Date(Date.now() - 7 * 86400000).toISOString()),
-        // Query emails table for replies
-        supabase
-          .from('emails')
-          .select('*', { count: 'exact', head: true })
-          .eq('replied', true),
-        // Also check outreach_log as fallback (legacy table)
+          .from('outreach_log')
+          .select('*', { count: 'exact', head: true }),
         supabase
           .from('outreach_log')
           .select('*', { count: 'exact', head: true })
@@ -450,16 +448,13 @@ async function executeTool(name, input) {
       if (icpMedium.count) icpCounts.MEDIUM = icpMedium.count;
       if (icpLow.count) icpCounts.LOW = icpLow.count;
 
-      // Combine counts from emails table and outreach_log (avoid double-counting by taking max)
-      const emailsSent = Math.max(recentEmails.count || 0, recentOutreach.count || 0);
-      const totalReplies = Math.max(emailReplies.count || 0, outreachReplies.count || 0);
-
       return {
         total_leads: total.count || 0,
         by_status: statusCounts,
         by_icp_fit: icpCounts,
-        emails_sent_last_7_days: emailsSent,
-        total_replies: totalReplies,
+        emails_sent_all_time: outreachAll.count || 0,
+        emails_sent_last_7_days: outreachRecent.count || 0,
+        total_replies: outreachReplies.count || 0,
       };
     }
 
