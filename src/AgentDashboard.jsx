@@ -329,6 +329,7 @@ function AgentDashboard() {
                     {activity.activity_type === 'lead_enriched' && '🔍'}
                     {activity.activity_type === 'contacts_found' && '👥'}
                     {activity.activity_type === 'email_drafted' && '✉️'}
+                    {activity.activity_type === 'email_verified' && '✅'}
                     {activity.activity_type === 'email_sent' && '📤'}
                     {activity.activity_type === 'email_failed' && '❌'}
                   </div>

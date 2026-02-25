@@ -80,10 +80,14 @@ CREATE TABLE contacts (
   
   -- Source
   source TEXT DEFAULT 'csv_database',
-  
+
+  -- Email Verification (EmailListVerify)
+  elv_status TEXT,
+  elv_verified_at TIMESTAMP WITH TIME ZONE,
+
   -- Metadata
   metadata JSONB DEFAULT '{}'::jsonb,
-  
+
   UNIQUE(lead_id, email)
 );
 
@@ -91,6 +95,8 @@ CREATE TABLE contacts (
 CREATE INDEX idx_contacts_lead_id ON contacts(lead_id);
 CREATE INDEX idx_contacts_email ON contacts(email);
 CREATE INDEX idx_contacts_match_score ON contacts(match_score DESC);
+CREATE INDEX idx_contacts_elv_status ON contacts(elv_status);
+CREATE INDEX idx_contacts_elv_verified_at ON contacts(elv_verified_at);
 
 -- ============================================
 -- 3. EMAILS TABLE
