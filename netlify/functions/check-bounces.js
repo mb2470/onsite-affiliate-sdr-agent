@@ -62,12 +62,19 @@ exports.handler = async (event) => {
       };
     }
 
-    let bouncedEmails = [];
+    // Map of email -> bounce date (from the Gmail message)
+    let bounceMap = {};
 
     for (const msg of messages) {
       try {
         const detail = await gmailGet(accessToken, `messages/${msg.id}?format=full`);
         const body = getMessageBody(detail);
+
+        // Get the actual date of the bounce message
+        const dateHeader = (detail.payload?.headers || []).find(
+          h => h.name.toLowerCase() === 'date'
+        );
+        const bounceDate = dateHeader ? new Date(dateHeader.value).toISOString() : new Date(parseInt(detail.internalDate)).toISOString();
 
         // Extract bounced email addresses
         const emailPatterns = [
@@ -80,12 +87,14 @@ exports.handler = async (event) => {
           /(\S+@\S+\.\S+).*?address not found/gi,
         ];
 
+        const foundEmails = [];
+
         // Check X-Failed-Recipients header
         const failedHeader = (detail.payload?.headers || []).find(
           h => h.name.toLowerCase() === 'x-failed-recipients'
         );
         if (failedHeader) {
-          bouncedEmails.push(failedHeader.value.trim().toLowerCase());
+          foundEmails.push(failedHeader.value.trim().toLowerCase());
         }
 
         // Extract from body
@@ -94,8 +103,15 @@ exports.handler = async (event) => {
           while ((match = pattern.exec(body)) !== null) {
             const email = match[1].replace(/[<>.,;'"()]/g, '').toLowerCase();
             if (email.includes('@') && !email.includes('mailer-daemon') && !email.includes('googlemail')) {
-              bouncedEmails.push(email);
+              foundEmails.push(email);
             }
+          }
+        }
+
+        // Store with the bounce date (keep earliest date per email)
+        for (const email of foundEmails) {
+          if (!bounceMap[email] || bounceDate < bounceMap[email]) {
+            bounceMap[email] = bounceDate;
           }
         }
 
@@ -104,8 +120,7 @@ exports.handler = async (event) => {
       }
     }
 
-    // Deduplicate
-    bouncedEmails = [...new Set(bouncedEmails)];
+    let bouncedEmails = Object.keys(bounceMap);
     console.log(`🚫 Bounced emails found: ${bouncedEmails.join(', ')}`);
 
     // Filter out bounces we already processed (already logged in activity_log)
@@ -193,11 +208,12 @@ exports.handler = async (event) => {
         }
       }
 
-      // Log activity
+      // Log activity with the actual bounce date (not today)
       await supabase.from('activity_log').insert({
         activity_type: 'email_bounced',
         summary: `Bounced: ${email} — removed from contacts`,
         status: 'failed',
+        created_at: bounceMap[email] || new Date().toISOString(),
       });
     }
 

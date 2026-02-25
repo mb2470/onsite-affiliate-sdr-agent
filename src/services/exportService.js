@@ -69,6 +69,7 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
         contact_name: contact?.name || null,
         email_subject: subject,
         email_body: body,
+        sent_at: new Date().toISOString(),
       };
     });
 
