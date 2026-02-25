@@ -405,8 +405,8 @@ $$ LANGUAGE SQL SECURITY DEFINER STABLE;
 -- ============================================
 -- 9. ROW LEVEL SECURITY
 -- ============================================
--- Permissive policies for now (Step 2 migration will tighten these
--- to org-scoped policies using get_user_org_ids()).
+-- Org-scoped policies: users only see data belonging to their org(s).
+-- The Python agent uses SUPABASE_SERVICE_KEY which bypasses RLS.
 
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_organizations ENABLE ROW LEVEL SECURITY;
@@ -416,26 +416,97 @@ ALTER TABLE emails ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE icp_profiles ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow all for authenticated users" ON organizations
-  FOR ALL USING (auth.role() = 'authenticated');
+-- organizations: users see orgs they belong to, anyone can create
+CREATE POLICY "Users can view their organizations"
+  ON organizations FOR SELECT
+  USING (id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can update their organizations"
+  ON organizations FOR UPDATE
+  USING (id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Authenticated users can create organizations"
+  ON organizations FOR INSERT
+  WITH CHECK (auth.role() = 'authenticated');
 
-CREATE POLICY "Allow all for authenticated users" ON user_organizations
-  FOR ALL USING (auth.role() = 'authenticated');
+-- user_organizations: users manage their own memberships
+CREATE POLICY "Users can view their memberships"
+  ON user_organizations FOR SELECT
+  USING (user_id = auth.uid());
+CREATE POLICY "Users can create their own memberships"
+  ON user_organizations FOR INSERT
+  WITH CHECK (user_id = auth.uid());
+CREATE POLICY "Users can delete their own memberships"
+  ON user_organizations FOR DELETE
+  USING (user_id = auth.uid());
 
-CREATE POLICY "Allow all for authenticated users" ON leads
-  FOR ALL USING (auth.role() = 'authenticated');
+-- leads: org-scoped CRUD
+CREATE POLICY "Users can view their org leads"
+  ON leads FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can insert leads into their org"
+  ON leads FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can update their org leads"
+  ON leads FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can delete their org leads"
+  ON leads FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
 
-CREATE POLICY "Allow all for authenticated users" ON contacts
-  FOR ALL USING (auth.role() = 'authenticated');
+-- contacts: org-scoped CRUD
+CREATE POLICY "Users can view their org contacts"
+  ON contacts FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can insert contacts into their org"
+  ON contacts FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can update their org contacts"
+  ON contacts FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can delete their org contacts"
+  ON contacts FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
 
-CREATE POLICY "Allow all for authenticated users" ON emails
-  FOR ALL USING (auth.role() = 'authenticated');
+-- emails: org-scoped CRUD
+CREATE POLICY "Users can view their org emails"
+  ON emails FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can insert emails into their org"
+  ON emails FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can update their org emails"
+  ON emails FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can delete their org emails"
+  ON emails FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
 
-CREATE POLICY "Allow all for authenticated users" ON agent_jobs
-  FOR ALL USING (auth.role() = 'authenticated');
+-- agent_jobs: org-scoped CRUD
+CREATE POLICY "Users can view their org jobs"
+  ON agent_jobs FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can insert jobs into their org"
+  ON agent_jobs FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can update their org jobs"
+  ON agent_jobs FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can delete their org jobs"
+  ON agent_jobs FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
 
-CREATE POLICY "Allow all for authenticated users" ON icp_profiles
-  FOR ALL USING (auth.role() = 'authenticated');
+-- icp_profiles: org-scoped CRUD
+CREATE POLICY "Users can view their org ICP profiles"
+  ON icp_profiles FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can insert ICP profiles into their org"
+  ON icp_profiles FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can update their org ICP profiles"
+  ON icp_profiles FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+CREATE POLICY "Users can delete their org ICP profiles"
+  ON icp_profiles FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
 
 -- ============================================
 -- 10. VIEWS
