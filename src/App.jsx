@@ -221,23 +221,32 @@ function AuthenticatedApp({ session }) {
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
-    // Emails sent (all-time from outreach_log)
+    // Emails sent (all-time from activity_log — reliable source with created_at)
     try {
-      const { count } = await supabase.from('outreach_log').select('*', { count: 'exact', head: true });
+      const { count } = await supabase.from('activity_log')
+        .select('*', { count: 'exact', head: true })
+        .in('activity_type', ['email_sent', 'email_exported']);
       setEmailsSent(count || 0);
     } catch (e) { console.error(e); }
 
-    // Outreach stats: unique leads contacted, unique contacts emailed, reply rates
+    // Outreach stats: contacted leads from leads table, unique contacts from outreach_log
     try {
-      const { data: outreach } = await supabase.from('outreach_log').select('website, contact_email, lead_id').eq('followup_number', 0);
+      // Leads contacted — count directly from leads status (canonical source)
+      const { count: contactedLeadCount } = await supabase.from('leads')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['contacted', 'replied', 'qualified', 'demo']);
+
+      // Unique contacts emailed — from outreach_log without followup_number filter
+      const { data: outreach } = await supabase.from('outreach_log').select('contact_email, lead_id');
       const rows = outreach || [];
-      const uniqueLeads = new Set(rows.map(r => r.website?.toLowerCase())).size;
-      const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase())).size;
-      // Get replied leads, then count their unique contacts from outreach data
+      const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase()).filter(Boolean)).size;
+
+      // Replied leads
       const { data: repliedLeadRows } = await supabase.from('leads').select('id').eq('status', 'replied');
       const repliedLeadIds = new Set((repliedLeadRows || []).map(r => r.id));
-      const repliedContacts = new Set(rows.filter(r => repliedLeadIds.has(r.lead_id)).map(r => r.contact_email?.toLowerCase())).size;
-      setOutreachStats({ uniqueLeads, uniqueContacts, repliedLeads: repliedLeadIds.size, repliedContacts });
+      const repliedContacts = new Set(rows.filter(r => repliedLeadIds.has(r.lead_id)).map(r => r.contact_email?.toLowerCase()).filter(Boolean)).size;
+
+      setOutreachStats({ uniqueLeads: contactedLeadCount || 0, uniqueContacts, repliedLeads: repliedLeadIds.size, repliedContacts });
     } catch (e) { console.error(e); }
 
     try {
