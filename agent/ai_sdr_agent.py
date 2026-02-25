@@ -63,9 +63,77 @@ GH_ACTIONS_TIMEOUT_MINUTES = 350
 SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all']
 BAD_STATUSES = ['invalid', 'email_disabled', 'dead_server', 'syntax_error']
 
+# Verification is valid for 30 days
+VERIFICATION_MAX_AGE_DAYS = 30
+
+
+def _save_verification(email: str, status: str):
+    """Cache verification result on both contacts and contact_database tables."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table('contacts').update({
+            'elv_status': status,
+            'elv_verified_at': now,
+        }).eq('email', email).execute()
+    except Exception as e:
+        print(f"    ⚠️ Could not update contacts table: {e}")
+    try:
+        supabase.table('contact_database').update({
+            'elv_status': status,
+            'elv_verified_at': now,
+        }).eq('email', email).execute()
+    except Exception as e:
+        print(f"    ⚠️ Could not update contact_database table: {e}")
+
+
+def get_cached_contact_verification(email: str) -> Optional[Dict]:
+    """Check the contacts table for a valid (non-expired) verification."""
+    try:
+        result = supabase.table('contacts').select(
+            'elv_status, elv_verified_at'
+        ).eq('email', email).not_.is_('elv_status', 'null').not_.is_(
+            'elv_verified_at', 'null'
+        ).limit(1).execute()
+
+        if not result.data:
+            return None
+
+        row = result.data[0]
+        verified_at = datetime.fromisoformat(row['elv_verified_at'].replace('Z', '+00:00'))
+        age = datetime.now(timezone.utc) - verified_at
+
+        if age.days > VERIFICATION_MAX_AGE_DAYS:
+            print(f"    📧 Cached verification for {email} expired ({age.days}d old)")
+            return None
+
+        safe = row['elv_status'] in SAFE_STATUSES
+        print(f"    📧 Using cached verification for {email}: {row['elv_status']} ({age.days}d old)")
+        return {
+            'email': email,
+            'status': row['elv_status'],
+            'safe': safe,
+            'cached': True,
+            'verified_at': row['elv_verified_at'],
+        }
+    except Exception as e:
+        print(f"    ⚠️ Cache lookup error for {email}: {e}")
+        return None
+
 
 def verify_email(email: str, save_result: bool = True) -> Dict:
-    """Verify email via EmailListVerify API and optionally cache the result."""
+    """Verify email via EmailListVerify API and optionally cache the result.
+
+    Checks the contacts table for a cached result first.  If the cached
+    verification is less than 30 days old, it is reused.  Otherwise a live
+    API call is made and the result is cached on both contacts and
+    contact_database tables.
+    """
+    # 1. Check for a valid cached verification
+    cached = get_cached_contact_verification(email)
+    if cached:
+        return cached
+
+    # 2. No valid cache — do a live verification
     if not ELV_API_KEY:
         return {'email': email, 'status': 'skipped', 'safe': True}
 
@@ -82,13 +150,15 @@ def verify_email(email: str, save_result: bool = True) -> Dict:
             print(f"    🗑️ Removing invalid email {email}")
             supabase.table('contact_database').delete().eq('email', email).execute()
         elif save_result:
-            # Cache the verification result on the contact row
-            supabase.table('contact_database').update({
-                'elv_status': status,
-                'elv_verified_at': datetime.now(timezone.utc).isoformat(),
-            }).eq('email', email).execute()
+            _save_verification(email, status)
 
-        return {'email': email, 'status': status, 'safe': safe}
+        return {
+            'email': email,
+            'status': status,
+            'safe': safe,
+            'cached': False,
+            'verified_at': datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         print(f"    ⚠️ Verify error {email}: {e}")
         return {'email': email, 'status': 'error', 'safe': True}
@@ -693,17 +763,17 @@ class AISDRAgent:
         print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
         print(f"  📧 {contact['email']}")
 
-        # Verify email — skip if already batch-verified as safe
-        cached_elv = contact_raw.get('elv_status')
-        if cached_elv and cached_elv in SAFE_STATUSES:
-            print(f"  📧 Pre-verified ({cached_elv}), skipping live check")
-            verification = {'email': contact['email'], 'status': cached_elv, 'safe': True}
-        else:
-            verification = verify_email(contact['email'])
+        # Verify email — checks contacts table cache first (30-day expiry)
+        verification = verify_email(contact['email'])
         if not verification['safe']:
             print(f"  🚫 Failed verification: {verification['status']}")
             all_emailed.add(contact['email'].lower())
             return 'failed'
+
+        # Log fresh verifications to activity log
+        if not verification.get('cached') and verification['status'] not in ('skipped', 'error'):
+            self._log('email_verified', lead['id'],
+                       f"Verified {contact['email']}: {verification['status']}")
 
         # Generate email
         try:
@@ -904,7 +974,7 @@ class AISDRAgent:
         Only verifies contacts that:
           - Belong to a HIGH ICP-fit lead
           - Have a title score >= min_score (default 60)
-          - Have NOT been verified yet (elv_status IS NULL)
+          - Have NOT been verified yet OR verification is older than 30 days
           - Have NOT already been emailed
 
         Args:
@@ -934,13 +1004,17 @@ class AISDRAgent:
             o['contact_email'].lower() for o in (outreach.data or []) if o.get('contact_email')
         )
 
-        # Collect unverified contacts from HIGH leads, scored and filtered
+        # Collect unverified or expired contacts from HIGH leads, scored and filtered
+        expiry_cutoff = (datetime.now(timezone.utc) - timedelta(days=VERIFICATION_MAX_AGE_DAYS)).isoformat()
         candidates = []
         for website in lead_websites:
             domain = website.lower().replace('www.', '')
+            # Get contacts that are unverified OR whose verification has expired
             result = supabase.table('contact_database').select('*').or_(
                 f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
-            ).is_('elv_status', 'null').limit(50).execute()
+            ).or_(
+                f"elv_status.is.null,elv_verified_at.lt.{expiry_cutoff}"
+            ).limit(50).execute()
 
             for c in (result.data or []):
                 email = c.get('email', '')
