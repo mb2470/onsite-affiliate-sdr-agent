@@ -43,9 +43,18 @@ GMAIL_CREDENTIALS = os.getenv("GMAIL_OAUTH_CREDENTIALS")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "sam@onsiteaffiliate.com")
 ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
 
-# Initialize clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+# Initialize clients (defer crash to runtime with clear error messages)
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as _init_err:
+    print(f"❌ Supabase init failed (check SUPABASE_URL and SUPABASE_SERVICE_KEY): {_init_err}")
+    raise SystemExit(1)
+
+try:
+    anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+except Exception as _init_err:
+    print(f"❌ Anthropic init failed (check ANTHROPIC_API_KEY): {_init_err}")
+    raise SystemExit(1)
 
 # GitHub Actions timeout buffer — stop 10 min before the hard limit
 GH_ACTIONS_TIMEOUT_MINUTES = 350
@@ -54,9 +63,77 @@ GH_ACTIONS_TIMEOUT_MINUTES = 350
 SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all']
 BAD_STATUSES = ['invalid', 'email_disabled', 'dead_server', 'syntax_error']
 
+# Verification is valid for 30 days
+VERIFICATION_MAX_AGE_DAYS = 30
+
+
+def _save_verification(email: str, status: str):
+    """Cache verification result on both contacts and contact_database tables."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table('contacts').update({
+            'elv_status': status,
+            'elv_verified_at': now,
+        }).eq('email', email).execute()
+    except Exception as e:
+        print(f"    ⚠️ Could not update contacts table: {e}")
+    try:
+        supabase.table('contact_database').update({
+            'elv_status': status,
+            'elv_verified_at': now,
+        }).eq('email', email).execute()
+    except Exception as e:
+        print(f"    ⚠️ Could not update contact_database table: {e}")
+
+
+def get_cached_contact_verification(email: str) -> Optional[Dict]:
+    """Check the contacts table for a valid (non-expired) verification."""
+    try:
+        result = supabase.table('contacts').select(
+            'elv_status, elv_verified_at'
+        ).eq('email', email).not_.is_('elv_status', 'null').not_.is_(
+            'elv_verified_at', 'null'
+        ).limit(1).execute()
+
+        if not result.data:
+            return None
+
+        row = result.data[0]
+        verified_at = datetime.fromisoformat(row['elv_verified_at'].replace('Z', '+00:00'))
+        age = datetime.now(timezone.utc) - verified_at
+
+        if age.days > VERIFICATION_MAX_AGE_DAYS:
+            print(f"    📧 Cached verification for {email} expired ({age.days}d old)")
+            return None
+
+        safe = row['elv_status'] in SAFE_STATUSES
+        print(f"    📧 Using cached verification for {email}: {row['elv_status']} ({age.days}d old)")
+        return {
+            'email': email,
+            'status': row['elv_status'],
+            'safe': safe,
+            'cached': True,
+            'verified_at': row['elv_verified_at'],
+        }
+    except Exception as e:
+        print(f"    ⚠️ Cache lookup error for {email}: {e}")
+        return None
+
 
 def verify_email(email: str, save_result: bool = True) -> Dict:
-    """Verify email via EmailListVerify API and optionally cache the result."""
+    """Verify email via EmailListVerify API and optionally cache the result.
+
+    Checks the contacts table for a cached result first.  If the cached
+    verification is less than 30 days old, it is reused.  Otherwise a live
+    API call is made and the result is cached on both contacts and
+    contact_database tables.
+    """
+    # 1. Check for a valid cached verification
+    cached = get_cached_contact_verification(email)
+    if cached:
+        return cached
+
+    # 2. No valid cache — do a live verification
     if not ELV_API_KEY:
         return {'email': email, 'status': 'skipped', 'safe': True}
 
@@ -73,13 +150,15 @@ def verify_email(email: str, save_result: bool = True) -> Dict:
             print(f"    🗑️ Removing invalid email {email}")
             supabase.table('contact_database').delete().eq('email', email).execute()
         elif save_result:
-            # Cache the verification result on the contact row
-            supabase.table('contact_database').update({
-                'elv_status': status,
-                'elv_verified_at': datetime.now(timezone.utc).isoformat(),
-            }).eq('email', email).execute()
+            _save_verification(email, status)
 
-        return {'email': email, 'status': status, 'safe': safe}
+        return {
+            'email': email,
+            'status': status,
+            'safe': safe,
+            'cached': False,
+            'verified_at': datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         print(f"    ⚠️ Verify error {email}: {e}")
         return {'email': email, 'status': 'error', 'safe': True}
@@ -113,7 +192,7 @@ class GmailService:
         req = urllib.request.Request('https://oauth2.googleapis.com/token', data=data)
         req.add_header('Content-Type', 'application/x-www-form-urlencoded')
 
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
 
         if 'access_token' not in result:
@@ -251,19 +330,24 @@ class GmailService:
         return list(set(bounced_emails))
 
     def _extract_body(self, message):
-        body = ''
-        payload = message.get('payload', {})
+        """Recursively extract all text from a Gmail message (handles deeply nested bounce emails)."""
+        parts = []
 
-        if payload.get('body', {}).get('data'):
-            body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace')
+        def _walk(payload):
+            if not payload:
+                return
+            if payload.get('body', {}).get('data'):
+                parts.append(base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace'))
+            for part in payload.get('parts', []):
+                _walk(part)
 
-        for part in payload.get('parts', []):
-            if part.get('mimeType') == 'text/plain' and part.get('body', {}).get('data'):
-                body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='replace')
-            for subpart in part.get('parts', []):
-                if subpart.get('mimeType') == 'text/plain' and subpart.get('body', {}).get('data'):
-                    body += base64.urlsafe_b64decode(subpart['body']['data']).decode('utf-8', errors='replace')
+        _walk(message.get('payload', {}))
 
+        body = '\n'.join(parts)
+        # Include snippet as fallback — contains the bounce summary
+        snippet = message.get('snippet', '')
+        if snippet:
+            body += '\n' + snippet
         return body
 
     def verify(self) -> str:
@@ -532,6 +616,21 @@ class AISDRAgent:
         self.gmail = GmailService()
         self._settings = None
 
+    @staticmethod
+    def _parse_send_days(raw) -> List[int]:
+        """Safely parse send_days from Supabase (handles list, string, or mixed types)."""
+        default = [1, 2, 3, 4, 5]
+        if raw is None:
+            return default
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return default
+        if isinstance(raw, list):
+            return [int(d) for d in raw]
+        return default
+
     def _get_settings(self, refresh=False) -> Dict:
         if not self._settings or refresh:
             result = supabase.table("agent_settings").select("*").eq(
@@ -557,7 +656,7 @@ class AISDRAgent:
     def _is_within_send_hours(self, settings) -> bool:
         send_start = settings.get('send_hour_start', 9)
         send_end = settings.get('send_hour_end', 17)
-        send_days = settings.get('send_days', [1, 2, 3, 4, 5])
+        send_days = self._parse_send_days(settings.get('send_days'))
 
         try:
             import pytz
@@ -570,7 +669,7 @@ class AISDRAgent:
 
         if current_dow not in send_days:
             return False
-        if current_hour < send_start or current_hour >= send_end:
+        if current_hour < send_start or current_hour > send_end:
             return False
         return True
 
@@ -637,6 +736,12 @@ class AISDRAgent:
 
         contacts = result.data or []
         if not contacts:
+            # No contacts found — mark lead so it's excluded from future queries
+            print(f"  ⚠️ No contacts in DB for {lead['website']} — clearing has_contacts")
+            try:
+                supabase.table("leads").update({"has_contacts": False}).eq("id", lead['id']).execute()
+            except Exception:
+                pass
             return 'failed'
 
         # Score and filter already emailed
@@ -644,6 +749,7 @@ class AISDRAgent:
         available = [c for c in scored if c.get('email') and c['email'].lower() not in all_emailed]
 
         if not available:
+            print(f"  ⏭️  All {len(scored)} contacts already emailed for {lead['website']}")
             return 'skipped'
 
         contact_raw = available[0]
@@ -657,17 +763,17 @@ class AISDRAgent:
         print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
         print(f"  📧 {contact['email']}")
 
-        # Verify email — skip if already batch-verified as safe
-        cached_elv = contact_raw.get('elv_status')
-        if cached_elv and cached_elv in SAFE_STATUSES:
-            print(f"  📧 Pre-verified ({cached_elv}), skipping live check")
-            verification = {'email': contact['email'], 'status': cached_elv, 'safe': True}
-        else:
-            verification = verify_email(contact['email'])
+        # Verify email — checks contacts table cache first (30-day expiry)
+        verification = verify_email(contact['email'])
         if not verification['safe']:
             print(f"  🚫 Failed verification: {verification['status']}")
             all_emailed.add(contact['email'].lower())
             return 'failed'
+
+        # Log fresh verifications to activity log
+        if not verification.get('cached') and verification['status'] not in ('skipped', 'error'):
+            self._log('email_verified', lead['id'],
+                       f"Verified {contact['email']}: {verification['status']}")
 
         # Generate email
         try:
@@ -748,15 +854,28 @@ class AISDRAgent:
 
         allowed_fits = settings.get('allowed_icp_fits', ['HIGH'])
 
-        leads = supabase.table("leads").select("*").in_(
+        # Two-pass query: prioritize fresh enriched leads over contacted ones
+        enriched_leads = supabase.table("leads").select("*").in_(
             "icp_fit", allowed_fits
-        ).eq("has_contacts", True).in_(
-            "status", ["enriched", "contacted"]
-        ).order("created_at", desc=False).limit(count * 3).execute()
+        ).eq("has_contacts", True).eq(
+            "status", "enriched"
+        ).order("created_at", desc=False).limit(50).execute()
 
-        if not leads.data:
+        contacted_leads = supabase.table("leads").select("*").in_(
+            "icp_fit", allowed_fits
+        ).eq("has_contacts", True).eq(
+            "status", "contacted"
+        ).order("created_at", desc=False).limit(50).execute()
+
+        # Enriched first — they always have un-emailed contacts
+        all_leads = (enriched_leads.data or []) + (contacted_leads.data or [])
+
+        if not all_leads:
             print(f"📭 No {'/'.join(allowed_fits)} leads ready.")
             return 0
+
+        n_enriched = len(enriched_leads.data or [])
+        n_contacted = len(contacted_leads.data or [])
 
         # Load already-emailed contacts
         all_outreach = supabase.table("outreach_log").select("contact_email").execute()
@@ -771,14 +890,14 @@ class AISDRAgent:
         for o in (today_outreach.data or []):
             today_by_website.setdefault(o['website'], []).append(o['contact_email'])
 
-        print(f"📋 {len(leads.data)} candidate leads, {len(all_emailed)} contacts already emailed\n")
+        print(f"📋 {len(all_leads)} candidate leads ({n_enriched} enriched, {n_contacted} contacted), {len(all_emailed)} contacts already emailed\n")
 
         sent = 0
         failed = 0
         skipped = 0
         min_gap = settings.get('min_minutes_between_emails', 2)
 
-        for lead in leads.data:
+        for lead in all_leads:
             if sent >= count:
                 break
 
@@ -855,7 +974,7 @@ class AISDRAgent:
         Only verifies contacts that:
           - Belong to a HIGH ICP-fit lead
           - Have a title score >= min_score (default 60)
-          - Have NOT been verified yet (elv_status IS NULL)
+          - Have NOT been verified yet OR verification is older than 30 days
           - Have NOT already been emailed
 
         Args:
@@ -885,13 +1004,17 @@ class AISDRAgent:
             o['contact_email'].lower() for o in (outreach.data or []) if o.get('contact_email')
         )
 
-        # Collect unverified contacts from HIGH leads, scored and filtered
+        # Collect unverified or expired contacts from HIGH leads, scored and filtered
+        expiry_cutoff = (datetime.now(timezone.utc) - timedelta(days=VERIFICATION_MAX_AGE_DAYS)).isoformat()
         candidates = []
         for website in lead_websites:
             domain = website.lower().replace('www.', '')
+            # Get contacts that are unverified OR whose verification has expired
             result = supabase.table('contact_database').select('*').or_(
                 f"website.ilike.%{domain}%,email_domain.ilike.%{domain}%"
-            ).is_('elv_status', 'null').limit(50).execute()
+            ).or_(
+                f"elv_status.is.null,elv_verified_at.lt.{expiry_cutoff}"
+            ).limit(50).execute()
 
             for c in (result.data or []):
                 email = c.get('email', '')
@@ -1196,6 +1319,7 @@ class AISDRAgent:
             print(f"✅ Gmail: {email}")
         except Exception as e:
             print(f"❌ Gmail error: {e}")
+            self._log('autonomous_run', summary=f"Gmail auth failed: {e}", status='failed')
             return
 
         # Phase 1: Check bounces once at start
@@ -1250,7 +1374,9 @@ class AISDRAgent:
                     now_est = datetime.now(timezone.utc) - timedelta(hours=5)
 
                 print(f"\n⏰ Outside send hours (now: {now_est.strftime('%I:%M %p EST')}). Sleeping 5 min...")
-                time.sleep(300)
+                for _ in range(5):
+                    time.sleep(60)
+                    self._update_heartbeat()
                 continue
 
             # Check daily limit
@@ -1259,8 +1385,10 @@ class AISDRAgent:
 
             if remaining <= 0:
                 print(f"\n🛑 Daily limit reached ({max_per_day}/{max_per_day}). Sleeping 30 min then rechecking...")
-                # Sleep and recheck — the date might roll over
-                time.sleep(1800)
+                # Sleep in intervals with heartbeat — the date might roll over
+                for _ in range(30):
+                    time.sleep(60)
+                    self._update_heartbeat()
                 continue
 
             # Periodically process follow-ups during the send loop
@@ -1281,9 +1409,11 @@ class AISDRAgent:
             total_sent_this_run += sent
 
             if sent == 0:
-                # No leads to send — wait before retrying
-                print(f"  📭 Nothing to send. Sleeping 10 min...")
-                time.sleep(600)
+                # No leads to send — sleep in short intervals with heartbeat
+                print(f"  📭 Nothing to send. Sleeping 5 min...")
+                for _ in range(5):
+                    time.sleep(60)
+                    self._update_heartbeat()
 
         # Final summary
         print(f"\n{'=' * 80}")

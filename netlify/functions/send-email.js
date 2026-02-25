@@ -9,8 +9,65 @@ const ELV_API_KEY = process.env.EMAILLISTVERIFY_API_KEY;
 
 // Valid statuses from EmailListVerify that are safe to send
 const SAFE_STATUSES = ['ok', 'ok_for_all', 'accept_all'];
+const BAD_STATUSES = ['invalid', 'email_disabled', 'dead_server', 'syntax_error'];
+
+// Verification is valid for 30 days
+const VERIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Check if a contact already has a valid (non-expired) verification cached
+ * in the contacts table. Returns the cached result or null.
+ */
+async function getCachedVerification(email) {
+  const { data } = await supabase
+    .from('contacts')
+    .select('elv_status, elv_verified_at')
+    .eq('email', email)
+    .not('elv_status', 'is', null)
+    .not('elv_verified_at', 'is', null)
+    .limit(1);
+
+  if (!data || data.length === 0) return null;
+
+  const row = data[0];
+  const verifiedAt = new Date(row.elv_verified_at);
+  const age = Date.now() - verifiedAt.getTime();
+
+  if (age > VERIFICATION_MAX_AGE_MS) {
+    console.log(`📧 Cached verification for ${email} expired (${Math.round(age / 86400000)}d old)`);
+    return null; // Expired — needs re-verification
+  }
+
+  const safe = SAFE_STATUSES.includes(row.elv_status);
+  console.log(`📧 Using cached verification for ${email}: ${row.elv_status} (${Math.round(age / 86400000)}d old)`);
+  return { email, status: row.elv_status, safe, cached: true, verifiedAt: row.elv_verified_at };
+}
+
+/**
+ * Save verification result to both contacts and contact_database tables.
+ */
+async function saveVerification(email, status) {
+  const now = new Date().toISOString();
+
+  // Update all matching rows in contacts table
+  await supabase
+    .from('contacts')
+    .update({ elv_status: status, elv_verified_at: now })
+    .eq('email', email);
+
+  // Also cache on contact_database
+  await supabase
+    .from('contact_database')
+    .update({ elv_status: status, elv_verified_at: now })
+    .eq('email', email);
+}
 
 async function verifyEmail(email) {
+  // 1. Check for a valid cached verification first
+  const cached = await getCachedVerification(email);
+  if (cached) return cached;
+
+  // 2. No valid cache — do a live verification
   if (!ELV_API_KEY) {
     console.log(`⚠️ No EMAILLISTVERIFY_API_KEY set, skipping verification for ${email}`);
     return { email, status: 'skipped', safe: true };
@@ -25,16 +82,21 @@ async function verifyEmail(email) {
 
     const safe = SAFE_STATUSES.includes(status);
 
-    // If email is bad, remove from contact_database
-    if (!safe && ['invalid', 'email_disabled', 'dead_server', 'syntax_error'].includes(status)) {
+    if (!safe && BAD_STATUSES.includes(status)) {
+      // Remove invalid email from contact_database
       console.log(`🗑️ Removing invalid email ${email} from contact_database`);
       await supabase.from('contact_database').delete().eq('email', email);
     }
 
-    return { email, status, safe };
+    // Cache the result for future lookups (even bad statuses, so we don't re-check)
+    await saveVerification(email, status);
+
+    return { email, status, safe, cached: false, verifiedAt: new Date().toISOString() };
   } catch (e) {
     console.error(`⚠️ Verify error for ${email}: ${e.message}`);
-    return { email, status: 'error', safe: true }; // Send on error — don't block
+    // On error don't cache — let it retry next time.
+    // But also don't block sending.
+    return { email, status: 'error', safe: true };
   }
 }
 
@@ -101,6 +163,17 @@ exports.handler = async (event) => {
 
     const safeEmails = verifyResults.filter(r => r.safe).map(r => r.email);
     const blockedEmails = verifyResults.filter(r => !r.safe);
+
+    // Log verification results to activity log
+    const freshlyVerified = verifyResults.filter(r => r.safe && !r.cached && r.status !== 'skipped' && r.status !== 'error');
+    if (freshlyVerified.length > 0 && leadId) {
+      await supabase.from('activity_log').insert({
+        activity_type: 'email_verified',
+        lead_id: leadId,
+        summary: `Verified: ${freshlyVerified.map(r => `${r.email} (${r.status})`).join(', ')}`,
+        status: 'success',
+      });
+    }
 
     if (blockedEmails.length > 0) {
       console.log(`🚫 Blocked ${blockedEmails.length} invalid emails: ${blockedEmails.map(r => `${r.email} (${r.status})`).join(', ')}`);

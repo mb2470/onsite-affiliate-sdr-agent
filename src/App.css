@@ -150,6 +150,53 @@ code, pre, .mono {
   font-weight: 600;
 }
 
+.header-outreach-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+}
+
+.outreach-stat-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.outreach-stat-title {
+  font-family: var(--font-body);
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.outreach-stat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.outreach-stat-value {
+  font-family: var(--font-heading);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.outreach-stat-label {
+  font-family: var(--font-body);
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
 /* ── Main Layout ── */
 .main-layout {
   display: flex;
@@ -400,6 +447,30 @@ code, pre, .mono {
   border-color: var(--brand-purple);
   background: rgba(144,21,237,0.08);
   box-shadow: 0 0 0 1px rgba(144,21,237,0.2);
+}
+
+.lead-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+.lead-delete-btn:hover {
+  background: rgba(239,68,68,0.15);
+  color: #ef4444;
 }
 
 .lead-card h4, .lead-enrich-card h4 {

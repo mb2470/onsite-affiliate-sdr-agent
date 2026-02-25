@@ -34,12 +34,13 @@ exports.handler = async (event) => {
 
     const anthropic = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: 25_000,
     });
 
-    // Build request params
+    // Build request params — use Haiku for web search (faster, avoids 26s Netlify timeout)
     const params = {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      model: useWebSearch ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-20250514',
+      max_tokens: useWebSearch ? 2048 : 4096,
       system: systemPrompt || 'You are a helpful AI assistant.',
       messages: [
         {
