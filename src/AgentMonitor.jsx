@@ -34,9 +34,10 @@ export default function AgentMonitor() {
     todayStart.setHours(0, 0, 0, 0);
 
     const { count: emailsToday } = await supabase
-      .from('outreach_log')
+      .from('activity_log')
       .select('*', { count: 'exact', head: true })
-      .gte('sent_at', todayStart.toISOString());
+      .in('activity_type', ['email_sent', 'email_exported'])
+      .gte('created_at', todayStart.toISOString());
 
     const { count: repliesToday } = await supabase
       .from('activity_log')
@@ -93,10 +94,11 @@ export default function AgentMonitor() {
     const { start, end } = getDateRange();
 
     const { count: sent } = await supabase
-      .from('outreach_log')
+      .from('activity_log')
       .select('*', { count: 'exact', head: true })
-      .gte('sent_at', start)
-      .lte('sent_at', end);
+      .in('activity_type', ['email_sent', 'email_exported'])
+      .gte('created_at', start)
+      .lte('created_at', end);
 
     const { count: replies } = await supabase
       .from('activity_log')
