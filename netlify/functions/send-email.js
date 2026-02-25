@@ -231,6 +231,7 @@ exports.handler = async (event) => {
         contact_name: contact?.name || null,
         email_subject: subject,
         email_body: body,
+        sent_at: new Date().toISOString(),
       };
     });
 
