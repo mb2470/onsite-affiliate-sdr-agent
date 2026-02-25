@@ -65,6 +65,7 @@ function AuthenticatedApp({ session }) {
   const [unenrichedCount, setUnenrichedCount] = useState(0);
   const [icpCounts, setIcpCounts] = useState({ high: 0, medium: 0, low: 0 });
   const [emailsSent, setEmailsSent] = useState(0);
+  const [outreachStats, setOutreachStats] = useState({ uniqueLeads: 0, uniqueContacts: 0, repliedLeads: 0, repliedContacts: 0 });
   const [isCheckingBounces, setIsCheckingBounces] = useState(false);
   const [bounceResult, setBounceResult] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
@@ -224,6 +225,19 @@ function AuthenticatedApp({ session }) {
     try {
       const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'contacted');
       setEmailsSent(count || 0);
+    } catch (e) { console.error(e); }
+
+    // Outreach stats: unique leads contacted, unique contacts emailed, reply rates
+    try {
+      const { data: outreach } = await supabase.from('outreach_log').select('website, contact_email, lead_id').eq('followup_number', 0);
+      const rows = outreach || [];
+      const uniqueLeads = new Set(rows.map(r => r.website?.toLowerCase())).size;
+      const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase())).size;
+      // Get replied leads, then count their unique contacts from outreach data
+      const { data: repliedLeadRows } = await supabase.from('leads').select('id').eq('status', 'replied');
+      const repliedLeadIds = new Set((repliedLeadRows || []).map(r => r.id));
+      const repliedContacts = new Set(rows.filter(r => repliedLeadIds.has(r.lead_id)).map(r => r.contact_email?.toLowerCase())).size;
+      setOutreachStats({ uniqueLeads, uniqueContacts, repliedLeads: repliedLeadIds.size, repliedContacts });
     } catch (e) { console.error(e); }
 
     try {
@@ -1074,6 +1088,27 @@ function AuthenticatedApp({ session }) {
         <div className="header-content">
           <h1>🤖 AI SDR Agent</h1>
           <p>Onsite Affiliate Outreach Platform</p>
+        </div>
+        <div className="header-outreach-stats">
+          <div className="outreach-stat-group">
+            <span className="outreach-stat-title">Contacted</span>
+            <div className="outreach-stat-row">
+              <span className="outreach-stat-value">{outreachStats.uniqueLeads}</span>
+              <span className="outreach-stat-label">Leads</span>
+              <span className="outreach-stat-value" style={{ marginLeft: '10px' }}>{outreachStats.uniqueContacts}</span>
+              <span className="outreach-stat-label">Contacts</span>
+            </div>
+          </div>
+          <div style={{ width: '1px', backgroundColor: 'rgba(255,255,255,0.12)', alignSelf: 'stretch', margin: '4px 0' }} />
+          <div className="outreach-stat-group">
+            <span className="outreach-stat-title">Response Rate</span>
+            <div className="outreach-stat-row">
+              <span className="outreach-stat-value" style={{ color: '#4ade80' }}>{outreachStats.uniqueLeads ? ((outreachStats.repliedLeads / outreachStats.uniqueLeads) * 100).toFixed(1) : '0.0'}%</span>
+              <span className="outreach-stat-label">Leads</span>
+              <span className="outreach-stat-value" style={{ marginLeft: '10px', color: '#4ade80' }}>{outreachStats.uniqueContacts ? ((outreachStats.repliedContacts / outreachStats.uniqueContacts) * 100).toFixed(1) : '0.0'}%</span>
+              <span className="outreach-stat-label">Contacts</span>
+            </div>
+          </div>
         </div>
         <div className="header-stats">
           <div className="stat">
