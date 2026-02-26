@@ -1180,14 +1180,14 @@ function AuthenticatedApp({ session }) {
       <div className="main-layout">
         <aside className="vertical-sidebar">
           {[
+            { key: 'chat', icon: '💬', label: 'Chat' },
             { key: 'icp', icon: '🧭', label: 'ICP Setup' },
             { key: 'add', icon: '➕', label: 'Add Leads' },
-            { key: 'enrich', icon: '🔬', label: 'Enrich Leads' },
-            { key: 'manual', icon: '✉️', label: 'Manual Outreach' },
-            { key: 'agent', icon: '🤖', label: 'Manage Agent' },
             { key: 'pipeline', icon: '📊', label: 'Pipeline' },
+            { key: 'enrich', icon: '🔬', label: 'Enrich Leads' },
+            { key: 'agent', icon: '🤖', label: 'Manage Agent' },
+            { key: 'manual', icon: '✉️', label: 'Manual Outreach' },
             { key: 'audience', icon: '🎯', label: 'Create Audience' },
-            { key: 'chat', icon: '💬', label: 'Chat' },
           ].map(item => (
             <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
               <span className="btn-icon">{item.icon}</span>
