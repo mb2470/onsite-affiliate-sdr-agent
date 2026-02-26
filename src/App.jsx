@@ -1179,21 +1179,47 @@ function AuthenticatedApp({ session }) {
 
       <div className="main-layout">
         <aside className="vertical-sidebar">
-          {[
-            { key: 'chat', icon: '💬', label: 'Chat' },
-            { key: 'icp', icon: '🧭', label: 'ICP Setup' },
-            { key: 'add', icon: '➕', label: 'Add Leads' },
-            { key: 'pipeline', icon: '📊', label: 'Pipeline' },
-            { key: 'enrich', icon: '🔬', label: 'Enrich Leads' },
-            { key: 'agent', icon: '🤖', label: 'Manage Agent' },
-            { key: 'manual', icon: '✉️', label: 'Manual Outreach' },
-            { key: 'audience', icon: '🎯', label: 'Create Audience' },
-          ].map(item => (
-            <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
-              <span className="btn-icon">{item.icon}</span>
-              <span className="btn-label">{item.label}</span>
+          <div className="sidebar-brand">
+            <div className="sidebar-brand-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="url(#brandGrad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <defs><linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#9015ed"/><stop offset="100%" stopColor="#245ef9"/></linearGradient></defs>
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+              </svg>
+            </div>
+            <span className="sidebar-brand-text">AI SDR</span>
+          </div>
+
+          <div className="sidebar-section-label">Main</div>
+          <nav className="sidebar-nav">
+            {[
+              { key: 'chat', label: 'Chat', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> },
+              { key: 'icp', label: 'ICP Setup', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> },
+              { key: 'add', label: 'Add Leads', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg> },
+              { key: 'pipeline', label: 'Pipeline', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> },
+              { key: 'enrich', label: 'Enrich Leads', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
+              { key: 'agent', label: 'Manage Agent', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> },
+              { key: 'manual', label: 'Manual Outreach', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> },
+              { key: 'audience', label: 'Create Audiences', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
+            ].map(item => (
+              <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
+                <span className="btn-icon">{item.icon}</span>
+                <span className="btn-label">{item.label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="sidebar-spacer" />
+          <div className="sidebar-section-label">Support</div>
+          <nav className="sidebar-nav sidebar-nav-bottom">
+            <button className={`sidebar-btn ${activeView === 'help' ? 'active' : ''}`} onClick={() => setActiveView('help')}>
+              <span className="btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+              <span className="btn-label">Help & Guide</span>
             </button>
-          ))}
+            <a href="mailto:mb2470@gmail.com" className="sidebar-btn sidebar-link">
+              <span className="btn-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>
+              <span className="btn-label">Contact Support</span>
+            </a>
+          </nav>
         </aside>
 
         <main className="main-content">
@@ -3097,6 +3123,148 @@ function AuthenticatedApp({ session }) {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ═══ HELP & GUIDE ═══ */}
+          {activeView === 'help' && (
+            <div className="view-container">
+              <h2>Help & Guide</h2>
+              <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '13px', marginBottom: '28px', maxWidth: '700px', lineHeight: 1.6 }}>
+                Everything you need to get started with AI SDR Agent and run high-converting outreach campaigns.
+              </p>
+
+              {/* Getting Started */}
+              <div className="help-section">
+                <div className="help-section-header">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9015ed" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  <h3>Getting Started</h3>
+                </div>
+                <div className="help-steps">
+                  <div className="help-step">
+                    <div className="help-step-num">1</div>
+                    <div>
+                      <h4>Define Your ICP</h4>
+                      <p>Head to <strong>ICP Setup</strong> to define your ideal customer profile. This trains the AI on your product, target firmographics, buyer personas, and messaging tone so all enrichment and email generation is tailored to your business.</p>
+                    </div>
+                  </div>
+                  <div className="help-step">
+                    <div className="help-step-num">2</div>
+                    <div>
+                      <h4>Add Leads</h4>
+                      <p>Use <strong>Add Leads</strong> to import prospects — paste a single website, bulk-paste a list, upload a CSV, or use the built-in discovery tool to find Shopify stores matching your criteria.</p>
+                    </div>
+                  </div>
+                  <div className="help-step">
+                    <div className="help-step-num">3</div>
+                    <div>
+                      <h4>Enrich Your Leads</h4>
+                      <p>Navigate to <strong>Enrich Leads</strong> to run AI-powered research. The system scrapes each brand's website, identifies key decision-makers, finds verified contact emails, and scores them against your ICP.</p>
+                    </div>
+                  </div>
+                  <div className="help-step">
+                    <div className="help-step-num">4</div>
+                    <div>
+                      <h4>Review Your Pipeline</h4>
+                      <p>The <strong>Pipeline</strong> view gives you a filterable, searchable overview of all leads with their enrichment status, ICP scores, contact info, and outreach history.</p>
+                    </div>
+                  </div>
+                  <div className="help-step">
+                    <div className="help-step-num">5</div>
+                    <div>
+                      <h4>Send Outreach</h4>
+                      <p>Use <strong>Manual Outreach</strong> to generate personalized emails for individual leads, or configure the <strong>Manage Agent</strong> to automate outreach at scale with customizable sending schedules and daily limits.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Features Overview */}
+              <div className="help-section">
+                <div className="help-section-header">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#245ef9" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                  <h3>Feature Overview</h3>
+                </div>
+                <div className="help-features-grid">
+                  <div className="help-feature-card">
+                    <h4>Chat Assistant</h4>
+                    <p>Talk to an AI assistant that understands your pipeline. Ask questions about your leads, get outreach advice, or request analytics — all in natural language.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>ICP Setup</h4>
+                    <p>A guided 5-step wizard to define your Ideal Customer Profile: product positioning, firmographics, buyer persona, messaging tone, and a summary the AI uses for scoring.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>Lead Discovery</h4>
+                    <p>Find prospects automatically by searching Shopify store databases filtered by category, country, minimum product count, and estimated revenue.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>AI Enrichment</h4>
+                    <p>One-click enrichment scrapes brand websites, researches company details, identifies decision-makers, and finds verified email addresses using multiple data sources.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>Email Generation</h4>
+                    <p>AI-crafted personalized cold emails based on each lead's specific brand data, ensuring every outreach message is relevant and conversion-optimized.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>Automated Agent</h4>
+                    <p>Set up an autonomous SDR agent that runs on a schedule — enriching new leads, generating emails, and sending outreach within daily limits you configure.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>Create Audiences</h4>
+                    <p>Segment your pipeline into targeted audiences based on ICP score, enrichment status, country, or custom filters for more focused outreach campaigns.</p>
+                  </div>
+                  <div className="help-feature-card">
+                    <h4>Bounce Detection</h4>
+                    <p>Automatically check for bounced emails and keep your sender reputation healthy. Bounced contacts are flagged so you don't re-send to invalid addresses.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* FAQ */}
+              <div className="help-section">
+                <div className="help-section-header">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c6beee" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  <h3>Frequently Asked Questions</h3>
+                </div>
+                <div className="help-faq-list">
+                  <div className="help-faq-item">
+                    <h4>How many leads can I enrich at once?</h4>
+                    <p>You can select up to 50 leads at a time for batch enrichment. Each enrichment takes approximately 10–30 seconds per lead depending on the amount of data available.</p>
+                  </div>
+                  <div className="help-faq-item">
+                    <h4>What email verification is used?</h4>
+                    <p>We use EmailListVerify to validate all discovered email addresses before they enter your pipeline. This helps maintain a low bounce rate and protects your sender domain.</p>
+                  </div>
+                  <div className="help-faq-item">
+                    <h4>Can I customize email templates?</h4>
+                    <p>Yes. The ICP Setup messaging & tone section directly influences how AI-generated emails are written. You can also manually edit any generated email before sending.</p>
+                  </div>
+                  <div className="help-faq-item">
+                    <h4>How does the automated agent work?</h4>
+                    <p>The agent runs on a configurable schedule (e.g., every 4 hours between 8 AM–6 PM). It picks unenriched leads, enriches them, generates emails, and sends — all within daily limits you set.</p>
+                  </div>
+                  <div className="help-faq-item">
+                    <h4>Is my data secure?</h4>
+                    <p>All data is stored in your Supabase instance with row-level security (RLS). API keys and credentials are stored as environment variables and never exposed to the frontend.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Contact */}
+              <div className="help-section help-contact-section">
+                <div className="help-section-header">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                  <h3>Need More Help?</h3>
+                </div>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', lineHeight: 1.6, marginBottom: '16px' }}>
+                  Can't find what you're looking for? Reach out to our team and we'll get back to you as soon as possible.
+                </p>
+                <a href="mailto:mb2470@gmail.com" className="primary-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                  Contact Support
+                </a>
+              </div>
             </div>
           )}
 
