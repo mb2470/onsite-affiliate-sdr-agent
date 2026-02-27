@@ -5,8 +5,8 @@ import Login from './Login';
 import { supabase } from './supabaseClient';
 import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
 import { enrichLeads, setIcpContext } from './services/enrichService';
-import { generateEmail, setEmailIcpContext } from './services/emailService';
-import { findContacts } from './services/contactService';
+import { generateEmail, setEmailIcpContext, getCachedEmail, personalizeEmail } from './services/emailService';
+import { findContacts, verifyContactEmails } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
 import ChatPanel from './ChatPanel';
 
@@ -115,6 +115,9 @@ function AuthenticatedApp({ session }) {
   const [manualContacts, setManualContacts] = useState([]);
   const [isLoadingContacts, setIsLoadingContacts] = useState(false);
   const [selectedManualContacts, setSelectedManualContacts] = useState([]);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationMap, setVerificationMap] = useState({});
+  const [cachedEmailUsed, setCachedEmailUsed] = useState(false);
   const MANUAL_PAGE_SIZE = 50;
   const manualTimerRef = useRef(null);
 
@@ -406,11 +409,31 @@ function AuthenticatedApp({ session }) {
 
   useEffect(() => { loadManualLeads(); }, [manualFilterContacted, manualPage]);
 
-  const handleGenerateEmail = async () => {
+  const handleGenerateEmail = async (forceNew = false) => {
     if (!selectedLeadForManual) return;
     setIsGenerating(true);
+    setCachedEmailUsed(false);
+
+    // Determine contact name from selected contacts
+    const selectedContact = manualContacts.find(c => selectedManualContacts.includes(c.email));
+    const contactName = selectedContact?.name || selectedLeadForManual.contact_name;
+    const firstName = contactName ? contactName.split(' ')[0] : 'there';
+
     try {
-      const email = await generateEmail(selectedLeadForManual, selectedLeadForManual.contact_name);
+      // Check for cached email from previous outreach (saves AI compute)
+      if (!forceNew) {
+        const cached = await getCachedEmail(selectedLeadForManual.website);
+        if (cached) {
+          const personalized = personalizeEmail(cached.text, firstName);
+          setManualEmail(personalized);
+          setCachedEmailUsed(true);
+          setIsGenerating(false);
+          return;
+        }
+      }
+
+      // No cache or forced regeneration — generate fresh
+      const email = await generateEmail(selectedLeadForManual, contactName);
       setManualEmail(email);
     } catch (e) {
       console.error(e);
@@ -421,6 +444,7 @@ function AuthenticatedApp({ session }) {
   const handleFindContacts = async () => {
     if (!selectedLeadForManual) return;
     setIsLoadingContacts(true);
+    setVerificationMap({});
     try {
       const contacts = await findContacts(selectedLeadForManual);
 
@@ -439,10 +463,21 @@ function AuthenticatedApp({ session }) {
       }));
 
       setManualContacts(enrichedContacts);
+      setIsLoadingContacts(false);
+
+      // Run verification waterfall for all contacts
+      if (enrichedContacts.length > 0) {
+        setIsVerifying(true);
+        const emails = enrichedContacts.map(c => c.email);
+        const vMap = await verifyContactEmails(emails);
+        setVerificationMap(vMap);
+        setIsVerifying(false);
+      }
     } catch (e) {
       console.error(e);
+      setIsLoadingContacts(false);
+      setIsVerifying(false);
     }
-    setIsLoadingContacts(false);
   };
 
   const toggleContact = (email) => {
@@ -477,6 +512,8 @@ function AuthenticatedApp({ session }) {
       setManualEmail('');
       setManualContacts([]);
       setSelectedManualContacts([]);
+      setVerificationMap({});
+      setCachedEmailUsed(false);
       loadManualLeads();
       loadGlobalData();
     }, 1000);
@@ -510,6 +547,8 @@ function AuthenticatedApp({ session }) {
         setManualEmail('');
         setManualContacts([]);
         setSelectedManualContacts([]);
+        setVerificationMap({});
+        setCachedEmailUsed(false);
         setSendResult(null);
         await loadGlobalData();
         await loadManualLeads();
@@ -534,12 +573,14 @@ function AuthenticatedApp({ session }) {
     }
 
     await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
-    
+
     setManualStep(1);
     setSelectedLeadForManual(null);
     setManualEmail('');
     setManualContacts([]);
     setSelectedManualContacts([]);
+    setVerificationMap({});
+    setCachedEmailUsed(false);
     await loadGlobalData();
     await loadManualLeads();
   };
@@ -2532,7 +2573,7 @@ function AuthenticatedApp({ session }) {
 
               {/* Step indicator */}
               <div style={{ display: 'flex', gap: '4px', marginBottom: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
-                {[{ n: 1, l: 'Select Lead' }, { n: 2, l: 'Generate Email' }, { n: 3, l: 'Find Contacts' }, { n: 4, l: 'Export to Gmail' }].map((s, i) => (
+                {[{ n: 1, l: 'Select Lead' }, { n: 2, l: 'Find Contacts' }, { n: 3, l: 'Generate Email' }, { n: 4, l: 'Send / Export' }].map((s, i) => (
                   <div key={s.n} style={{ display: 'flex', alignItems: 'center' }}>
                     <div style={{
                       padding: '8px 16px', borderRadius: '20px', fontSize: '13px',
@@ -2577,13 +2618,13 @@ function AuthenticatedApp({ session }) {
                         {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
                         {selectedLeadForManual.industry && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>}
                       </div>
-                      <button className="primary-btn" onClick={() => { setManualStep(2); handleGenerateEmail(); }} style={{ whiteSpace: 'nowrap' }}>Next: Generate Email →</button>
+                      <button className="primary-btn" onClick={() => { setManualStep(2); handleFindContacts(); }} style={{ whiteSpace: 'nowrap' }}>Next: Find Contacts →</button>
                     </div>
                   )}
 
                   <div className="leads-grid">
                     {manualLeads.map(lead => (
-                      <div key={lead.id} onClick={() => { setSelectedLeadForManual(lead); setManualEmail(''); setManualContacts([]); setSelectedManualContacts([]); }}>
+                      <div key={lead.id} onClick={() => { setSelectedLeadForManual(lead); setManualEmail(''); setManualContacts([]); setSelectedManualContacts([]); setVerificationMap({}); setCachedEmailUsed(false); }}>
                         <LeadCard lead={lead} selected={selectedLeadForManual?.id === lead.id} showContacted={true} />
                       </div>
                     ))}
@@ -2601,17 +2642,105 @@ function AuthenticatedApp({ session }) {
                 </>
               )}
 
-              {/* Step 2: Generate Email */}
+              {/* Step 2: Find & Verify Contacts */}
               {manualStep === 2 && selectedLeadForManual && (
+                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <div style={{ marginBottom: '20px' }}>
+                    <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
+                    <span style={{ opacity: 0.6, fontSize: '13px' }}>Find and verify contacts</span>
+                  </div>
+                  {isLoadingContacts ? (
+                    <div style={{ textAlign: 'center', padding: '40px', opacity: 0.6 }}>🔍 Searching database & Apollo for contacts...</div>
+                  ) : manualContacts.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '40px' }}>
+                      <p style={{ opacity: 0.6 }}>No contacts found for {selectedLeadForManual.website}</p>
+                      <button className="secondary-btn" onClick={handleFindContacts}>🔄 Try Again</button>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                        <p style={{ margin: 0, opacity: 0.7 }}><strong>{manualContacts.length}</strong> contacts found:</p>
+                        {isVerifying && <span style={{ fontSize: '12px', color: '#eab308' }}>⏳ Verifying emails...</span>}
+                        {!isVerifying && Object.keys(verificationMap).length > 0 && (
+                          <span style={{ fontSize: '12px', color: '#4ade80' }}>
+                            ✓ {Object.values(verificationMap).filter(v => v.safe).length} verified
+                            {Object.values(verificationMap).filter(v => !v.safe).length > 0 && (
+                              <span style={{ color: '#f87171', marginLeft: '8px' }}>
+                                · {Object.values(verificationMap).filter(v => !v.safe).length} invalid
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px', maxHeight: '400px', overflowY: 'auto' }}>
+                        {manualContacts.map(c => {
+                          const vResult = verificationMap[c.email];
+                          const isBadEmail = vResult?.safe === false;
+                          return (
+                          <div key={c.email} onClick={() => !isBadEmail && toggleContact(c.email)}
+                            style={{ padding: '12px 16px', borderRadius: '8px', cursor: isBadEmail ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '12px',
+                              opacity: isBadEmail ? 0.4 : 1,
+                              border: selectedManualContacts.includes(c.email) ? '1px solid rgba(144,21,237,0.6)' : isBadEmail ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(255,255,255,0.1)',
+                              backgroundColor: selectedManualContacts.includes(c.email) ? 'rgba(144,21,237,0.15)' : isBadEmail ? 'rgba(239,68,68,0.05)' : 'rgba(255,255,255,0.03)' }}>
+                            <input type="checkbox" checked={selectedManualContacts.includes(c.email)} readOnly disabled={isBadEmail} />
+                            <div style={{ flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <strong>{c.name}</strong>
+                                {c.alreadySent && <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>✓ Sent</span>}
+                                {vResult && vResult.safe && (
+                                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(34,197,94,0.15)', color: '#4ade80' }}>
+                                    ✓ {vResult.source === 'apollo' ? 'Apollo Verified' : 'ELV Verified'}
+                                  </span>
+                                )}
+                                {vResult && !vResult.safe && (
+                                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(239,68,68,0.15)', color: '#f87171' }}>
+                                    ✗ Invalid ({vResult.status})
+                                  </span>
+                                )}
+                                {!vResult && !isVerifying && c.apolloStatus && (
+                                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.5)' }}>
+                                    {c.apolloStatus}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '12px', opacity: 0.7 }}>{c.title}</div>
+                              <div style={{ fontSize: '12px', opacity: 0.5 }}>{c.email}</div>
+                              {c.alreadySent && <div style={{ fontSize: '10px', opacity: 0.4 }}>Sent {new Date(c.sentAt).toLocaleDateString()}</div>}
+                            </div>
+                            {c.matchLevel && <span className={`match-badge ${c.matchClass}`}>{c.matchEmoji} {c.matchLevel}</span>}
+                          </div>
+                          );
+                        })}
+                      </div>
+                      <button className="primary-btn" onClick={() => { setManualStep(3); handleGenerateEmail(); }} disabled={selectedManualContacts.length === 0 || isVerifying} style={{ width: '100%', padding: '14px' }}>
+                        {isVerifying ? '⏳ Waiting for verification...' : `Next: Generate Email → (${selectedManualContacts.length} selected)`}
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => { setManualStep(1); setManualContacts([]); setSelectedManualContacts([]); setVerificationMap({}); }} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to lead selection</button>
+                </div>
+              )}
+
+              {/* Step 3: Generate / Reuse Email */}
+              {manualStep === 3 && selectedLeadForManual && (
                 <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
                   <div style={{ marginBottom: '20px' }}>
                     <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
                     <span style={{ opacity: 0.6, fontSize: '13px' }}>{selectedLeadForManual.industry} · {selectedLeadForManual.icp_fit} fit</span>
                   </div>
+                  {cachedEmailUsed && (
+                    <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', color: '#4ade80' }}>♻️ Reusing previous email (saves AI cost)</span>
+                      <button onClick={() => handleGenerateEmail(true)} disabled={isGenerating}
+                        style={{ padding: '4px 10px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.2)', backgroundColor: 'transparent', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: '12px' }}>
+                        Generate Fresh
+                      </button>
+                    </div>
+                  )}
                   {!manualEmail ? (
-                    <button className="primary-btn" onClick={handleGenerateEmail} disabled={isGenerating} style={{ width: '100%', padding: '14px' }}>
-                      {isGenerating ? '⏳ Generating with AI...' : '✨ Generate Personalized Email'}
-                    </button>
+                    <div style={{ textAlign: 'center', padding: '40px', opacity: 0.6 }}>
+                      {isGenerating ? '⏳ Generating with AI...' : 'Loading email...'}
+                    </div>
                   ) : (
                     <>
                       <div style={{ backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '16px', marginBottom: '16px', position: 'relative' }}>
@@ -2620,86 +2749,46 @@ function AuthenticatedApp({ session }) {
                         <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: '13px', lineHeight: '1.5' }}>{manualEmail}</pre>
                       </div>
                       <div style={{ display: 'flex', gap: '12px' }}>
-                        <button className="secondary-btn" onClick={handleGenerateEmail} disabled={isGenerating}>🔄 Regenerate</button>
-                        <button className="primary-btn" onClick={() => { setManualStep(3); handleFindContacts(); }} style={{ flex: 1 }}>Next: Find Contacts →</button>
+                        <button className="secondary-btn" onClick={() => handleGenerateEmail(true)} disabled={isGenerating}>🔄 Regenerate</button>
+                        <button className="primary-btn" onClick={() => setManualStep(4)} style={{ flex: 1 }}>Next: Review & Send →</button>
                       </div>
                     </>
                   )}
-                  <button onClick={() => setManualStep(1)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to lead selection</button>
+                  <button onClick={() => { setManualStep(2); setManualEmail(''); setCachedEmailUsed(false); }} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to contacts</button>
                 </div>
               )}
 
-              {/* Step 3: Find Contacts */}
-              {manualStep === 3 && selectedLeadForManual && (
-                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  <div style={{ marginBottom: '20px' }}>
-                    <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
-                    <span style={{ opacity: 0.6, fontSize: '13px' }}>Select contacts to reach out to</span>
-                  </div>
-                  {isLoadingContacts ? (
-                    <div style={{ textAlign: 'center', padding: '40px', opacity: 0.6 }}>🔍 Searching for contacts...</div>
-                  ) : manualContacts.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '40px' }}>
-                      <p style={{ opacity: 0.6 }}>No contacts found for {selectedLeadForManual.website}</p>
-                      <button className="secondary-btn" onClick={handleFindContacts}>🔄 Try Again</button>
-                    </div>
-                  ) : (
-                    <>
-                      <p style={{ marginBottom: '12px', opacity: 0.7 }}><strong>{manualContacts.length}</strong> contacts found:</p>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px', maxHeight: '400px', overflowY: 'auto' }}>
-                        {manualContacts.map(c => (
-                          <div key={c.email} onClick={() => toggleContact(c.email)}
-                            style={{ padding: '12px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px',
-                              border: selectedManualContacts.includes(c.email) ? '1px solid rgba(144,21,237,0.6)' : '1px solid rgba(255,255,255,0.1)',
-                              backgroundColor: selectedManualContacts.includes(c.email) ? 'rgba(144,21,237,0.15)' : 'rgba(255,255,255,0.03)' }}>
-                            <input type="checkbox" checked={selectedManualContacts.includes(c.email)} readOnly />
-                            <div style={{ flex: 1 }}>
-                              <strong>{c.name}</strong>
-                              {c.alreadySent && <span style={{ marginLeft: '8px', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>✓ Sent</span>}
-                              <div style={{ fontSize: '12px', opacity: 0.7 }}>{c.title}</div>
-                              <div style={{ fontSize: '12px', opacity: 0.5 }}>{c.email}</div>
-                              {c.alreadySent && <div style={{ fontSize: '10px', opacity: 0.4 }}>Sent {new Date(c.sentAt).toLocaleDateString()}</div>}
-                            </div>
-                            {c.matchLevel && <span className={`match-badge ${c.matchClass}`}>{c.matchEmoji} {c.matchLevel}</span>}
-                          </div>
-                        ))}
-                      </div>
-                      {sendResult?.success && (
-                        <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', marginBottom: '12px', textAlign: 'center', color: '#4ade80' }}>
-                          ✅ Email sent to {sendResult.recipients?.join(', ')}
-                        </div>
-                      )}
-                      {sendResult?.error && (
-                        <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', marginBottom: '12px', textAlign: 'center', color: '#f87171', fontSize: '13px' }}>
-                          ❌ {sendResult.error}
-                        </div>
-                      )}
-                      <button className="primary-btn" onClick={handleSendDirect} disabled={selectedManualContacts.length === 0 || isSending} style={{ width: '100%', padding: '14px' }}>
-                        {isSending ? '⏳ Sending...' : `📧 Send Email — ${selectedManualContacts.length} Contact(s)`}
-                      </button>
-                      <button onClick={handleExportFromContacts} disabled={selectedManualContacts.length === 0}
-                        style={{ width: '100%', padding: '10px', marginTop: '8px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px' }}>
-                        Or open in Gmail →
-                      </button>
-                    </>
-                  )}
-                  <button onClick={() => setManualStep(2)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to email</button>
-                </div>
-              )}
-
-              {/* Step 4: Export */}
+              {/* Step 4: Send / Export */}
               {manualStep === 4 && selectedLeadForManual && (
-                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}>
-                  <h3 style={{ marginBottom: '20px' }}>Ready to Send!</h3>
+                <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <h3 style={{ marginBottom: '20px', textAlign: 'center' }}>Ready to Send</h3>
                   <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(0,0,0,0.2)', marginBottom: '20px', textAlign: 'left' }}>
                     <div style={{ marginBottom: '12px' }}><strong>Lead:</strong> {selectedLeadForManual.website}</div>
                     <div style={{ marginBottom: '12px' }}><strong>Recipients ({selectedManualContacts.length}):</strong>
                       <div style={{ fontSize: '13px', opacity: 0.7, marginTop: '4px' }}>{selectedManualContacts.join(', ')}</div>
                     </div>
+                    <div style={{ fontSize: '12px', opacity: 0.5, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '12px', marginTop: '8px' }}>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0, lineHeight: '1.4' }}>{manualEmail?.substring(0, 200)}{manualEmail?.length > 200 ? '...' : ''}</pre>
+                    </div>
                   </div>
-                  <button className="primary-btn" onClick={handleExportToGmail} style={{ width: '100%', padding: '16px', fontSize: '16px' }}>📧 Open in Gmail</button>
-                  <p style={{ marginTop: '8px', opacity: 0.5, fontSize: '12px' }}>Opens Gmail with contacts in BCC and your email</p>
-                  <button onClick={() => setManualStep(3)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to contacts</button>
+                  {sendResult?.success && (
+                    <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', marginBottom: '12px', textAlign: 'center', color: '#4ade80' }}>
+                      ✅ Email sent to {sendResult.recipients?.join(', ')}
+                    </div>
+                  )}
+                  {sendResult?.error && (
+                    <div style={{ padding: '12px', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', marginBottom: '12px', textAlign: 'center', color: '#f87171', fontSize: '13px' }}>
+                      ❌ {sendResult.error}
+                    </div>
+                  )}
+                  <button className="primary-btn" onClick={handleSendDirect} disabled={isSending} style={{ width: '100%', padding: '14px' }}>
+                    {isSending ? '⏳ Sending...' : `📧 Send Email — ${selectedManualContacts.length} Contact(s)`}
+                  </button>
+                  <button onClick={handleExportFromContacts}
+                    style={{ width: '100%', padding: '10px', marginTop: '8px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px' }}>
+                    Or open in Gmail →
+                  </button>
+                  <button onClick={() => setManualStep(3)} style={{ marginTop: '16px', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '13px' }}>← Back to email</button>
                 </div>
               )}
             </div>

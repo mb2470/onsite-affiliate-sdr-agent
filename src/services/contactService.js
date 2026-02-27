@@ -25,7 +25,14 @@ const scoreContacts = (data) => {
       matchLevel = 'Mid-Level'; matchEmoji = '🔵'; matchClass = 'low'; score = 30;
     }
 
-    return { name, title: c.title || 'Unknown Title', email: c.email, linkedin: c.linkedin_url, matchLevel, matchEmoji, matchClass, score };
+    return {
+      name,
+      title: c.title || 'Unknown Title',
+      email: c.email,
+      linkedin: c.linkedin_url,
+      matchLevel, matchEmoji, matchClass, score,
+      apolloStatus: c.apollo_email_status || null,
+    };
   });
 
   contacts.sort((a, b) => b.score - a.score);
@@ -80,5 +87,33 @@ export const findContacts = async (lead) => {
   } catch (apolloErr) {
     console.error('Apollo fallback error:', apolloErr);
     return [];
+  }
+};
+
+// Verify a list of contact emails through the waterfall (Apollo cached status → ELV)
+export const verifyContactEmails = async (emails) => {
+  try {
+    const res = await fetch('/.netlify/functions/verify-emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emails }),
+    });
+
+    if (!res.ok) {
+      console.error('Verification endpoint error:', res.status);
+      return {};
+    }
+
+    const { results } = await res.json();
+
+    // Return as a map: email → { status, safe, source }
+    const map = {};
+    for (const r of results) {
+      map[r.email] = { status: r.status, safe: r.safe, source: r.source };
+    }
+    return map;
+  } catch (e) {
+    console.error('Verification error:', e);
+    return {};
   }
 };

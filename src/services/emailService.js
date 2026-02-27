@@ -1,3 +1,5 @@
+import { supabase } from '../supabaseClient';
+
 // Module-level ICP profile cache (set from App.jsx via setEmailIcpContext)
 let _emailIcpContext = null;
 
@@ -128,6 +130,42 @@ function buildEmailPrompt(lead, firstName) {
 
   return parts.filter(line => line !== null).join('\n');
 }
+
+// Check outreach_log for a previously sent email for this lead that can be reused.
+// Returns { subject, body, contactName, sentAt } or null if none found.
+export const getCachedEmail = async (website) => {
+  const cleanDomain = website.toLowerCase().replace(/^www\./, '');
+
+  const { data, error } = await supabase
+    .from('outreach_log')
+    .select('email_subject, email_body, contact_name, sent_at')
+    .ilike('website', `%${cleanDomain}%`)
+    .order('sent_at', { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+
+  const row = data[0];
+  if (!row.email_subject || !row.email_body) return null;
+
+  return {
+    subject: row.email_subject,
+    body: row.email_body,
+    contactName: row.contact_name,
+    sentAt: row.sent_at,
+    // Reconstruct the full email text in the same format generateEmail returns
+    text: `Subject: ${row.email_subject}\n\n${row.email_body}`,
+  };
+};
+
+// Personalize a cached email for a new contact by swapping the first name greeting
+export const personalizeEmail = (emailText, newFirstName) => {
+  if (!newFirstName || newFirstName === 'there') return emailText;
+  // Replace "Hey <AnyName> -" with "Hey <newFirstName> -"
+  let result = emailText.replace(/Hey \w+ -/i, `Hey ${newFirstName} -`);
+  result = result.replace(/Hey there -/i, `Hey ${newFirstName} -`);
+  return result;
+};
 
 // Generate a personalized outreach email for a lead
 export const generateEmail = async (lead, contactName) => {
