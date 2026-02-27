@@ -1,9 +1,16 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 
+// Use service role key (bypasses RLS) for server-side function,
+// falling back to anon key if not set.
+const supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY;
+
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  supabaseKey
 );
 
 // ── Tool definitions for Claude ──────────────────────────────────────────────
@@ -391,10 +398,34 @@ async function executeTool(name, input) {
     }
 
     case 'get_stats': {
-      const [total, byStatus, byIcp, recentOutreach, replies] = await Promise.all([
+      // Use individual count queries to avoid Supabase's default 1000-row limit
+      const [
+        total,
+        statusNew,
+        statusEnriched,
+        statusContacted,
+        statusReplied,
+        statusNoContacts,
+        icpHigh,
+        icpMedium,
+        icpLow,
+        outreachAll,
+        outreachRecent,
+        outreachReplies,
+      ] = await Promise.all([
         supabase.from('leads').select('*', { count: 'exact', head: true }),
-        supabase.from('leads').select('status'),
-        supabase.from('leads').select('icp_fit').not('icp_fit', 'is', null),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'enriched'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'contacted'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'replied'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'no_contacts'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'HIGH'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'MEDIUM'),
+        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'LOW'),
+        // outreach_log is the primary source — send-email.js writes here
+        supabase
+          .from('outreach_log')
+          .select('*', { count: 'exact', head: true }),
         supabase
           .from('outreach_log')
           .select('*', { count: 'exact', head: true })
@@ -406,20 +437,24 @@ async function executeTool(name, input) {
       ]);
 
       const statusCounts = {};
-      (byStatus.data || []).forEach((r) => {
-        statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
-      });
+      if (statusNew.count) statusCounts.new = statusNew.count;
+      if (statusEnriched.count) statusCounts.enriched = statusEnriched.count;
+      if (statusContacted.count) statusCounts.contacted = statusContacted.count;
+      if (statusReplied.count) statusCounts.replied = statusReplied.count;
+      if (statusNoContacts.count) statusCounts.no_contacts = statusNoContacts.count;
+
       const icpCounts = {};
-      (byIcp.data || []).forEach((r) => {
-        icpCounts[r.icp_fit] = (icpCounts[r.icp_fit] || 0) + 1;
-      });
+      if (icpHigh.count) icpCounts.HIGH = icpHigh.count;
+      if (icpMedium.count) icpCounts.MEDIUM = icpMedium.count;
+      if (icpLow.count) icpCounts.LOW = icpLow.count;
 
       return {
         total_leads: total.count || 0,
         by_status: statusCounts,
         by_icp_fit: icpCounts,
-        emails_sent_last_7_days: recentOutreach.count || 0,
-        total_replies: replies.count || 0,
+        emails_sent_all_time: outreachAll.count || 0,
+        emails_sent_last_7_days: outreachRecent.count || 0,
+        total_replies: outreachReplies.count || 0,
       };
     }
 
