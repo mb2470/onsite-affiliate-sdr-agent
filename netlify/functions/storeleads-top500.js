@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel } = require('./lib/icp-scoring');
+const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -7,6 +7,7 @@ const supabase = createClient(
 );
 
 const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
+const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
 
 async function fetchTopDomains(page, pageSize = 50) {
   const params = new URLSearchParams({
@@ -84,8 +85,16 @@ exports.handler = async (event) => {
           continue;
         }
 
-        const icpScore = scoreStoreLeads(d, config);
-        const fitReason = buildStoreLeadsFitReason(d, config);
+        let icpScore = scoreStoreLeads(d, config);
+        let fitReason = buildStoreLeadsFitReason(d, config);
+
+        // Opt 2: Fast-track check — technographic signals override to HIGH
+        const { fastTrack, reason: ftReason } = checkFastTrack(d);
+        if (fastTrack) {
+          icpScore = 'HIGH';
+          fitReason = ftReason;
+          console.log(`  ⚡ Fast-tracked ${cleanName}: ${ftReason}`);
+        }
 
         const { error: insertError } = await supabase.from('leads').insert({
           website: cleanName,
@@ -128,15 +137,17 @@ exports.handler = async (event) => {
       await new Promise(r => setTimeout(r, 250));
     }
 
-    // Now match contacts for any new leads
+    // Now match contacts for any new leads + Opt 3: parallel Apollo discovery for HIGH
     if (newAdded > 0) {
       const { data: newLeads } = await supabase
         .from('leads')
-        .select('id, website')
+        .select('id, website, icp_fit')
         .eq('source', 'storeleads_top500')
         .is('has_contacts', null);
 
       let contactsMatched = 0;
+      const apolloDiscoveryPromises = [];
+
       for (const lead of (newLeads || [])) {
         const cleanDomain = lead.website.replace(/^www\./, '');
         const { data: contacts } = await supabase
@@ -155,8 +166,25 @@ exports.handler = async (event) => {
           contactsMatched++;
         } else {
           await supabase.from('leads').update({ has_contacts: false }).eq('id', lead.id);
+
+          // Opt 3: For HIGH leads with no DB matches, trigger Apollo discovery
+          if (lead.icp_fit === 'HIGH' && APOLLO_API_KEY) {
+            apolloDiscoveryPromises.push(
+              fetch('/.netlify/functions/apollo-find-contacts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain: cleanDomain, leadId: lead.id }),
+              }).catch(err => console.error(`Apollo discovery error for ${cleanDomain}: ${err.message}`))
+            );
+          }
         }
       }
+
+      if (apolloDiscoveryPromises.length > 0) {
+        console.log(`🔀 Triggering ${apolloDiscoveryPromises.length} parallel Apollo discoveries for HIGH leads...`);
+        await Promise.allSettled(apolloDiscoveryPromises);
+      }
+
       console.log(`👥 Matched contacts for ${contactsMatched} new leads`);
     }
 

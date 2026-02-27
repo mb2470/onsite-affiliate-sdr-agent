@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel } = require('./lib/icp-scoring');
+const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -111,8 +111,16 @@ exports.handler = async (event) => {
             continue;
           }
 
-          const icpScore = scoreStoreLeads(d, config);
-          const fitReason = buildStoreLeadsFitReason(d, config);
+          let icpScore = scoreStoreLeads(d, config);
+          let fitReason = buildStoreLeadsFitReason(d, config);
+
+          // Opt 2: Fast-track check — technographic signals override to HIGH
+          const { fastTrack, reason: ftReason } = checkFastTrack(d);
+          if (fastTrack) {
+            icpScore = 'HIGH';
+            fitReason = ftReason;
+            console.log(`  ⚡ Fast-tracked ${lead.website}: ${ftReason}`);
+          }
 
           // Infer country from location if not set
           let inferredCountry = d.country || null;

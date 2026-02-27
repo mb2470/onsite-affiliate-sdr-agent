@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { classifyApolloStatus, backupTitlePivot } = require('./lib/apollo-verify');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -94,7 +95,7 @@ exports.handler = async (event, context) => {
       .eq('has_contacts', false)
       .eq('status', 'enriched')
       .order('created_at', { ascending: true })
-      .limit(125); // Process all HIGH leads without contacts
+      .limit(125);
 
     if (error) throw error;
 
@@ -106,6 +107,8 @@ exports.handler = async (event, context) => {
     console.log(`📋 Processing ${leads.length} HIGH leads via Apollo\n`);
 
     let totalFound = 0;
+    let totalInvalid = 0;
+    let totalPivoted = 0;
     let totalCreditsUsed = 0;
 
     for (const lead of leads) {
@@ -131,7 +134,7 @@ exports.handler = async (event, context) => {
           .filter(p => p.has_email)
           .map(p => ({ ...p, _score: scoreTitleRelevance(p.title) }))
           .sort((a, b) => b._score - a._score)
-          .slice(0, 3); // Enrich top 3 max (~4 credits per lead)
+          .slice(0, 3);
 
         if (withEmail.length === 0) {
           console.log(`  ❌ No people with emails found`);
@@ -146,11 +149,27 @@ exports.handler = async (event, context) => {
 
         const matches = enrichResult.matches || [];
         let addedForLead = 0;
+        const exhaustedTitles = [];
+        let allInvalid = true;
 
+        // Step 3: Triage by email_status (Opt 1)
         for (const match of matches) {
           if (!match.email) continue;
 
-          // Check if email already exists in contact_database
+          const apolloStatus = (match.email_status || 'unavailable').toLowerCase();
+          const action = classifyApolloStatus(apolloStatus);
+
+          if (action === 'discard') {
+            // Invalid — do NOT insert
+            console.log(`  🗑️ Discarding invalid: ${match.email} (${apolloStatus})`);
+            totalInvalid++;
+            if (match.title) exhaustedTitles.push(match.title);
+            continue;
+          }
+
+          allInvalid = false;
+
+          // Check if email already exists
           const { data: existing } = await supabase
             .from('contact_database')
             .select('id')
@@ -159,11 +178,11 @@ exports.handler = async (event, context) => {
 
           if (existing && existing.length > 0) {
             console.log(`  ⏭️  ${match.email} already in database`);
+            addedForLead++; // Count as "found" even if duplicate
             continue;
           }
 
-          // Add to contact_database (with Apollo email_status from enrichment)
-          const apolloStatus = (match.email_status || 'unavailable').toLowerCase();
+          // Insert with actual Apollo status
           const { error: insertErr } = await supabase.from('contact_database').insert({
             first_name: match.first_name || null,
             last_name: match.last_name || null,
@@ -184,9 +203,43 @@ exports.handler = async (event, context) => {
           }
         }
 
+        // Step 4: Backup title pivot if ALL contacts were invalid (Opt 4)
+        if (allInvalid && matches.length > 0) {
+          console.log(`  🔄 All contacts invalid for ${domain}, trying title pivot...`);
+          const pivoted = await backupTitlePivot(supabase, {
+            domain,
+            exhaustedTitles,
+            leadId: lead.id,
+          });
+
+          if (pivoted && pivoted.email) {
+            const pivotAction = classifyApolloStatus(pivoted.email_status);
+            if (pivotAction !== 'discard') {
+              totalCreditsUsed += 2; // search + enrich
+              const { error: pivotErr } = await supabase.from('contact_database').insert({
+                first_name: pivoted.first_name || null,
+                last_name: pivoted.last_name || null,
+                email: pivoted.email,
+                title: pivoted.title || null,
+                website: domain,
+                account_name: pivoted.organization || domain,
+                linkedin_url: pivoted.linkedin_url || null,
+                apollo_email_status: pivoted.email_status,
+                apollo_verified_at: new Date().toISOString(),
+              });
+
+              if (!pivotErr) {
+                addedForLead++;
+                totalPivoted++;
+                console.log(`  🔄 Pivoted: ${pivoted.email} (${pivoted.title}) [${pivoted.email_status}]`);
+              }
+            }
+          }
+        }
+
         // Update lead with contact info
         if (addedForLead > 0) {
-          const bestMatch = matches.find(m => m.email);
+          const bestMatch = matches.find(m => m.email && classifyApolloStatus((m.email_status || '').toLowerCase()) !== 'discard');
           await supabase.from('leads').update({
             has_contacts: true,
             contact_name: bestMatch ? `${bestMatch.first_name || ''} ${bestMatch.last_name || ''}`.trim() : null,
@@ -207,7 +260,7 @@ exports.handler = async (event, context) => {
       }
     }
 
-    const summary = `Apollo discovery: ${totalFound} contacts found across ${leads.length} leads (~${totalCreditsUsed} credits used)`;
+    const summary = `Apollo discovery: ${totalFound} contacts found across ${leads.length} leads (~${totalCreditsUsed} credits, ${totalInvalid} invalid, ${totalPivoted} pivoted)`;
     console.log(`\n${'='.repeat(60)}`);
     console.log(`✅ ${summary}`);
     console.log(`${'='.repeat(60)}`);
