@@ -70,16 +70,34 @@ graph TD
     Q --> R5[👔 Executive — 60]
     Q --> R6[🔵 Mid-Level — 30]
 
-    R1 & R2 & R3 & R4 & R5 & R6 --> EV
+    R1 & R2 & R3 & R4 & R5 & R6 --> AV
 
-    %% EMAIL VERIFICATION (at send time)
-    EV{✉️ EmailListVerify<br/>Send-time Check}
+    %% APOLLO EMAIL VERIFICATION (Step 1)
+    AV{🔶 Apollo People Match<br/>Email Verification}
+    AV -->|apollo_email_status cached<br/>within 30 days| AV0{Cached Status}
+    AV -->|Not cached| AV1[POST /v1/people/match<br/>email + name + domain<br/>1 credit]
+    AV1 --> AV0
+
+    AV0 -->|verified| AV2[✅ Apollo Verified<br/>Skip ELV, send immediately]
+    AV0 -->|extrapolated,<br/>unavailable,<br/>catch_all| EV
+    AV0 -->|invalid| AV3[🗑️ Discard email<br/>Remove from contact_database]
+
+    %% DOUBLE-CHECK LOOP (invalid + high-value)
+    AV3 -->|High-value contact?| AV4{🔄 Double-Check Loop<br/>Apollo Search API}
+    AV4 -->|New verified email found| AV5[📧 Refreshed contact<br/>Add to contact_database]
+    AV4 -->|Not found| AV6[❌ Contact removed]
+    AV5 --> EV
+
+    AV2 --> S{Send Method}
+
+    %% ELV SECONDARY VERIFICATION (Step 2 — for non-Apollo-verified)
+    EV{✉️ EmailListVerify<br/>Secondary Check}
     EV -->|elv_status cached<br/>as safe| EV3[⚡ Skip live check<br/>Use cached result]
     EV -->|Not pre-verified| EV4{Live ELV API call}
     EV4 -->|ok, ok_for_all,<br/>accept_all| EV3
     EV4 -->|invalid, email_disabled,<br/>dead_server, syntax_error| EV2[🗑️ Remove from<br/>contact_database<br/>Skip to next contact]
     EV4 -->|API error| EV3
-    EV3 --> S{Send Method}
+    EV3 --> S
 
     S -->|Direct| T[📧 Gmail API Send<br/>Instant, no tab switch]
     S -->|Fallback| U[📧 Open in Gmail<br/>Compose window]
@@ -161,3 +179,11 @@ graph TD
     style LS5 fill:#991b1b,color:#fff
     style F2 fill:#1e40af,color:#fff
     style H2 fill:#7c3aed,color:#fff
+    style AV fill:#d97706,color:#fff
+    style AV0 fill:#d97706,color:#fff
+    style AV1 fill:#d97706,color:#fff
+    style AV2 fill:#166534,color:#fff
+    style AV3 fill:#991b1b,color:#fff
+    style AV4 fill:#d97706,color:#fff
+    style AV5 fill:#1e40af,color:#fff
+    style AV6 fill:#991b1b,color:#fff
