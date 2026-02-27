@@ -72,6 +72,7 @@ exports.handler = async (event) => {
         linkedin_url: m.linkedin_url || '',
         website: cleanDomain,
         account_name: m.organization?.name || cleanDomain,
+        apollo_email_status: (m.email_status || 'unavailable').toLowerCase(),
       }));
 
     console.log(`✅ Enriched ${contacts.length} verified contacts`);
@@ -96,6 +97,8 @@ exports.handler = async (event) => {
             linkedin_url: contact.linkedin_url,
             website: contact.website,
             account_name: contact.account_name,
+            apollo_email_status: contact.apollo_email_status,
+            apollo_verified_at: new Date().toISOString(),
           });
 
         if (!error) {
