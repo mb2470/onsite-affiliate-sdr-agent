@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { verifyViaApollo, classifyApolloStatus } = require('./lib/apollo-verify');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -157,20 +158,72 @@ exports.handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No recipients' }) };
     }
 
-    // Verify all recipient emails before sending
+    // ── Step 1: Apollo email verification ──────────────────────────
+    // Check all emails against Apollo People Match API first.
+    // This filters out known-invalid emails and identifies which ones
+    // need secondary verification via ELV.
     const allEmails = [...(to ? [to] : []), ...(bcc || [])];
-    const verifyResults = await Promise.all(allEmails.map(e => verifyEmail(e)));
+    const contactMap = {};
+    for (const cd of (contactDetails || [])) {
+      if (cd.email) contactMap[cd.email] = cd;
+    }
 
-    const safeEmails = verifyResults.filter(r => r.safe).map(r => r.email);
-    const blockedEmails = verifyResults.filter(r => !r.safe);
+    let emailsForElv = [];
+    const apolloBlocked = [];
+    const apolloVerified = [];
+
+    for (const email of allEmails) {
+      const contact = contactMap[email] || {};
+      const domain = email.split('@')[1] || '';
+
+      const apolloResult = await verifyViaApollo(supabase, {
+        email,
+        first_name: contact.first_name || contact.name?.split(' ')[0],
+        last_name: contact.last_name || contact.name?.split(' ').slice(1).join(' '),
+        domain,
+      });
+
+      if (apolloResult.action === 'send') {
+        // Apollo verified — skip ELV, go straight to send
+        apolloVerified.push(email);
+      } else if (apolloResult.action === 'discard') {
+        // Apollo says invalid — block this email
+        apolloBlocked.push({ email, status: `apollo_${apolloResult.apollo_status}` });
+        console.log(`🚫 Apollo blocked ${email}: ${apolloResult.apollo_status}`);
+        // Remove from contact_database
+        await supabase.from('contact_database').delete().eq('email', email);
+      } else {
+        // extrapolated, catch-all, unknown — route to ELV for secondary check
+        emailsForElv.push(email);
+      }
+    }
+
+    if (apolloVerified.length > 0) {
+      console.log(`🔶 Apollo verified ${apolloVerified.length} emails: ${apolloVerified.join(', ')}`);
+    }
+
+    // ── Step 2: ELV verification for non-Apollo-verified emails ────
+    const elvResults = await Promise.all(emailsForElv.map(e => verifyEmail(e)));
+    const elvSafe = elvResults.filter(r => r.safe).map(r => r.email);
+    const elvBlocked = elvResults.filter(r => !r.safe);
+
+    // Combine results
+    const safeEmails = [...apolloVerified, ...elvSafe];
+    const blockedEmails = [...apolloBlocked, ...elvBlocked.map(r => ({ email: r.email, status: r.status }))];
 
     // Log verification results to activity log
-    const freshlyVerified = verifyResults.filter(r => r.safe && !r.cached && r.status !== 'skipped' && r.status !== 'error');
-    if (freshlyVerified.length > 0 && leadId) {
+    const freshlyVerified = elvResults.filter(r => r.safe && !r.cached && r.status !== 'skipped' && r.status !== 'error');
+    const verificationSummary = [
+      apolloVerified.length > 0 ? `Apollo verified: ${apolloVerified.join(', ')}` : null,
+      freshlyVerified.length > 0 ? `ELV verified: ${freshlyVerified.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
+      apolloBlocked.length > 0 ? `Apollo blocked: ${apolloBlocked.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
+    ].filter(Boolean).join(' | ');
+
+    if (verificationSummary && leadId) {
       await supabase.from('activity_log').insert({
         activity_type: 'email_verified',
         lead_id: leadId,
-        summary: `Verified: ${freshlyVerified.map(r => `${r.email} (${r.status})`).join(', ')}`,
+        summary: verificationSummary,
         status: 'success',
       });
     }

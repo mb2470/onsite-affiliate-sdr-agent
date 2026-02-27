@@ -162,7 +162,8 @@ exports.handler = async (event, context) => {
             continue;
           }
 
-          // Add to contact_database
+          // Add to contact_database (with Apollo email_status from enrichment)
+          const apolloStatus = (match.email_status || 'unavailable').toLowerCase();
           const { error: insertErr } = await supabase.from('contact_database').insert({
             first_name: match.first_name || null,
             last_name: match.last_name || null,
@@ -171,12 +172,14 @@ exports.handler = async (event, context) => {
             website: domain,
             account_name: match.organization?.name || domain,
             linkedin_url: match.linkedin_url || null,
+            apollo_email_status: apolloStatus,
+            apollo_verified_at: new Date().toISOString(),
           });
 
           if (insertErr) {
             console.error(`  ⚠️ Insert error for ${match.email}: ${insertErr.message}`);
           } else {
-            console.log(`  ✅ Added: ${match.first_name} ${match.last_name} — ${match.title} — ${match.email} (${match.email_status || 'unknown'})`);
+            console.log(`  ✅ Added: ${match.first_name} ${match.last_name} — ${match.title} — ${match.email} (apollo: ${apolloStatus})`);
             addedForLead++;
           }
         }

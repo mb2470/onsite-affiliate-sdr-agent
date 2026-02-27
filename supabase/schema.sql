@@ -85,6 +85,10 @@ CREATE TABLE contacts (
   elv_status TEXT,
   elv_verified_at TIMESTAMP WITH TIME ZONE,
 
+  -- Email Verification (Apollo People Match)
+  apollo_email_status TEXT,
+  apollo_verified_at TIMESTAMP WITH TIME ZONE,
+
   -- Metadata
   metadata JSONB DEFAULT '{}'::jsonb,
 
@@ -97,6 +101,8 @@ CREATE INDEX idx_contacts_email ON contacts(email);
 CREATE INDEX idx_contacts_match_score ON contacts(match_score DESC);
 CREATE INDEX idx_contacts_elv_status ON contacts(elv_status);
 CREATE INDEX idx_contacts_elv_verified_at ON contacts(elv_verified_at);
+CREATE INDEX idx_contacts_apollo_email_status ON contacts(apollo_email_status);
+CREATE INDEX idx_contacts_apollo_verified_at ON contacts(apollo_verified_at);
 
 -- ============================================
 -- 3. EMAILS TABLE
@@ -209,14 +215,18 @@ CREATE TABLE contact_database (
     LOWER(SUBSTRING(email FROM '@(.*)$'))
   ) STORED,
   
+  -- Email Verification (Apollo People Match)
+  apollo_email_status TEXT,
+  apollo_verified_at TIMESTAMP WITH TIME ZONE,
+
   -- Full text search
   search_vector tsvector GENERATED ALWAYS AS (
-    to_tsvector('english', COALESCE(account_name, '') || ' ' || 
-                           COALESCE(first_name, '') || ' ' || 
-                           COALESCE(last_name, '') || ' ' || 
+    to_tsvector('english', COALESCE(account_name, '') || ' ' ||
+                           COALESCE(first_name, '') || ' ' ||
+                           COALESCE(last_name, '') || ' ' ||
                            COALESCE(title, ''))
   ) STORED,
-  
+
   UNIQUE(email)
 );
 
@@ -225,6 +235,7 @@ CREATE INDEX idx_contact_db_website ON contact_database(website);
 CREATE INDEX idx_contact_db_email_domain ON contact_database(email_domain);
 CREATE INDEX idx_contact_db_search ON contact_database USING GIN(search_vector);
 CREATE INDEX idx_contact_db_title ON contact_database(title);
+CREATE INDEX idx_contact_db_apollo_email_status ON contact_database(apollo_email_status);
 
 -- ============================================
 -- 6. AUDIT_LOG TABLE
