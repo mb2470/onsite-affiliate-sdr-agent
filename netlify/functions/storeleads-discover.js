@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel } = require('./lib/icp-scoring');
+const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -7,6 +7,7 @@ const supabase = createClient(
 );
 
 const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
+const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
 
 // Target categories to search
 const TARGET_CATEGORIES = [
@@ -46,6 +47,107 @@ async function fetchTopDomains(category, country, pageSize = 50, page = 0, minPr
 
   const data = await response.json();
   return data.domains || [];
+}
+
+/**
+ * Opt 3: Trigger Apollo contact discovery for a HIGH lead in parallel.
+ * Fire-and-forget — errors don't block the main discovery flow.
+ */
+async function discoverContactsForLead(leadId, domain) {
+  if (!APOLLO_API_KEY) return;
+
+  try {
+    // Check if contacts already exist for this domain
+    const { data: existing } = await supabase
+      .from('contact_database')
+      .select('id')
+      .or(`website.ilike.%${domain}%,email_domain.ilike.%${domain}%`)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      // Already have contacts — just link them to the lead
+      const { data: contacts } = await supabase
+        .from('contact_database')
+        .select('first_name, last_name, email')
+        .or(`website.ilike.%${domain}%,email_domain.ilike.%${domain}%`)
+        .limit(1);
+
+      if (contacts && contacts.length > 0) {
+        const c = contacts[0];
+        await supabase.from('leads').update({
+          has_contacts: true,
+          contact_name: [c.first_name, c.last_name].filter(Boolean).join(' '),
+          contact_email: c.email,
+        }).eq('id', leadId);
+      }
+      return;
+    }
+
+    // No existing contacts — call Apollo search + enrich
+    const searchRes = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': APOLLO_API_KEY },
+      body: JSON.stringify({
+        q_organization_domains_list: [domain],
+        person_titles: [
+          'VP Marketing', 'Head of Marketing', 'Director of Marketing',
+          'CMO', 'Chief Marketing Officer',
+          'CEO', 'Founder', 'Co-Founder', 'President',
+          'VP Ecommerce', 'Head of Ecommerce',
+        ],
+        per_page: 5,
+      }),
+    });
+
+    if (!searchRes.ok) return;
+    const searchData = await searchRes.json();
+    const people = (searchData.people || []).filter(p => p.has_email).slice(0, 2);
+    if (people.length === 0) return;
+
+    const enrichRes = await fetch('https://api.apollo.io/api/v1/people/bulk_match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': APOLLO_API_KEY },
+      body: JSON.stringify({ details: people.map(p => ({ id: p.id })) }),
+    });
+
+    if (!enrichRes.ok) return;
+    const enrichData = await enrichRes.json();
+
+    for (const m of (enrichData.matches || [])) {
+      if (!m.email) continue;
+      const emailStatus = (m.email_status || 'unavailable').toLowerCase();
+      if (emailStatus === 'invalid') continue;
+
+      const { count } = await supabase
+        .from('contact_database')
+        .select('*', { count: 'exact', head: true })
+        .eq('email', m.email.toLowerCase());
+
+      if (count > 0) continue;
+
+      await supabase.from('contact_database').insert({
+        first_name: m.first_name || null,
+        last_name: m.last_name || null,
+        email: m.email.toLowerCase(),
+        title: m.title || null,
+        website: domain,
+        account_name: m.organization?.name || domain,
+        linkedin_url: m.linkedin_url || null,
+        apollo_email_status: emailStatus,
+        apollo_verified_at: new Date().toISOString(),
+      });
+
+      // Update lead with first contact found
+      await supabase.from('leads').update({
+        has_contacts: true,
+        contact_name: `${m.first_name || ''} ${m.last_name || ''}`.trim(),
+        contact_email: m.email.toLowerCase(),
+      }).eq('id', leadId);
+      break; // One contact is enough for now
+    }
+  } catch (err) {
+    console.error(`  ⚠️ Parallel contact discovery error for ${domain}: ${err.message}`);
+  }
 }
 
 exports.handler = async (event) => {
@@ -91,13 +193,15 @@ exports.handler = async (event) => {
     let newLeadsAdded = 0;
     let alreadyExisted = 0;
 
+    // Opt 3: Collect parallel contact discovery promises for HIGH leads
+    const contactDiscoveryPromises = [];
+
     // Search each target category for US and CA
     for (const category of TARGET_CATEGORIES) {
       for (const country of ['US', 'CA']) {
         console.log(`🔍 Searching: ${category} in ${country}...`);
 
         try {
-          // Get top 50 for each category/country combo, using ICP min product count
           const domains = await fetchTopDomains(category, country, 50, 0, config.minProductCount);
           console.log(`   Found ${domains.length} domains`);
 
@@ -113,10 +217,18 @@ exports.handler = async (event) => {
             }
 
             // Score ICP using shared config
-            const icpFit = scoreStoreLeads(d, config);
-            const fitReason = buildStoreLeadsFitReason(d, config);
+            let icpFit = scoreStoreLeads(d, config);
+            let fitReason = buildStoreLeadsFitReason(d, config);
 
-            const { error: insertError } = await supabase.from('leads').insert({
+            // Opt 2: Fast-track check
+            const { fastTrack, reason: ftReason } = checkFastTrack(d);
+            if (fastTrack) {
+              icpFit = 'HIGH';
+              fitReason = ftReason;
+              console.log(`  ⚡ Fast-tracked ${cleanName}: ${ftReason}`);
+            }
+
+            const { data: inserted, error: insertError } = await supabase.from('leads').insert({
               website: cleanName,
               status: 'enriched',
               source: 'storeleads_discovery',
@@ -137,13 +249,18 @@ exports.handler = async (event) => {
                 `Est Monthly Sales: ${d.estimated_sales ? `$${Math.round(d.estimated_sales / 100).toLocaleString()}/mo` : 'Unknown'}`,
                 `Plan: ${d.plan || 'Unknown'}`,
               ].filter(Boolean).join('\n'),
-            });
+            }).select('id').single();
 
             if (insertError) {
               console.error(`Error adding ${cleanName}:`, insertError.message);
             } else {
               newLeadsAdded++;
-              existingWebsites.add(cleanName); // prevent dupes in same run
+              existingWebsites.add(cleanName);
+
+              // Opt 3: For HIGH leads, trigger contact discovery in parallel
+              if (icpFit === 'HIGH' && inserted?.id) {
+                contactDiscoveryPromises.push(discoverContactsForLead(inserted.id, cleanName));
+              }
             }
           }
 
@@ -156,18 +273,26 @@ exports.handler = async (event) => {
       }
     }
 
+    // Opt 3: Wait for all parallel contact discovery to settle
+    if (contactDiscoveryPromises.length > 0) {
+      console.log(`🔀 Waiting for ${contactDiscoveryPromises.length} parallel contact discoveries...`);
+      await Promise.allSettled(contactDiscoveryPromises);
+      console.log(`🔀 Parallel contact discovery complete.`);
+    }
+
     const summary = {
       totalDiscovered: allDiscovered.length,
       newLeadsAdded,
       alreadyExisted,
       categories: TARGET_CATEGORIES,
+      parallelContactDiscoveries: contactDiscoveryPromises.length,
     };
 
     console.log(`✅ Discovery complete:`, summary);
 
     await supabase.from('activity_log').insert({
       activity_type: 'lead_discovery',
-      summary: `StoreLeads discovery: found ${allDiscovered.length} top stores, added ${newLeadsAdded} new leads (${alreadyExisted} already existed)`,
+      summary: `StoreLeads discovery: found ${allDiscovered.length} top stores, added ${newLeadsAdded} new leads (${alreadyExisted} already existed, ${contactDiscoveryPromises.length} parallel contact searches)`,
       status: 'success'
     });
 

@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const { verifyViaApollo, classifyApolloStatus } = require('./lib/apollo-verify');
+const { classifyApolloStatus, APOLLO_SAFE_STATUSES } = require('./lib/apollo-verify');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -16,7 +16,23 @@ const BAD_STATUSES = ['invalid', 'email_disabled', 'dead_server', 'syntax_error'
 const VERIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Check if a contact already has a valid (non-expired) verification cached
+ * Look up a contact's cached apollo_email_status from contact_database.
+ * Contacts are pre-verified during discovery (Opt 1), so we just read the status.
+ */
+async function getCachedApolloStatus(email) {
+  const { data } = await supabase
+    .from('contact_database')
+    .select('apollo_email_status, apollo_verified_at')
+    .eq('email', email)
+    .not('apollo_email_status', 'is', null)
+    .limit(1);
+
+  if (!data || data.length === 0) return null;
+  return data[0];
+}
+
+/**
+ * Check if a contact already has a valid (non-expired) ELV verification cached
  * in the contacts table. Returns the cached result or null.
  */
 async function getCachedVerification(email) {
@@ -36,7 +52,7 @@ async function getCachedVerification(email) {
 
   if (age > VERIFICATION_MAX_AGE_MS) {
     console.log(`📧 Cached verification for ${email} expired (${Math.round(age / 86400000)}d old)`);
-    return null; // Expired — needs re-verification
+    return null;
   }
 
   const safe = SAFE_STATUSES.includes(row.elv_status);
@@ -50,13 +66,11 @@ async function getCachedVerification(email) {
 async function saveVerification(email, status) {
   const now = new Date().toISOString();
 
-  // Update all matching rows in contacts table
   await supabase
     .from('contacts')
     .update({ elv_status: status, elv_verified_at: now })
     .eq('email', email);
 
-  // Also cache on contact_database
   await supabase
     .from('contact_database')
     .update({ elv_status: status, elv_verified_at: now })
@@ -84,26 +98,22 @@ async function verifyEmail(email) {
     const safe = SAFE_STATUSES.includes(status);
 
     if (!safe && BAD_STATUSES.includes(status)) {
-      // Remove invalid email from contact_database
       console.log(`🗑️ Removing invalid email ${email} from contact_database`);
       await supabase.from('contact_database').delete().eq('email', email);
     }
 
-    // Cache the result for future lookups (even bad statuses, so we don't re-check)
     await saveVerification(email, status);
 
     return { email, status, safe, cached: false, verifiedAt: new Date().toISOString() };
   } catch (e) {
     console.error(`⚠️ Verify error for ${email}: ${e.message}`);
-    // On error don't cache — let it retry next time.
-    // But also don't block sending.
     return { email, status: 'error', safe: true };
   }
 }
 
 async function getAccessToken() {
   const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
-  
+
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -125,11 +135,11 @@ function buildRawEmail({ to, bcc, subject, body, fromEmail, fromName }) {
     `From: ${fromName} <${fromEmail}>`,
     `To: ${to}`,
   ];
-  
+
   if (bcc && bcc.length > 0) {
     lines.push(`Bcc: ${bcc.join(', ')}`);
   }
-  
+
   lines.push(`Subject: ${subject}`);
   lines.push('Content-Type: text/plain; charset=utf-8');
   lines.push('');
@@ -158,48 +168,42 @@ exports.handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No recipients' }) };
     }
 
-    // ── Step 1: Apollo email verification ──────────────────────────
-    // Check all emails against Apollo People Match API first.
-    // This filters out known-invalid emails and identifies which ones
-    // need secondary verification via ELV.
+    // ── Step 1: Read cached Apollo status from DB (no live API calls) ──
+    // Contacts are pre-verified during discovery (Opt 1).
+    // We just read the stored apollo_email_status to decide routing.
     const allEmails = [...(to ? [to] : []), ...(bcc || [])];
-    const contactMap = {};
-    for (const cd of (contactDetails || [])) {
-      if (cd.email) contactMap[cd.email] = cd;
-    }
 
     let emailsForElv = [];
-    const apolloBlocked = [];
-    const apolloVerified = [];
+    const blocked = [];
+    const preVerified = [];
 
     for (const email of allEmails) {
-      const contact = contactMap[email] || {};
-      const domain = email.split('@')[1] || '';
+      const cachedApollo = await getCachedApolloStatus(email);
 
-      const apolloResult = await verifyViaApollo(supabase, {
-        email,
-        first_name: contact.first_name || contact.name?.split(' ')[0],
-        last_name: contact.last_name || contact.name?.split(' ').slice(1).join(' '),
-        domain,
-      });
+      if (cachedApollo) {
+        const action = classifyApolloStatus(cachedApollo.apollo_email_status);
 
-      if (apolloResult.action === 'send') {
-        // Apollo verified — skip ELV, go straight to send
-        apolloVerified.push(email);
-      } else if (apolloResult.action === 'discard') {
-        // Apollo says invalid — block this email
-        apolloBlocked.push({ email, status: `apollo_${apolloResult.apollo_status}` });
-        console.log(`🚫 Apollo blocked ${email}: ${apolloResult.apollo_status}`);
-        // Remove from contact_database
-        await supabase.from('contact_database').delete().eq('email', email);
+        if (action === 'send') {
+          // Apollo verified during discovery — skip ELV, send directly
+          preVerified.push(email);
+          console.log(`✅ Pre-verified (Apollo): ${email} [${cachedApollo.apollo_email_status}]`);
+        } else if (action === 'discard') {
+          // Should have been caught during discovery, but safety net
+          blocked.push({ email, status: `apollo_${cachedApollo.apollo_email_status}` });
+          console.log(`🚫 Blocked (Apollo): ${email} [${cachedApollo.apollo_email_status}]`);
+          await supabase.from('contact_database').delete().eq('email', email);
+        } else {
+          // extrapolated, catch_all, unavailable — route to ELV
+          emailsForElv.push(email);
+        }
       } else {
-        // extrapolated, catch-all, unknown — route to ELV for secondary check
+        // No cached Apollo status — route to ELV as fallback
         emailsForElv.push(email);
       }
     }
 
-    if (apolloVerified.length > 0) {
-      console.log(`🔶 Apollo verified ${apolloVerified.length} emails: ${apolloVerified.join(', ')}`);
+    if (preVerified.length > 0) {
+      console.log(`✅ ${preVerified.length} pre-verified via Apollo: ${preVerified.join(', ')}`);
     }
 
     // ── Step 2: ELV verification for non-Apollo-verified emails ────
@@ -208,15 +212,15 @@ exports.handler = async (event) => {
     const elvBlocked = elvResults.filter(r => !r.safe);
 
     // Combine results
-    const safeEmails = [...apolloVerified, ...elvSafe];
-    const blockedEmails = [...apolloBlocked, ...elvBlocked.map(r => ({ email: r.email, status: r.status }))];
+    const safeEmails = [...preVerified, ...elvSafe];
+    const blockedEmails = [...blocked, ...elvBlocked.map(r => ({ email: r.email, status: r.status }))];
 
     // Log verification results to activity log
     const freshlyVerified = elvResults.filter(r => r.safe && !r.cached && r.status !== 'skipped' && r.status !== 'error');
     const verificationSummary = [
-      apolloVerified.length > 0 ? `Apollo verified: ${apolloVerified.join(', ')}` : null,
+      preVerified.length > 0 ? `Pre-verified (Apollo): ${preVerified.join(', ')}` : null,
       freshlyVerified.length > 0 ? `ELV verified: ${freshlyVerified.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
-      apolloBlocked.length > 0 ? `Apollo blocked: ${apolloBlocked.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
+      blocked.length > 0 ? `Blocked: ${blocked.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
     ].filter(Boolean).join(' | ');
 
     if (verificationSummary && leadId) {
@@ -291,9 +295,8 @@ exports.handler = async (event) => {
     await supabase.from('outreach_log').insert(outreachRows);
 
     if (leadId) {
-      // Get the first contact's details for the lead card
       const firstContact = outreachRows[0] || {};
-      
+
       await supabase.from('leads').update({
         status: 'contacted',
         has_contacts: true,
@@ -313,8 +316,8 @@ exports.handler = async (event) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ 
-        success: true, 
+      body: JSON.stringify({
+        success: true,
         messageId: sendData.id,
         recipients: safeEmails,
         blocked: blockedEmails,

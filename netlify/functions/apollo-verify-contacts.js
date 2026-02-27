@@ -1,13 +1,8 @@
 /**
  * Apollo Email Verification Endpoint
  *
- * Verifies contacts against Apollo's People Match API before sending.
- * This is the "Apollo verification step" in the email waterfall:
- *
- *   1. Find contacts (contact_database or Apollo discovery)
- *   2. ➡️ Apollo People Match verification (this function)
- *   3. ELV verification (for extrapolated/unknown statuses)
- *   4. Send email
+ * Verifies contacts against Apollo's People Match API.
+ * Used for manual re-verification of existing contacts.
  *
  * POST body: { contacts: [{ email, first_name, last_name }], leadId? }
  *
@@ -16,7 +11,7 @@
  *   - verify:    Needs secondary ELV verification
  *   - catchall:  Catch-all domain, proceed with caution
  *   - discard:   Invalid, removed from pipeline
- *   - refreshed: Replacement contacts found via double-check
+ *   - pivoted:   Replacement contacts found via backup title pivot
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -53,26 +48,28 @@ exports.handler = async (event) => {
       await supabase.from('contact_database').delete().eq('email', discarded.email);
     }
 
-    // Add refreshed contacts to contact_database
-    for (const { refreshed } of results.refreshed) {
-      if (!refreshed.email) continue;
+    // Add pivoted contacts to contact_database
+    for (const { pivoted } of results.pivoted) {
+      if (!pivoted.email) continue;
 
       const { count } = await supabase
         .from('contact_database')
         .select('*', { count: 'exact', head: true })
-        .eq('email', refreshed.email);
+        .eq('email', pivoted.email);
 
       if (count === 0) {
         await supabase.from('contact_database').insert({
-          first_name: refreshed.first_name,
-          last_name: refreshed.last_name,
-          email: refreshed.email,
-          title: refreshed.title,
-          website: refreshed.organization || '',
-          account_name: refreshed.organization || '',
-          linkedin_url: refreshed.linkedin_url || null,
+          first_name: pivoted.first_name,
+          last_name: pivoted.last_name,
+          email: pivoted.email,
+          title: pivoted.title,
+          website: pivoted.organization || '',
+          account_name: pivoted.organization || '',
+          linkedin_url: pivoted.linkedin_url || null,
+          apollo_email_status: pivoted.email_status || null,
+          apollo_verified_at: new Date().toISOString(),
         });
-        console.log(`✅ Added refreshed contact: ${refreshed.email} (${refreshed.title} at ${refreshed.organization})`);
+        console.log(`✅ Added pivoted contact: ${pivoted.email} (${pivoted.title} at ${pivoted.organization})`);
       }
     }
 
@@ -83,7 +80,7 @@ exports.handler = async (event) => {
         results.verify.length > 0 ? `${results.verify.length} need ELV` : null,
         results.catchall.length > 0 ? `${results.catchall.length} catch-all` : null,
         results.discard.length > 0 ? `${results.discard.length} invalid` : null,
-        results.refreshed.length > 0 ? `${results.refreshed.length} refreshed` : null,
+        results.pivoted.length > 0 ? `${results.pivoted.length} pivoted` : null,
       ].filter(Boolean).join(', ');
 
       await supabase.from('activity_log').insert({
@@ -102,18 +99,18 @@ exports.handler = async (event) => {
         verify: results.verify.map(c => c.email),
         catchall: results.catchall.map(c => c.email),
         discard: results.discard.map(c => c.email),
-        refreshed: results.refreshed.map(r => ({
+        pivoted: results.pivoted.map(r => ({
           old_email: r.original.email,
-          new_email: r.refreshed.email,
-          new_title: r.refreshed.title,
-          new_org: r.refreshed.organization,
+          new_email: r.pivoted.email,
+          new_title: r.pivoted.title,
+          new_org: r.pivoted.organization,
         })),
         totals: {
           send: results.send.length,
           verify: results.verify.length,
           catchall: results.catchall.length,
           discard: results.discard.length,
-          refreshed: results.refreshed.length,
+          pivoted: results.pivoted.length,
         },
       }),
     };

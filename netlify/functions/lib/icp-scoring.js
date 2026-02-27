@@ -184,6 +184,33 @@ function catalogSizeLabel(count, minProductCount) {
   return `Large (${count} products)`;
 }
 
+/**
+ * Check if StoreLeads data indicates a fast-track HIGH lead.
+ * Technographic signals (Shopify Plus, enterprise plans, high-volume stores)
+ * can skip expensive Claude research and go straight to HIGH.
+ *
+ * @param {Object} d - StoreLeads domain data (must include plan, platform, product_count, estimated_sales)
+ * @returns {{ fastTrack: boolean, reason: string }}
+ */
+function checkFastTrack(d) {
+  const plan = (d.plan || '').toLowerCase();
+  const platform = (d.platform || '').toLowerCase();
+  const productCount = d.product_count || 0;
+  const estSales = d.estimated_sales || 0; // in cents
+
+  // Shopify Plus or Enterprise plan — strong signal
+  if (plan.includes('shopify plus') || plan.includes('enterprise')) {
+    return { fastTrack: true, reason: `Fast-track: ${d.plan} plan` };
+  }
+
+  // High-volume Shopify store (500+ products AND $5k+/mo sales)
+  if (platform.includes('shopify') && productCount >= 500 && estSales >= 50000000) {
+    return { fastTrack: true, reason: `Fast-track: High-volume Shopify (${productCount} products, $${Math.round(estSales / 100).toLocaleString()}/mo)` };
+  }
+
+  return { fastTrack: false, reason: '' };
+}
+
 module.exports = {
   DEFAULTS,
   getIcpScoringConfig,
@@ -191,4 +218,5 @@ module.exports = {
   scoreApollo,
   buildStoreLeadsFitReason,
   catalogSizeLabel,
+  checkFastTrack,
 };

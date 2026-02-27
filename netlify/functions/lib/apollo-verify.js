@@ -166,16 +166,48 @@ async function verifyViaApollo(supabase, { email, first_name, last_name, domain 
 }
 
 /**
- * "Double-Check" Loop: If Apollo returns invalid for a high-value contact,
- * search Apollo to see if the person has moved to a new company and has
- * a fresh email.
+ * Backup Title Pivot: When a contact's email is invalid, instead of
+ * re-searching the same person by name, pivot to the next-best title
+ * at the same company/domain.
  *
- * Returns the new contact data or null if not found.
+ * Takes a domain and a list of titles already tried (exhausted).
+ * Searches Apollo for the next-priority title at that domain.
+ * Returns the new contact data or null if all titles exhausted.
  */
-async function apolloDoubleCheck(supabase, { first_name, last_name, domain, leadId }) {
-  if (!APOLLO_API_KEY || !first_name || !last_name) return null;
 
-  console.log(`🔄 Apollo double-check: searching for ${first_name} ${last_name} (was at ${domain})`);
+// Title priority groups for backup pivot (highest priority first)
+const TITLE_PIVOT_GROUPS = [
+  ['VP Marketing', 'Head of Marketing', 'Director of Marketing', 'CMO', 'Chief Marketing Officer'],
+  ['CEO', 'Founder', 'Co-Founder', 'President'],
+  ['VP Ecommerce', 'Head of Ecommerce', 'Director of Ecommerce'],
+  ['Head of Growth', 'VP Digital', 'Head of Digital'],
+  ['Director of Brand', 'Head of Brand', 'VP Brand'],
+  ['Director of Content', 'Head of Content'],
+  ['Director of Partnerships', 'Head of Partnerships'],
+];
+
+async function backupTitlePivot(supabase, { domain, exhaustedTitles = [], leadId }) {
+  if (!APOLLO_API_KEY || !domain) return null;
+
+  // Find the next title group that hasn't been exhausted
+  const exhaustedLower = exhaustedTitles.map(t => t.toLowerCase());
+  let nextTitles = null;
+
+  for (const group of TITLE_PIVOT_GROUPS) {
+    // Skip this group if any title in it was already tried
+    const groupExhausted = group.some(t => exhaustedLower.some(e => t.toLowerCase().includes(e) || e.includes(t.toLowerCase())));
+    if (!groupExhausted) {
+      nextTitles = group;
+      break;
+    }
+  }
+
+  if (!nextTitles) {
+    console.log(`🔄 Title pivot: all title groups exhausted for ${domain}`);
+    return null;
+  }
+
+  console.log(`🔄 Title pivot for ${domain}: trying ${nextTitles[0]} group`);
 
   try {
     const res = await fetch('https://api.apollo.io/api/v1/mixed_people/api_search', {
@@ -185,7 +217,8 @@ async function apolloDoubleCheck(supabase, { first_name, last_name, domain, lead
         'x-api-key': APOLLO_API_KEY,
       },
       body: JSON.stringify({
-        q_keywords: `${first_name} ${last_name}`,
+        q_organization_domains_list: [domain],
+        person_titles: nextTitles,
         per_page: 5,
       }),
     });
@@ -193,34 +226,48 @@ async function apolloDoubleCheck(supabase, { first_name, last_name, domain, lead
     if (!res.ok) return null;
 
     const data = await res.json();
-    const people = data.people || [];
+    const people = (data.people || []).filter(p => p.has_email);
 
-    // Find the person (match on name), preferring verified email
-    const match = people.find(p =>
-      p.first_name?.toLowerCase() === first_name.toLowerCase() &&
-      p.last_name?.toLowerCase() === last_name.toLowerCase() &&
-      p.email_status === 'verified' &&
-      p.has_email
-    );
-
-    if (!match) {
-      console.log(`🔄 Double-check: no verified match found for ${first_name} ${last_name}`);
+    if (people.length === 0) {
+      console.log(`🔄 Title pivot: no people with emails for ${nextTitles[0]} group at ${domain}`);
       return null;
     }
 
-    console.log(`🔄 Double-check found: ${match.email} at ${match.organization?.name || 'unknown'} (${match.email_status})`);
+    // Enrich the top result to get actual email + status
+    const enrichRes = await fetch('https://api.apollo.io/api/v1/people/bulk_match', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': APOLLO_API_KEY,
+      },
+      body: JSON.stringify({ details: [{ id: people[0].id }] }),
+    });
+
+    if (!enrichRes.ok) return null;
+
+    const enrichData = await enrichRes.json();
+    const match = (enrichData.matches || [])[0];
+
+    if (!match || !match.email) {
+      console.log(`🔄 Title pivot: enrichment returned no email for ${domain}`);
+      return null;
+    }
+
+    const emailStatus = (match.email_status || 'unavailable').toLowerCase();
+    console.log(`🔄 Title pivot found: ${match.email} (${match.title}) at ${domain} — status: ${emailStatus}`);
 
     return {
-      email: match.email?.toLowerCase(),
-      first_name: match.first_name,
-      last_name: match.last_name,
-      title: match.title,
-      organization: match.organization?.name,
-      linkedin_url: match.linkedin_url,
-      email_status: match.email_status,
+      email: match.email.toLowerCase(),
+      first_name: match.first_name || '',
+      last_name: match.last_name || '',
+      title: match.title || '',
+      organization: match.organization?.name || domain,
+      linkedin_url: match.linkedin_url || null,
+      email_status: emailStatus,
+      pivot_title_group: nextTitles[0],
     };
   } catch (e) {
-    console.error(`⚠️ Apollo double-check error: ${e.message}`);
+    console.error(`⚠️ Title pivot error for ${domain}: ${e.message}`);
     return null;
   }
 }
@@ -233,16 +280,19 @@ async function apolloDoubleCheck(supabase, { first_name, last_name, domain, lead
  *   - verify:   Needs secondary verification (ELV)
  *   - catchall:  Catch-all domains, proceed with caution
  *   - discard:  Invalid emails, removed
- *   - refreshed: Contacts found via double-check (new emails)
+ *   - pivoted:   Replacement contacts found via backup title pivot
  */
-async function verifyContactsBatch(supabase, contacts, { leadId, skipDoubleCheck = false } = {}) {
+async function verifyContactsBatch(supabase, contacts, { leadId, skipTitlePivot = false } = {}) {
   const results = {
     send: [],
     verify: [],
     catchall: [],
     discard: [],
-    refreshed: [],
+    pivoted: [],
   };
+
+  // Track exhausted titles per domain for pivot
+  const exhaustedTitlesByDomain = {};
 
   for (const contact of contacts) {
     const domain = contact.email?.split('@')[1] || contact.website || '';
@@ -270,17 +320,21 @@ async function verifyContactsBatch(supabase, contacts, { leadId, skipDoubleCheck
       case 'discard':
         results.discard.push({ ...contact, apollo_result: result });
 
-        // Double-check loop: search for updated email if high-value
-        if (!skipDoubleCheck && contact.first_name && contact.last_name) {
-          const refreshed = await apolloDoubleCheck(supabase, {
-            first_name: contact.first_name,
-            last_name: contact.last_name,
+        // Backup title pivot: search for next-best title at same domain
+        if (!skipTitlePivot && domain) {
+          if (!exhaustedTitlesByDomain[domain]) exhaustedTitlesByDomain[domain] = [];
+          if (contact.title) exhaustedTitlesByDomain[domain].push(contact.title);
+
+          const pivoted = await backupTitlePivot(supabase, {
             domain,
+            exhaustedTitles: exhaustedTitlesByDomain[domain],
             leadId,
           });
 
-          if (refreshed) {
-            results.refreshed.push({ original: contact, refreshed });
+          if (pivoted) {
+            // Track the pivoted title as exhausted too
+            if (pivoted.title) exhaustedTitlesByDomain[domain].push(pivoted.title);
+            results.pivoted.push({ original: contact, pivoted });
           }
         }
         break;
@@ -299,7 +353,7 @@ async function verifyContactsBatch(supabase, contacts, { leadId, skipDoubleCheck
 module.exports = {
   verifyViaApollo,
   verifyContactsBatch,
-  apolloDoubleCheck,
+  backupTitlePivot,
   classifyApolloStatus,
   getCachedApolloVerification,
   saveApolloVerification,
@@ -307,4 +361,5 @@ module.exports = {
   APOLLO_NEEDS_SECONDARY,
   APOLLO_BAD_STATUSES,
   APOLLO_CATCHALL_STATUSES,
+  TITLE_PIVOT_GROUPS,
 };

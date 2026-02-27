@@ -281,7 +281,35 @@ async function tryClaude(lead) {
   return { source: 'claude', ...parsed, research_notes: research };
 }
 
-// ═══ WATERFALL ENRICH: StoreLeads → Apollo → Claude ═══
+/**
+ * Frontend fast-track check (mirrors lib/icp-scoring.js checkFastTrack).
+ * Detects high-signal technographic data from StoreLeads that indicates
+ * an obvious HIGH lead — skips expensive Claude research.
+ */
+function checkFastTrackFrontend(storeLeadsResult) {
+  if (!storeLeadsResult || !storeLeadsResult.research_notes) return { fastTrack: false, reason: '' };
+
+  const notes = storeLeadsResult.research_notes;
+  let parsed;
+  try { parsed = typeof notes === 'string' ? JSON.parse(notes) : notes; } catch { return { fastTrack: false, reason: '' }; }
+
+  const plan = (parsed.plan || '').toLowerCase();
+  const platform = (parsed.platform || '').toLowerCase();
+  const productCount = parsed.product_count || storeLeadsResult.product_count || 0;
+  const estSales = parsed.estimated_sales || storeLeadsResult.estimated_sales || 0;
+
+  if (plan.includes('shopify plus') || plan.includes('enterprise')) {
+    return { fastTrack: true, reason: `Fast-track: ${parsed.plan} plan` };
+  }
+
+  if (platform.includes('shopify') && productCount >= 500 && estSales >= 50000000) {
+    return { fastTrack: true, reason: `Fast-track: High-volume Shopify (${productCount} products)` };
+  }
+
+  return { fastTrack: false, reason: '' };
+}
+
+// ═══ WATERFALL ENRICH: StoreLeads → Fast-Track? → Apollo → Claude ═══
 export const enrichLead = async (lead) => {
   const domain = lead.website.replace(/^www\./, '');
   let result = null;
@@ -292,6 +320,15 @@ export const enrichLead = async (lead) => {
   if (result) {
     source = 'storeleads';
     console.log(`✅ ${domain} enriched via StoreLeads → ${result.icp_fit}`);
+
+    // Opt 2: Fast-track check — technographic signals skip Claude research
+    const { fastTrack, reason } = checkFastTrackFrontend(result);
+    if (fastTrack) {
+      result.icp_fit = 'HIGH';
+      result.fit_reason = reason;
+      console.log(`⚡ ${domain} fast-tracked to HIGH: ${reason}`);
+      // Skip Apollo org enrichment and Claude — go straight to save
+    }
   }
 
   // Step 2: Apollo (cheap, good company data)
