@@ -39,6 +39,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
 GMAIL_CREDENTIALS = os.getenv("GMAIL_OAUTH_CREDENTIALS")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "sam@onsiteaffiliate.com")
 ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
@@ -162,6 +163,152 @@ def verify_email(email: str, save_result: bool = True) -> Dict:
     except Exception as e:
         print(f"    ⚠️ Verify error {email}: {e}")
         return {'email': email, 'status': 'error', 'safe': True}
+
+
+# ═══════════════════════════════════════════════════════════
+# APOLLO EMAIL VERIFICATION (People Match API)
+# ═══════════════════════════════════════════════════════════
+
+# Apollo statuses
+APOLLO_SAFE_STATUSES = ['verified']
+APOLLO_NEEDS_SECONDARY = ['extrapolated', 'unavailable']
+APOLLO_BAD_STATUSES = ['invalid']
+APOLLO_CATCHALL_STATUSES = ['catch_all', 'accept_all']
+
+
+def _classify_apollo_status(status: str) -> str:
+    """Classify an Apollo email_status into a waterfall action."""
+    if status in APOLLO_SAFE_STATUSES:
+        return 'send'
+    if status in APOLLO_NEEDS_SECONDARY:
+        return 'verify_secondary'
+    if status in APOLLO_CATCHALL_STATUSES:
+        return 'catchall'
+    if status in APOLLO_BAD_STATUSES:
+        return 'discard'
+    return 'verify_secondary'
+
+
+def _get_cached_apollo_verification(email: str) -> Optional[Dict]:
+    """Check the contacts table for a valid (non-expired) Apollo verification."""
+    try:
+        result = supabase.table('contacts').select(
+            'apollo_email_status, apollo_verified_at'
+        ).eq('email', email).not_.is_('apollo_email_status', 'null').not_.is_(
+            'apollo_verified_at', 'null'
+        ).limit(1).execute()
+
+        if not result.data:
+            return None
+
+        row = result.data[0]
+        verified_at = datetime.fromisoformat(row['apollo_verified_at'].replace('Z', '+00:00'))
+        age = datetime.now(timezone.utc) - verified_at
+
+        if age.days > VERIFICATION_MAX_AGE_DAYS:
+            print(f"    🔶 Cached Apollo verification for {email} expired ({age.days}d old)")
+            return None
+
+        status = row['apollo_email_status']
+        action = _classify_apollo_status(status)
+        print(f"    🔶 Using cached Apollo verification for {email}: {status} ({age.days}d old)")
+        return {
+            'email': email,
+            'apollo_status': status,
+            'action': action,
+            'cached': True,
+            'verified_at': row['apollo_verified_at'],
+        }
+    except Exception as e:
+        print(f"    ⚠️ Apollo cache lookup error for {email}: {e}")
+        return None
+
+
+def _save_apollo_verification(email: str, status: str):
+    """Cache Apollo verification result on both contacts and contact_database."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        supabase.table('contacts').update({
+            'apollo_email_status': status,
+            'apollo_verified_at': now,
+        }).eq('email', email).execute()
+    except Exception:
+        pass
+    try:
+        supabase.table('contact_database').update({
+            'apollo_email_status': status,
+            'apollo_verified_at': now,
+        }).eq('email', email).execute()
+    except Exception:
+        pass
+
+
+def verify_via_apollo(email: str, first_name: str = None, last_name: str = None,
+                      domain: str = None) -> Dict:
+    """Verify an email via Apollo People Match API.
+
+    Returns a dict with apollo_status and action:
+      - send:             Apollo verified, safe to send immediately
+      - verify_secondary: Needs ELV secondary check (extrapolated/unknown)
+      - catchall:         Catch-all domain, route to ELV
+      - discard:          Invalid email, do not send
+    """
+    # 1. Check cache first
+    cached = _get_cached_apollo_verification(email)
+    if cached:
+        return cached
+
+    # 2. No valid cache — call Apollo
+    if not APOLLO_API_KEY:
+        print(f"    ⚠️ No APOLLO_API_KEY set, skipping Apollo verification for {email}")
+        return {'email': email, 'apollo_status': 'skipped', 'action': 'verify_secondary', 'cached': False}
+
+    try:
+        payload = {'email': email}
+        if first_name:
+            payload['first_name'] = first_name
+        if last_name:
+            payload['last_name'] = last_name
+        if domain:
+            payload['domain'] = domain
+
+        req_data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            'https://api.apollo.io/v1/people/match',
+            data=req_data,
+            method='POST',
+        )
+        req.add_header('Content-Type', 'application/json')
+        req.add_header('x-api-key', APOLLO_API_KEY)
+
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+
+        person = data.get('person') or {}
+        email_status = (person.get('email_status') or 'unavailable').lower()
+        verification_status = (person.get('verification_status') or '').lower()
+
+        # Use the most specific status available
+        effective_status = verification_status or email_status
+
+        print(f"    🔶 Apollo verify {email}: email_status={email_status}, "
+              f"verification_status={verification_status}, effective={effective_status}")
+
+        action = _classify_apollo_status(effective_status)
+
+        # Cache the result
+        _save_apollo_verification(email, effective_status)
+
+        return {
+            'email': email,
+            'apollo_status': effective_status,
+            'action': action,
+            'cached': False,
+            'verified_at': datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        print(f"    ⚠️ Apollo verify error for {email}: {e}")
+        return {'email': email, 'apollo_status': 'error', 'action': 'verify_secondary', 'cached': False}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -763,17 +910,45 @@ class AISDRAgent:
         print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
         print(f"  📧 {contact['email']}")
 
-        # Verify email — checks contacts table cache first (30-day expiry)
-        verification = verify_email(contact['email'])
-        if not verification['safe']:
-            print(f"  🚫 Failed verification: {verification['status']}")
+        # ── Step 1: Apollo email verification ──────────────────
+        email_domain = contact['email'].split('@')[1] if '@' in contact['email'] else ''
+        apollo_result = verify_via_apollo(
+            contact['email'],
+            first_name=contact_raw.get('first_name'),
+            last_name=contact_raw.get('last_name'),
+            domain=email_domain,
+        )
+
+        if apollo_result['action'] == 'discard':
+            print(f"  🚫 Apollo blocked: {apollo_result['apollo_status']}")
+            # Remove invalid email from contact_database
+            try:
+                supabase.table('contact_database').delete().eq('email', contact['email']).execute()
+            except Exception:
+                pass
             all_emailed.add(contact['email'].lower())
+            self._log('email_verified', lead['id'],
+                       f"Apollo BLOCKED {contact['email']}: {apollo_result['apollo_status']}")
             return 'failed'
 
-        # Log fresh verifications to activity log
-        if not verification.get('cached') and verification['status'] not in ('skipped', 'error'):
+        # ── Step 2: ELV secondary verification (if not Apollo-verified) ──
+        if apollo_result['action'] == 'send':
+            print(f"  ✅ Apollo verified — skipping ELV")
             self._log('email_verified', lead['id'],
-                       f"Verified {contact['email']}: {verification['status']}")
+                       f"Apollo verified {contact['email']}: {apollo_result['apollo_status']}")
+        else:
+            # extrapolated, catch-all, unknown — fall through to ELV
+            print(f"  🔶 Apollo: {apollo_result['apollo_status']} — routing to ELV")
+            verification = verify_email(contact['email'])
+            if not verification['safe']:
+                print(f"  🚫 ELV failed verification: {verification['status']}")
+                all_emailed.add(contact['email'].lower())
+                return 'failed'
+
+            # Log fresh ELV verifications
+            if not verification.get('cached') and verification['status'] not in ('skipped', 'error'):
+                self._log('email_verified', lead['id'],
+                           f"Apollo={apollo_result['apollo_status']}, ELV={verification['status']} for {contact['email']}")
 
         # Generate email
         try:
