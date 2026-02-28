@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS email_domains (
   dns_configured_at TIMESTAMP WITH TIME ZONE,
 
   -- Lifecycle
-  status TEXT DEFAULT 'pending' CHECK (status IN (
+  status TEXT DEFAULT 'searching' CHECK (status IN (
     'searching',     -- domain availability being checked
     'purchased',     -- purchased, DNS not yet configured
     'dns_pending',   -- DNS records created, awaiting propagation
