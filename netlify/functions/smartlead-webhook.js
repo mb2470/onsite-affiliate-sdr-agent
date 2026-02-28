@@ -80,16 +80,17 @@ exports.handler = async (event) => {
 
     const orgId = account.org_id;
 
-    // 2. Optional: validate webhook secret
+    // 2. Validate webhook secret — reject if org has a secret configured
+    //    and the request doesn't provide it or it doesn't match
     const queryParams = event.queryStringParameters || {};
-    if (queryParams.secret) {
-      const { data: settings } = await supabase
-        .from('email_settings')
-        .select('smartlead_webhook_secret')
-        .eq('org_id', orgId)
-        .single();
+    const { data: settingsForAuth } = await supabase
+      .from('email_settings')
+      .select('smartlead_webhook_secret')
+      .eq('org_id', orgId)
+      .single();
 
-      if (settings?.smartlead_webhook_secret && settings.smartlead_webhook_secret !== queryParams.secret) {
+    if (settingsForAuth?.smartlead_webhook_secret) {
+      if (!queryParams.secret || queryParams.secret !== settingsForAuth.smartlead_webhook_secret) {
         return { statusCode: 401, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid webhook secret' }) };
       }
     }
@@ -131,20 +132,9 @@ exports.handler = async (event) => {
       return { statusCode: 500, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Failed to store conversation' }) };
     }
 
-    // 5. Increment campaign's total_replied
+    // 5. Atomically increment campaign's total_replied (race-safe)
     if (campaignId) {
-      const { data: camp } = await supabase
-        .from('outreach_campaigns')
-        .select('total_replied')
-        .eq('id', campaignId)
-        .single();
-
-      if (camp) {
-        await supabase
-          .from('outreach_campaigns')
-          .update({ total_replied: (camp.total_replied || 0) + 1 })
-          .eq('id', campaignId);
-      }
+      await supabase.rpc('increment_campaign_replies', { p_campaign_id: campaignId });
     }
 
     // 6. Forward to Gmail (if configured)

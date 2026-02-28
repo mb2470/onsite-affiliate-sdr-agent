@@ -609,6 +609,23 @@ WHERE ec.direction = 'inbound'
 
 
 -- ============================================
+-- 9. RPC FUNCTIONS
+-- ============================================
+
+-- Atomically increment total_replied on outreach_campaigns.
+-- Used by the Smartlead webhook to avoid read-then-write race conditions
+-- when multiple replies arrive concurrently for the same campaign.
+CREATE OR REPLACE FUNCTION increment_campaign_replies(p_campaign_id UUID)
+RETURNS void
+LANGUAGE sql
+AS $$
+  UPDATE outreach_campaigns
+  SET total_replied = total_replied + 1
+  WHERE id = p_campaign_id;
+$$;
+
+
+-- ============================================
 -- DONE! Email outreach infrastructure is ready.
 --
 -- New tables:
