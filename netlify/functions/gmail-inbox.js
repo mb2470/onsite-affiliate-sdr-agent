@@ -525,13 +525,25 @@ async function handleSync(orgId, creds, body) {
 
   // Get org's outreach email addresses for the query filter
   const orgEmails = await getOrgEmailAddresses(orgId);
+
+  // Also include the org's Gmail sender address (may exist without email_accounts)
+  const { data: syncSettings } = await supabase
+    .from('email_settings')
+    .select('gmail_from_email')
+    .eq('org_id', orgId)
+    .single();
+  if (syncSettings?.gmail_from_email) orgEmails.add(syncSettings.gmail_from_email.toLowerCase());
+
   if (orgEmails.size === 0) {
     return respond(200, { synced: 0, skipped: 0, errors: 0, details: { new_inbound: 0, new_outbound: 0, already_exists: 0 } });
   }
 
-  // Build Gmail query: messages involving org's outreach addresses
-  const emailFilters = Array.from(orgEmails).map(e => `{from:${e} to:${e}}`).join(' ');
-  const query = `(${emailFilters}) after:${afterEpoch}`;
+  // Build Gmail query: messages from OR to any org address
+  // Gmail syntax: {from:a} matches OR across brace groups, but
+  // {from:a to:a} is AND within. Use explicit from:/to: with OR.
+  const fromClauses = Array.from(orgEmails).map(e => `from:${e}`);
+  const toClauses = Array.from(orgEmails).map(e => `to:${e}`);
+  const query = `(${fromClauses.join(' OR ')} OR ${toClauses.join(' OR ')}) after:${afterEpoch}`;
 
   // Fetch message IDs
   let allMessageIds = [];
