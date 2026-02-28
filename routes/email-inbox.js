@@ -10,18 +10,20 @@ export async function listConversations(
   limit = Math.min(100, Math.max(1, parseInt(limit) || 25));
   const offset = (page - 1) * limit;
 
-  // Build base filter
+  // Build base filter — inbox only shows inbound messages
   let dataQuery = supabase
     .from("email_conversations")
     .select("*")
     .eq("org_id", orgId)
+    .eq("direction", "inbound")
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
   let countQuery = supabase
     .from("email_conversations")
     .select("*", { count: "exact", head: true })
-    .eq("org_id", orgId);
+    .eq("org_id", orgId)
+    .eq("direction", "inbound");
 
   if (campaignId) {
     dataQuery = dataQuery.eq("campaign_id", campaignId);
@@ -55,23 +57,26 @@ export async function listConversations(
 // ── getInboxStats ───────────────────────────────────────────────────────────
 
 export async function getInboxStats(orgId) {
-  // Three parallel queries
+  // Three parallel queries — all scoped to inbound only
   const [totalResult, unreadResult, byCampaignResult] = await Promise.all([
     supabase
       .from("email_conversations")
       .select("*", { count: "exact", head: true })
-      .eq("org_id", orgId),
+      .eq("org_id", orgId)
+      .eq("direction", "inbound"),
 
     supabase
       .from("email_conversations")
       .select("*", { count: "exact", head: true })
       .eq("org_id", orgId)
+      .eq("direction", "inbound")
       .eq("is_read", false),
 
     supabase
       .from("email_conversations")
       .select("campaign_id")
       .eq("org_id", orgId)
+      .eq("direction", "inbound")
       .not("campaign_id", "is", null),
   ]);
 
