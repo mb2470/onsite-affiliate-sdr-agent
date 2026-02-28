@@ -129,7 +129,8 @@ exports.handler = async (event) => {
 
     if (insertErr) {
       console.error('Webhook: failed to insert conversation:', insertErr.message);
-      return { statusCode: 500, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Failed to store conversation' }) };
+      // Return 200 to prevent Smartlead from retrying (retries would create duplicates)
+      return { statusCode: 200, headers: CORS_HEADERS, body: JSON.stringify({ received: true, error: 'Failed to store conversation: ' + insertErr.message }) };
     }
 
     // 5. Atomically increment campaign's total_replied (race-safe)
@@ -172,15 +173,17 @@ async function forwardToGmail(orgId, { from_email, to_email, subject, email_body
     if (!settings?.gmail_oauth_credentials) return;
 
     const creds = settings.gmail_oauth_credentials;
-    if (!creds.client_id || !creds.client_secret || !creds.refresh_token) return;
+    const clientId = creds.client_id || process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = creds.client_secret || process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientId || !clientSecret || !creds.refresh_token) return;
 
     // Refresh access token
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: creds.client_id,
-        client_secret: creds.client_secret,
+        client_id: clientId,
+        client_secret: clientSecret,
         refresh_token: creds.refresh_token,
         grant_type: 'refresh_token',
       }),
@@ -188,6 +191,17 @@ async function forwardToGmail(orgId, { from_email, to_email, subject, email_body
 
     const tokenData = await tokenRes.json();
     if (!tokenData.access_token) return;
+
+    // Persist refreshed access token back to email_settings
+    await supabase
+      .from('email_settings')
+      .update({
+        gmail_oauth_credentials: {
+          ...creds,
+          access_token: tokenData.access_token,
+        },
+      })
+      .eq('org_id', orgId);
 
     // Build RFC 2822 message to insert into Gmail
     const targetEmail = settings.gmail_from_email || to_email;
