@@ -8,6 +8,89 @@
   port = 3000
   functions = "netlify/functions"
 
+# ── Email Outreach API Redirects ─────────────────────────────────────────────
+# Maps /api/email/* REST paths to Netlify Functions.
+# Each function dispatches internally via the `action` field in the POST body.
+#
+# Settings, accounts, campaigns, inbox → smartlead-email
+# Domains → cloudflare-domains
+# Webhook → smartlead-webhook
+
+[[redirects]]
+  from = "/api/email/settings"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/settings/*"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/accounts"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/accounts/*"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/campaigns"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/campaigns/*"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/inbox"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/inbox/*"
+  to = "/.netlify/functions/smartlead-email"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/domains"
+  to = "/.netlify/functions/cloudflare-domains"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/domains/*"
+  to = "/.netlify/functions/cloudflare-domains"
+  status = 200
+
+[[redirects]]
+  from = "/webhooks/smartlead/*"
+  to = "/.netlify/functions/smartlead-webhook"
+  status = 200
+
+# ── Environment Variables (Required) ────────────────────────────────────────
+#
+# Set in Netlify UI → Site settings → Environment variables:
+#
+#   VITE_SUPABASE_URL          — Supabase project URL
+#   VITE_SUPABASE_ANON_KEY     — Supabase anon key (frontend, RLS-protected)
+#   SUPABASE_SERVICE_ROLE_KEY  — Supabase service role key (server-side, bypasses RLS)
+#
+#   CLOUDFLARE_API_TOKEN       — Cloudflare API token (DNS + Registrar perms)
+#   CLOUDFLARE_ACCOUNT_ID      — Cloudflare account ID
+#   SMARTLEAD_API_KEY          — Smartlead API key
+#   SMARTLEAD_WEBHOOK_SECRET   — Shared secret for webhook validation (optional)
+#
+#   GOOGLE_CLIENT_ID           — Gmail OAuth client ID (for reply forwarding)
+#   GOOGLE_CLIENT_SECRET       — Gmail OAuth client secret (for reply forwarding)
+#
+#   ANTHROPIC_API_KEY          — Claude API key
+#   EMAILLISTVERIFY_API_KEY    — Email verification API key
+
+# ── SPA fallback (must be last) ─────────────────────────────────────────────
 [[redirects]]
   from = "/*"
   to = "/index.html"
