@@ -67,6 +67,16 @@
   status = 200
 
 [[redirects]]
+  from = "/api/email/gmail"
+  to = "/.netlify/functions/gmail-inbox"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/gmail/*"
+  to = "/.netlify/functions/gmail-inbox"
+  status = 200
+
+[[redirects]]
   from = "/webhooks/smartlead/*"
   to = "/.netlify/functions/smartlead-webhook"
   status = 200
