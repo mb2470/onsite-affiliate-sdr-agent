@@ -184,7 +184,10 @@ class ZohoMailService {
     // scope that users are instructed to create.
     try {
       const data = await this._request('GET', `/api/organization/${this.orgId}/domains`);
-      const domains = data?.data?.map(d => d.domainName) || [];
+      // Zoho may return data.data as an array OR a single object — normalise
+      const raw = data?.data;
+      const domainList = Array.isArray(raw) ? raw : raw ? [raw] : [];
+      const domains = domainList.map(d => d.domainName).filter(Boolean);
       return { valid: true, domains };
     } catch (err) {
       const domainErr = {

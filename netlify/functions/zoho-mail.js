@@ -166,7 +166,9 @@ async function handleTestConnection(orgId, zoho, settings) {
  */
 async function handleListDomains(zoho) {
   const data = await zoho.listDomains();
-  return respond(200, { domains: data?.data || [] });
+  const raw = data?.data;
+  const domains = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return respond(200, { domains });
 }
 
 /**
@@ -281,7 +283,9 @@ async function handleEnableImap(orgId, zoho, body) {
  */
 async function handleListUsers(zoho) {
   const data = await zoho.listUsers();
-  return respond(200, { users: data?.data || [] });
+  const raw = data?.data;
+  const users = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return respond(200, { users });
 }
 
 // ── Main Handler ─────────────────────────────────────────────────────────────
