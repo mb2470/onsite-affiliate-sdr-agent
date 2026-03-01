@@ -83,6 +83,38 @@ class ZohoMailService {
     return this._accessToken;
   }
 
+  /**
+   * Exchange an authorization code for access + refresh tokens.
+   * Returns { access_token, refresh_token, expires_in } on success.
+   */
+  async exchangeAuthCode(code) {
+    const url = `${this.accountsDomain}/oauth/v2/token`;
+    const params = new URLSearchParams({
+      code,
+      grant_type: 'authorization_code',
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+    });
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      throw new ZohoMailApiError(
+        `Zoho auth code exchange failed: ${data.error || 'unknown error'}`,
+        res.status,
+        data
+      );
+    }
+
+    return data;
+  }
+
   // ── HTTP Helper ─────────────────────────────────────────────────────────
 
   async _request(method, path, body = null) {

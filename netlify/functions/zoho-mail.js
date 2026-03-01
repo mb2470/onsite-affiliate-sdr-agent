@@ -63,12 +63,54 @@ async function logActivity(orgId, activityType, summary, status = 'success') {
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 /**
- * test-connection — Verify Zoho OAuth credentials are valid
+ * test-connection — Verify Zoho OAuth credentials are valid.
+ * If the stored token is actually an authorization code (common user mistake),
+ * auto-exchange it for a real refresh token and persist it.
  */
-async function handleTestConnection(zoho) {
+async function handleTestConnection(orgId, zoho, settings) {
   const result = await zoho.testConnection();
-  if (!result.valid) return respond(401, { error: result.error || 'Invalid Zoho credentials', valid: false });
-  return respond(200, result);
+
+  if (result.valid) return respond(200, result);
+
+  // Check if the failure is because the user pasted an auth code instead of a refresh token
+  const isInvalidCode = result.error && result.error.includes('invalid_code');
+  if (!isInvalidCode) {
+    return respond(401, { error: result.error || 'Invalid Zoho credentials', valid: false });
+  }
+
+  // Try exchanging the stored value as an authorization code
+  let tokens;
+  try {
+    tokens = await zoho.exchangeAuthCode(zoho.refreshToken);
+  } catch (exchangeErr) {
+    return respond(401, {
+      error: 'The value in "Refresh Token" appears to be an expired or invalid authorization code. '
+        + 'Generate a new code in the Zoho API Console and save it, or exchange the code for a refresh token first.',
+      valid: false,
+    });
+  }
+
+  // Exchange succeeded — persist the real refresh token
+  const existingMetadata = settings.metadata || {};
+  const existingZoho = existingMetadata.zoho || {};
+  existingMetadata.zoho = { ...existingZoho, refresh_token: tokens.refresh_token };
+
+  await supabase
+    .from('email_settings')
+    .update({ metadata: existingMetadata })
+    .eq('org_id', orgId);
+
+  // Update the in-memory client and re-test
+  zoho.refreshToken = tokens.refresh_token;
+  zoho._accessToken = tokens.access_token;
+  zoho._tokenExpiresAt = Date.now() + (tokens.expires_in || 3600) * 1000;
+
+  const retryResult = await zoho.testConnection();
+  if (!retryResult.valid) {
+    return respond(401, { error: retryResult.error || 'Invalid Zoho credentials', valid: false });
+  }
+
+  return respond(200, { ...retryResult, token_exchanged: true });
 }
 
 /**
@@ -232,7 +274,7 @@ exports.handler = async (event) => {
 
     switch (action) {
       case 'test-connection':
-        return await handleTestConnection(zoho);
+        return await handleTestConnection(orgId, zoho, settings);
       case 'list-domains':
         return await handleListDomains(zoho);
       case 'add-domain':
