@@ -567,7 +567,7 @@ function AccountsTab({ orgId }) {
   const openCreate = async () => {
     try {
       const data = await api('cloudflare-domains', { org_id: orgId, action: 'list' });
-      setDomains((data.domains || []).filter(d => d.status === 'verified' || d.status === 'active'));
+      setDomains((data.domains || []).filter(d => d.status === 'active' || d.status === 'dns_pending'));
     } catch { /* silent */ }
     setShowCreate(true);
   };
@@ -635,16 +635,18 @@ function AccountsTab({ orgId }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
             <div>
               <label style={labelStyle}>Domain</label>
-              <select style={{ ...inputStyle, appearance: 'auto' }} value={form.domain_id} onChange={e => setForm(p => ({ ...p, domain_id: e.target.value }))}>
+              <select style={{ ...inputStyle, appearance: 'auto', height: '42px' }} value={form.domain_id} onChange={e => setForm(p => ({ ...p, domain_id: e.target.value }))}>
                 <option value="">Select domain...</option>
-                {domains.map(d => <option key={d.id} value={d.id}>{d.domain}</option>)}
+                {domains.map(d => <option key={d.id} value={d.id}>{d.domain} ({d.status})</option>)}
               </select>
               {domains.length === 0 && <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '4px' }}>No verified domains. Purchase and verify a domain first.</div>}
             </div>
             <div>
               <label style={labelStyle}>Local Part (before @)</label>
-              <input style={inputStyle} placeholder="e.g. sarah" value={form.local_part} onChange={e => setForm(p => ({ ...p, local_part: e.target.value }))} />
+              <input style={{ ...inputStyle, height: '42px' }} placeholder="e.g. sarah" value={form.local_part} onChange={e => setForm(p => ({ ...p, local_part: e.target.value }))} />
             </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
             <div>
               <label style={labelStyle}>Password</label>
               <input style={inputStyle} type="password" placeholder="SMTP/IMAP password" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} />
