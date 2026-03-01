@@ -83,9 +83,19 @@ async function handleTestConnection(orgId, zoho, settings) {
   try {
     tokens = await zoho.exchangeAuthCode(zoho.refreshToken);
   } catch (exchangeErr) {
-    return respond(401, {
-      error: 'The value in "Refresh Token" appears to be an expired or invalid authorization code. '
-        + 'Generate a new code in the Zoho API Console and save it, or exchange the code for a refresh token first.',
+    // Distinguish Zoho auth errors (bad code) from transient/network failures
+    const isAuthError = exchangeErr.name === 'ZohoMailApiError'
+      && exchangeErr.statusCode >= 400 && exchangeErr.statusCode < 500;
+    if (isAuthError) {
+      return respond(401, {
+        error: 'The value in "Refresh Token" appears to be an expired or invalid authorization code. '
+          + 'Generate a new code in the Zoho API Console and save it, or exchange the code for a refresh token first.',
+        valid: false,
+      });
+    }
+    // Network / 5xx — let callers know this is retryable
+    return respond(502, {
+      error: `Could not reach Zoho to exchange authorization code: ${exchangeErr.message}`,
       valid: false,
     });
   }
@@ -95,10 +105,17 @@ async function handleTestConnection(orgId, zoho, settings) {
   const existingZoho = existingMetadata.zoho || {};
   existingMetadata.zoho = { ...existingZoho, refresh_token: tokens.refresh_token };
 
-  await supabase
+  const { error: dbError } = await supabase
     .from('email_settings')
     .update({ metadata: existingMetadata })
     .eq('org_id', orgId);
+
+  if (dbError) {
+    return respond(500, {
+      error: 'Zoho credentials are valid but failed to save the refresh token. Please try again.',
+      valid: false,
+    });
+  }
 
   // Update the in-memory client and re-test
   zoho.refreshToken = tokens.refresh_token;
