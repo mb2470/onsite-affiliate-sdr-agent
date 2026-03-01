@@ -3,7 +3,6 @@ import {
   maskToken,
   getServiceClients,
   CloudflareService,
-  SmartleadService,
 } from "./helpers.js";
 
 // ── Allowed fields for update (whitelist) ───────────────────────────────────
@@ -185,15 +184,3 @@ export async function testCloudflareConnection(orgId) {
   };
 }
 
-// ── testSmartleadConnection ─────────────────────────────────────────────────
-
-export async function testSmartleadConnection(orgId) {
-  const { settings } = await getServiceClients(orgId);
-
-  if (!settings.smartlead_api_key) {
-    return { valid: false, error: "Smartlead API key not configured" };
-  }
-
-  const sl = new SmartleadService(settings.smartlead_api_key);
-  return sl.testConnection();
-}

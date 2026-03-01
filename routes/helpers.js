@@ -174,84 +174,6 @@ export class CloudflareService {
   }
 }
 
-// ── Smartlead Service ───────────────────────────────────────────────────────
-
-const SL_BASE = "https://server.smartlead.ai/api/v1";
-
-export class SmartleadService {
-  constructor(apiKey) {
-    if (!apiKey) throw new Error("Smartlead API key is required");
-    this.apiKey = apiKey;
-  }
-
-  async _request(method, path, body = null) {
-    const separator = path.includes("?") ? "&" : "?";
-    const url = `${SL_BASE}${path}${separator}api_key=${encodeURIComponent(this.apiKey)}`;
-    const opts = {
-      method,
-      headers: { "Content-Type": "application/json" },
-    };
-    if (body && method !== "GET") opts.body = JSON.stringify(body);
-
-    const res = await fetch(url, opts);
-    const text = await res.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-    if (!res.ok) {
-      const err = new Error(`Smartlead API error: HTTP ${res.status}`);
-      err.statusCode = res.status;
-      err.responseBody = data;
-      throw err;
-    }
-    return data;
-  }
-
-  async testConnection() {
-    try {
-      await this._request("GET", "/campaigns");
-      return { valid: true };
-    } catch (err) {
-      return { valid: false, error: err.message };
-    }
-  }
-
-  async addEmailAccount(account) {
-    return this._request("POST", "/email-accounts/save", account);
-  }
-
-  async updateWarmup(id, enabled) {
-    return this._request("POST", `/email-accounts/${id}/warmup`, {
-      warmup_enabled: enabled,
-    });
-  }
-
-  async getWarmupStats(id) {
-    return this._request("GET", `/email-accounts/${id}/warmup-stats`);
-  }
-
-  async listCampaigns() {
-    return this._request("GET", "/campaigns");
-  }
-
-  async createCampaign(name) {
-    return this._request("POST", "/campaigns/create", { name });
-  }
-
-  async getCampaignStats(id) {
-    return this._request("GET", `/campaigns/${id}/statistics`);
-  }
-
-  async addEmailsToCampaign(campaignId, emailAccountIds) {
-    return this._request("POST", `/campaigns/${campaignId}/email-accounts`, {
-      email_account_ids: emailAccountIds,
-    });
-  }
-}
-
 // ── Shared Helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -289,10 +211,6 @@ export async function getServiceClients(orgId) {
       settings.cloudflare_api_token,
       settings.cloudflare_account_id
     );
-  }
-
-  if (settings.smartlead_api_key) {
-    clients.smartlead = new SmartleadService(settings.smartlead_api_key);
   }
 
   const zoho = settings.metadata?.zoho;
