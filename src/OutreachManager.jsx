@@ -635,7 +635,7 @@ function AccountsTab({ orgId }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
             <div>
               <label style={labelStyle}>Domain</label>
-              <select style={{ ...inputStyle, appearance: 'auto', height: '42px' }} value={form.domain_id} onChange={e => setForm(p => ({ ...p, domain_id: e.target.value }))}>
+              <select style={{ ...inputStyle, height: '42px', colorScheme: 'dark' }} value={form.domain_id} onChange={e => setForm(p => ({ ...p, domain_id: e.target.value }))}>
                 <option value="">Select domain...</option>
                 {domains.map(d => <option key={d.id} value={d.id}>{d.domain} ({d.status})</option>)}
               </select>
