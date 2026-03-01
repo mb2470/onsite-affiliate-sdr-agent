@@ -85,7 +85,7 @@ function StatusBadge({ status }) {
   const colors = {
     active: '#4ade80', pending: '#facc15', provisioning: '#38bdf8',
     verified: '#4ade80', dns_pending: '#facc15', purchased: '#38bdf8',
-    warmup: '#f59e0b', paused: '#94a3b8', error: '#f87171',
+    warmup: '#f59e0b', warming: '#f59e0b', paused: '#94a3b8', error: '#f87171',
     running: '#4ade80', draft: '#94a3b8', completed: '#38bdf8',
     sending: '#4ade80',
   };
@@ -112,12 +112,10 @@ function SettingsTab({ orgId }) {
       const data = await api('smartlead-email', { org_id: orgId, action: 'get-settings' });
       setSettings(data);
       setForm({
-        smartlead_api_key: '',
         cloudflare_api_token: '',
         cloudflare_account_id: data.cloudflare_account_id || '',
         gmail_from_email: data.gmail_from_email || '',
         gmail_from_name: data.gmail_from_name || '',
-        smartlead_webhook_secret: '',
         zoho_client_id: '',
         zoho_client_secret: '',
         zoho_refresh_token: '',
@@ -164,8 +162,7 @@ function SettingsTab({ orgId }) {
     setTestResults(p => ({ ...p, [service]: null }));
     try {
       let fn, action;
-      if (service === 'smartlead') { fn = 'smartlead-email'; action = 'test-smartlead'; }
-      else if (service === 'zoho') { fn = 'zoho-mail'; action = 'test-connection'; }
+      if (service === 'zoho') { fn = 'zoho-mail'; action = 'test-connection'; }
       else { fn = 'cloudflare-domains'; action = 'test'; }
       const data = await api(fn, { org_id: orgId, action });
       setTestResults(p => ({ ...p, [service]: { ok: true, data } }));
@@ -187,31 +184,6 @@ function SettingsTab({ orgId }) {
           <span style={{ color: msg.type === 'error' ? '#f87171' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
         </div>
       )}
-
-      {/* Smartlead */}
-      <div style={cardStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h3 style={{ margin: 0, fontSize: '16px' }}>Smartlead</h3>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {settings?.has_smartlead && <StatusBadge status="active" />}
-            <button style={btnSecondary} onClick={() => handleTest('smartlead')} disabled={testing.smartlead}>
-              {testing.smartlead ? 'Testing...' : 'Test Connection'}
-            </button>
-          </div>
-        </div>
-        {testResults.smartlead && (
-          <div style={{ marginBottom: '12px', fontSize: '13px', color: testResults.smartlead.ok ? '#4ade80' : '#f87171' }}>
-            {testResults.smartlead.ok ? 'Connection successful' : testResults.smartlead.error}
-          </div>
-        )}
-        <label style={labelStyle}>API Key {settings?.has_smartlead && '(saved — enter new to change)'}</label>
-        <input style={inputStyle} type="password" placeholder={settings?.has_smartlead ? '••••••••••••' : 'Enter Smartlead API key'} value={f('smartlead_api_key')} onChange={e => set('smartlead_api_key', e.target.value)} />
-        <div style={{ marginTop: '12px' }}>
-          <label style={labelStyle}>Webhook Secret</label>
-          <input style={inputStyle} type="password" placeholder="Enter webhook secret" value={f('smartlead_webhook_secret')} onChange={e => set('smartlead_webhook_secret', e.target.value)} />
-          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>Used to validate inbound Smartlead webhooks. Append <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: '4px' }}>?secret=YOUR_SECRET</code> to your webhook URL.</div>
-        </div>
-      </div>
 
       {/* Cloudflare */}
       <div style={cardStyle}>
@@ -353,6 +325,7 @@ function DomainsTab({ orgId }) {
   const [providerSetupDomain, setProviderSetupDomain] = useState(null);
   const [forwardToEmail, setForwardToEmail] = useState('');
   const [savingProvider, setSavingProvider] = useState(null);
+  const [verifyingZoho, setVerifyingZoho] = useState(null);
   const [expandedDomain, setExpandedDomain] = useState(null);
   const [domainStatus, setDomainStatus] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -488,6 +461,24 @@ function DomainsTab({ orgId }) {
     setSavingProvider(null);
   };
 
+  const handleVerifyZoho = async (domainId) => {
+    setVerifyingZoho(domainId);
+    try {
+      const data = await api('cloudflare-domains', {
+        org_id: orgId, action: 'verify-zoho', domain_id: domainId,
+      });
+      if (data.zoho_verified) {
+        setMsg({ type: 'success', text: `Zoho domain verified: ${data.domain}` });
+      } else {
+        setMsg({ type: 'error', text: data.message || 'Zoho verification pending. Ensure TXT record has propagated.' });
+      }
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    }
+    setVerifyingZoho(null);
+  };
+
   const handleExpand = async (domain) => {
     if (expandedDomain === domain.id) {
       setExpandedDomain(null);
@@ -574,15 +565,25 @@ function DomainsTab({ orgId }) {
                     {verifying === d.id ? 'Verifying...' : 'Verify DNS'}
                   </button>
                 )}
-                {(d.status === 'dns_pending' || d.status === 'active') && (
-                  <button
-                    style={{ ...btnSecondary, borderColor: d.metadata?.forward_to_email ? 'rgba(74,222,128,0.3)' : 'rgba(144,21,237,0.3)', color: d.metadata?.forward_to_email ? '#4ade80' : 'rgba(144,21,237,0.8)' }}
-                    onClick={e => { e.stopPropagation(); openProviderSetup(d); }}
-                    disabled={savingProvider === d.id}
-                  >
-                    {d.metadata?.forward_to_email ? 'Provider OK' : 'Configure Provider'}
-                  </button>
-                )}
+                {(d.status === 'dns_pending' || d.status === 'active') && (() => {
+                  const zohoVerified = d.metadata?.zoho_verification_status === true;
+                  const hasProvider = !!d.metadata?.forward_to_email;
+                  const label = !hasProvider ? 'Configure Provider'
+                    : zohoVerified ? 'Zoho Verified' : 'Zoho Unverified';
+                  const borderColor = zohoVerified ? 'rgba(74,222,128,0.3)'
+                    : hasProvider ? 'rgba(251,146,60,0.3)' : 'rgba(144,21,237,0.3)';
+                  const textColor = zohoVerified ? '#4ade80'
+                    : hasProvider ? '#fb923c' : 'rgba(144,21,237,0.8)';
+                  return (
+                    <button
+                      style={{ ...btnSecondary, borderColor, color: textColor }}
+                      onClick={e => { e.stopPropagation(); openProviderSetup(d); }}
+                      disabled={savingProvider === d.id}
+                    >
+                      {label}
+                    </button>
+                  );
+                })()}
                 <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '18px' }}>{expandedDomain === d.id ? '\u25B2' : '\u25BC'}</span>
               </div>
             </div>
@@ -615,13 +616,44 @@ function DomainsTab({ orgId }) {
               </div>
             )}
             {/* Email Provider Setup Panel */}
-            {providerSetupDomain === d.id && (
+            {providerSetupDomain === d.id && (() => {
+              const zohoVerified = d.metadata?.zoho_verification_status === true;
+              return (
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Email Provider Configuration</h4>
                 <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', margin: '0 0 12px', lineHeight: 1.5 }}>
                   Configure Zoho Mail as the sending provider for <strong>{d.domain}</strong>. Since you won&apos;t log into Zoho directly,
                   set a forwarding inbox where all replies will be auto-forwarded.
                 </p>
+                {/* Zoho Domain Verification Status */}
+                <div style={{
+                  padding: '12px 16px', marginBottom: '12px', borderRadius: '8px',
+                  background: zohoVerified ? 'rgba(74,222,128,0.06)' : 'rgba(251,146,60,0.06)',
+                  border: `1px solid ${zohoVerified ? 'rgba(74,222,128,0.2)' : 'rgba(251,146,60,0.2)'}`,
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: zohoVerified ? '#4ade80' : '#fb923c' }}>
+                      Zoho Domain: {zohoVerified ? 'Verified' : 'Unverified'}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>
+                      {zohoVerified
+                        ? 'Zoho has confirmed ownership of this domain.'
+                        : d.metadata?.zoho_added
+                          ? 'Domain added to Zoho but TXT verification is pending. Ensure DNS records are provisioned, then verify.'
+                          : 'Domain not yet added to Zoho. Click verify to add and check.'}
+                    </div>
+                  </div>
+                  {!zohoVerified && (
+                    <button
+                      style={{ ...btnSecondary, borderColor: 'rgba(251,146,60,0.3)', color: '#fb923c', whiteSpace: 'nowrap' }}
+                      onClick={() => handleVerifyZoho(d.id)}
+                      disabled={verifyingZoho === d.id}
+                    >
+                      {verifyingZoho === d.id ? 'Verifying...' : 'Verify with Zoho'}
+                    </button>
+                  )}
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '12px', marginBottom: '12px' }}>
                   <div>
                     <label style={labelStyle}>Email Provider</label>
@@ -650,11 +682,12 @@ function DomainsTab({ orgId }) {
                   </button>
                 </div>
               </div>
-            )}
+              );
+            })()}
             {expandedDomain === d.id && domainStatus && (
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 {domainStatus.status && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
                     {['mx', 'spf', 'dkim', 'dmarc'].map(k => (
                       <div key={k} style={{ textAlign: 'center', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
                         <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>{k}</div>
@@ -663,6 +696,12 @@ function DomainsTab({ orgId }) {
                         </div>
                       </div>
                     ))}
+                    <div style={{ textAlign: 'center', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>Zoho</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: d.metadata?.zoho_verification_status === true ? '#4ade80' : '#fb923c', marginTop: '4px' }}>
+                        {d.metadata?.zoho_verification_status === true ? 'Verified' : 'Unverified'}
+                      </div>
+                    </div>
                   </div>
                 )}
                 {domainStatus.accounts?.length > 0 && (
@@ -695,8 +734,6 @@ function AccountsTab({ orgId }) {
   const [domains, setDomains] = useState([]);
   const [form, setForm] = useState({ domain_id: '', local_part: '', password: '', from_name: '' });
   const [creating, setCreating] = useState(false);
-  const [togglingWarmup, setTogglingWarmup] = useState(null);
-  const [warmupStats, setWarmupStats] = useState({});
   const [msg, setMsg] = useState(null);
 
   const load = useCallback(async () => {
@@ -737,28 +774,6 @@ function AccountsTab({ orgId }) {
       setMsg({ type: 'error', text: e.message });
     }
     setCreating(false);
-  };
-
-  const toggleWarmup = async (accountId, enabled) => {
-    setTogglingWarmup(accountId);
-    try {
-      await api('smartlead-email', { org_id: orgId, action: 'toggle-warmup', account_id: accountId, enabled });
-      await load();
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message });
-    }
-    setTogglingWarmup(null);
-  };
-
-  const loadWarmupStats = async (accountId) => {
-    if (warmupStats[accountId]) {
-      setWarmupStats(p => { const n = { ...p }; delete n[accountId]; return n; });
-      return;
-    }
-    try {
-      const data = await api('smartlead-email', { org_id: orgId, action: 'warmup-stats', account_id: accountId });
-      setWarmupStats(p => ({ ...p, [accountId]: data }));
-    } catch { /* silent */ }
   };
 
   if (loading) return emptyState('Loading accounts...');
@@ -814,40 +829,35 @@ function AccountsTab({ orgId }) {
 
       {/* Account List */}
       {accounts.length === 0 ? emptyState('No email accounts yet. Create one to get started.') : (
-        accounts.map(a => (
+        accounts.map(a => {
+          const pct = a.daily_send_limit ? Math.round((a.current_daily_sent / a.daily_send_limit) * 100) : 0;
+          return (
           <div key={a.id} style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <span style={{ fontWeight: 600, fontSize: '14px' }}>{a.email_address}</span>
                 {a.display_name && <span style={{ marginLeft: '8px', color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>({a.display_name})</span>}
-                <span style={{ marginLeft: '12px' }}><StatusBadge status={a.status} /></span>
+                <span style={{ marginLeft: '12px' }}><StatusBadge status={a.warmup_complete ? 'active' : a.status} /></span>
                 {a.domain?.domain && <span style={{ marginLeft: '8px', color: 'rgba(255,255,255,0.3)', fontSize: '12px' }}>{a.domain.domain}</span>}
               </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button style={{ ...btnSecondary, fontSize: '12px', padding: '6px 12px' }} onClick={() => loadWarmupStats(a.id)}>
-                  {warmupStats[a.id] ? 'Hide Stats' : 'Warmup Stats'}
-                </button>
-                <button
-                  style={{ ...btnSecondary, fontSize: '12px', padding: '6px 12px', borderColor: a.warmup_enabled ? 'rgba(74,222,128,0.3)' : 'rgba(255,255,255,0.15)', color: a.warmup_enabled ? '#4ade80' : 'rgba(255,255,255,0.7)' }}
-                  onClick={() => toggleWarmup(a.id, !a.warmup_enabled)}
-                  disabled={togglingWarmup === a.id}
-                >
-                  {togglingWarmup === a.id ? '...' : a.warmup_enabled ? 'Warmup ON' : 'Warmup OFF'}
-                </button>
+              <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', textAlign: 'right' }}>
+                <span style={{ fontWeight: 600, color: a.warmup_complete ? '#4ade80' : '#f59e0b' }}>
+                  {a.warmup_complete ? 'Warmed up' : `Day ${a.warmup_day || 0}`}
+                </span>
               </div>
             </div>
-            {a.daily_send_limit && (
-              <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', marginTop: '6px' }}>
-                Limit: {a.daily_send_limit}/day | SMTP: {a.smtp_host}:{a.smtp_port}
-              </div>
-            )}
-            {warmupStats[a.id] && (
-              <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', fontSize: '13px', color: 'rgba(255,255,255,0.6)' }}>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{JSON.stringify(warmupStats[a.id], null, 2)}</pre>
-              </div>
-            )}
+            <div style={{ marginTop: '8px', display: 'flex', gap: '16px', alignItems: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>
+              <span>Limit: <strong style={{ color: 'rgba(255,255,255,0.7)' }}>{a.daily_send_limit}</strong>/day</span>
+              <span>Sent: <strong style={{ color: 'rgba(255,255,255,0.7)' }}>{a.current_daily_sent || 0}</strong></span>
+              <span>Remaining: <strong style={{ color: a.remaining_today > 0 ? '#4ade80' : '#f87171' }}>{a.remaining_today}</strong></span>
+              <span style={{ color: 'rgba(255,255,255,0.25)' }}>SMTP: {a.smtp_host}:{a.smtp_port}</span>
+            </div>
+            <div style={{ marginTop: '6px', height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#f87171' : '#4ade80', borderRadius: '2px', transition: 'width 0.3s' }} />
+            </div>
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );
@@ -961,7 +971,7 @@ function CampaignsTab({ orgId }) {
                     { label: 'Total Leads', value: detail.total_leads || 0 },
                     { label: 'Sent', value: detail.total_sent || 0 },
                     { label: 'Replied', value: detail.reply_count || detail.total_replied || 0, color: '#4ade80' },
-                    { label: 'Smartlead ID', value: detail.smartlead_campaign_id || '—' },
+                    { label: 'Accounts', value: detail.accounts?.length || 0 },
                   ].map(s => (
                     <div key={s.label} style={{ textAlign: 'center', padding: '10px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
                       <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>{s.label}</div>
@@ -976,7 +986,7 @@ function CampaignsTab({ orgId }) {
                   {detail.accounts?.length > 0 ? (
                     detail.accounts.map(a => (
                       <div key={a.id} style={{ fontSize: '13px', color: 'rgba(255,255,255,0.6)', padding: '3px 0' }}>
-                        {a.email_address} — <StatusBadge status={a.warmup_status || a.status} />
+                        {a.email_address} — <StatusBadge status={a.status} />
                       </div>
                     ))
                   ) : (

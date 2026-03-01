@@ -1,5 +1,4 @@
 const { createClient } = require('@supabase/supabase-js');
-const { SmartleadService, SmartleadApiError } = require('./lib/smartlead-api');
 const { ZohoMailService } = require('./lib/zoho-mail-api');
 
 // Use service role key (bypasses RLS) for server-side function
@@ -17,6 +16,13 @@ const { corsHeaders } = require('./lib/cors');
 
 // Computed per-request in the handler; module-level so helpers can use respond().
 let CORS_HEADERS = {};
+
+// ── Warmup schedule constants ─────────────────────────────────────────────────
+// Default ramp: start at 2/day, add 2/day, cap at 50 over ~24 days
+const DEFAULT_WARMUP_START = 2;
+const DEFAULT_WARMUP_INCREMENT = 2;
+const DEFAULT_WARMUP_MAX = 50;
+const DEFAULT_WARMUP_DAYS = 21;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,11 +49,6 @@ async function getOrgSettings(orgId) {
   return data;
 }
 
-function getSmartlead(settings) {
-  if (!settings || !settings.smartlead_api_key) return null;
-  return new SmartleadService(settings.smartlead_api_key);
-}
-
 async function logActivity(orgId, activityType, summary, status = 'success') {
   await supabase.from('activity_log').insert({
     org_id: orgId,
@@ -72,26 +73,40 @@ function getZohoClient(settings) {
   });
 }
 
+/**
+ * Calculate the daily send limit for an account based on warmup schedule.
+ * warmup_started_at → days elapsed → limit = start + (days * increment), capped at max
+ */
+function calculateWarmupLimit(account, settings) {
+  const start = settings?.warmup_start_limit || DEFAULT_WARMUP_START;
+  const increment = settings?.warmup_increment_per_day || DEFAULT_WARMUP_INCREMENT;
+  const max = settings?.warmup_max_daily_limit || DEFAULT_WARMUP_MAX;
+
+  if (!account.warmup_started_at) return start;
+
+  const daysElapsed = Math.floor(
+    (Date.now() - new Date(account.warmup_started_at).getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  return Math.min(start + (daysElapsed * increment), max);
+}
+
 // ── Settings Actions ─────────────────────────────────────────────────────────
 
 async function handleGetSettings(orgId) {
   const settings = await getOrgSettings(orgId);
   if (!settings) {
     return respond(200, {
-      smartlead_api_key: '',
-      has_smartlead: false,
       has_cloudflare: false,
       has_gmail: false,
+      has_zoho: false,
     });
   }
 
   const whois = settings.metadata?.whois || {};
-
   const zoho = settings.metadata?.zoho || {};
 
   return respond(200, {
-    smartlead_api_key: maskKey(settings.smartlead_api_key),
-    has_smartlead: !!settings.smartlead_api_key,
     has_cloudflare: !!(settings.cloudflare_api_token && settings.cloudflare_account_id),
     has_gmail: !!settings.gmail_oauth_credentials,
     has_zoho: !!(zoho.client_id && zoho.client_secret && zoho.refresh_token && zoho.org_id),
@@ -110,19 +125,19 @@ async function handleGetSettings(orgId) {
     whois_country: whois.country || 'US',
     whois_phone: whois.phone || '',
     whois_email: whois.email || '',
+    warmup_increment_per_day: settings.warmup_increment_per_day || DEFAULT_WARMUP_INCREMENT,
+    warmup_max_daily_limit: settings.warmup_max_daily_limit || DEFAULT_WARMUP_MAX,
+    warmup_duration_days: settings.warmup_duration_days || DEFAULT_WARMUP_DAYS,
   });
 }
 
 async function handleUpdateSettings(orgId, body) {
-  // Whitelist allowed fields
   const updates = {};
 
-  if (body.smartlead_api_key !== undefined) updates.smartlead_api_key = body.smartlead_api_key;
   if (body.cloudflare_account_id !== undefined) updates.cloudflare_account_id = body.cloudflare_account_id;
   if (body.cloudflare_api_token !== undefined) updates.cloudflare_api_token = body.cloudflare_api_token;
   if (body.gmail_from_email !== undefined) updates.gmail_from_email = body.gmail_from_email;
   if (body.gmail_from_name !== undefined) updates.gmail_from_name = body.gmail_from_name;
-  if (body.smartlead_webhook_secret !== undefined) updates.smartlead_webhook_secret = body.smartlead_webhook_secret;
 
   // Handle WHOIS fields → stored in metadata.whois
   const whoisFields = [
@@ -140,31 +155,26 @@ async function handleUpdateSettings(orgId, body) {
   const hasZohoUpdate = zohoFields.some(f => body[f] !== undefined);
 
   if (hasWhoisUpdate || hasZohoUpdate) {
-    // Fetch existing metadata to merge
     const existing = await getOrgSettings(orgId);
     const existingMetadata = existing?.metadata || {};
 
     if (hasWhoisUpdate) {
       const existingWhois = existingMetadata.whois || {};
-
       const whoisMap = {
         whois_first_name: 'first_name', whois_last_name: 'last_name',
         whois_address: 'address', whois_city: 'city', whois_state: 'state',
         whois_zip: 'zip', whois_country: 'country', whois_phone: 'phone',
         whois_email: 'email',
       };
-
       const newWhois = { ...existingWhois };
       for (const [bodyKey, whoisKey] of Object.entries(whoisMap)) {
         if (body[bodyKey] !== undefined) newWhois[whoisKey] = body[bodyKey];
       }
-
       existingMetadata.whois = newWhois;
     }
 
     if (hasZohoUpdate) {
       const existingZoho = existingMetadata.zoho || {};
-
       const zohoMap = {
         zoho_client_id: 'client_id',
         zoho_client_secret: 'client_secret',
@@ -173,12 +183,10 @@ async function handleUpdateSettings(orgId, body) {
         zoho_accounts_domain: 'accounts_domain',
         zoho_mail_domain: 'mail_domain',
       };
-
       const newZoho = { ...existingZoho };
       for (const [bodyKey, zohoKey] of Object.entries(zohoMap)) {
         if (body[bodyKey] !== undefined) newZoho[zohoKey] = body[bodyKey];
       }
-
       existingMetadata.zoho = newZoho;
     }
 
@@ -189,8 +197,7 @@ async function handleUpdateSettings(orgId, body) {
     return respond(400, { error: 'No valid fields to update.' });
   }
 
-  // Upsert: insert if no row exists, update if it does
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('email_settings')
     .upsert({ org_id: orgId, ...updates }, { onConflict: 'org_id' })
     .select()
@@ -201,18 +208,10 @@ async function handleUpdateSettings(orgId, body) {
   return respond(200, { success: true });
 }
 
-async function handleTestSmartlead(orgId) {
-  const settings = await getOrgSettings(orgId);
-  const sl = getSmartlead(settings);
-  if (!sl) return respond(400, { error: 'Smartlead API key not configured.' });
-
-  const result = await sl.testConnection();
-  return respond(200, result);
-}
-
 // ── Email Accounts Actions ───────────────────────────────────────────────────
 
 async function handleListAccounts(orgId) {
+  const settings = await getOrgSettings(orgId);
   const { data: accounts, error } = await supabase
     .from('email_accounts')
     .select('*, email_domains!inner(domain, status)')
@@ -221,24 +220,35 @@ async function handleListAccounts(orgId) {
 
   if (error) return respond(500, { error: 'Failed to fetch accounts', details: error.message });
 
-  const result = (accounts || []).map(a => ({
-    id: a.id,
-    email_address: a.email_address,
-    display_name: a.display_name,
-    smartlead_account_id: a.smartlead_account_id,
-    smtp_host: a.smtp_host,
-    smtp_port: a.smtp_port,
-    imap_host: a.imap_host,
-    imap_port: a.imap_port,
-    warmup_enabled: a.smartlead_warmup_enabled,
-    warmup_status: a.smartlead_warmup_status,
-    daily_send_limit: a.daily_send_limit,
-    status: a.status,
-    domain: {
-      domain: a.email_domains.domain,
-      status: a.email_domains.status,
-    },
-  }));
+  const result = (accounts || []).map(a => {
+    const warmupLimit = calculateWarmupLimit(a, settings);
+    const remaining = Math.max(0, warmupLimit - (a.current_daily_sent || 0));
+    const daysElapsed = a.warmup_started_at
+      ? Math.floor((Date.now() - new Date(a.warmup_started_at).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+    const warmupComplete = warmupLimit >= (settings?.warmup_max_daily_limit || DEFAULT_WARMUP_MAX);
+
+    return {
+      id: a.id,
+      email_address: a.email_address,
+      display_name: a.display_name,
+      smtp_host: a.smtp_host,
+      smtp_port: a.smtp_port,
+      imap_host: a.imap_host,
+      imap_port: a.imap_port,
+      daily_send_limit: warmupLimit,
+      current_daily_sent: a.current_daily_sent || 0,
+      remaining_today: remaining,
+      warmup_day: daysElapsed,
+      warmup_complete: warmupComplete,
+      warmup_started_at: a.warmup_started_at,
+      status: warmupComplete ? 'active' : a.status,
+      domain: {
+        domain: a.email_domains.domain,
+        status: a.email_domains.status,
+      },
+    };
+  });
 
   return respond(200, { accounts: result });
 }
@@ -270,31 +280,13 @@ async function handleCreateAccount(orgId, body, settings) {
 
   if (count > 0) return respond(400, { error: `Email address ${emailAddress} already exists.` });
 
-  // Register in Smartlead
-  const sl = getSmartlead(settings);
-  if (!sl) return respond(400, { error: 'Smartlead API key not configured.' });
-
   const smtpHostVal = smtp_host || 'smtp.zoho.com';
   const imapHostVal = imap_host || 'imap.zoho.com';
   const smtpPortVal = smtp_port || 587;
   const imapPortVal = imap_port || 993;
 
-  const slResult = await sl.addEmailAccount({
-    from_email: emailAddress,
-    from_name: from_name || local_part,
-    user_name: emailAddress,
-    password,
-    smtp_host: smtpHostVal,
-    smtp_port: smtpPortVal,
-    imap_host: imapHostVal,
-    imap_port: imapPortVal,
-    max_email_per_day: settings.default_daily_send_limit || 30,
-    warmup_enabled: true,
-  });
-
-  const smartleadAccountId = slResult?.emailAccountId?.toString() || slResult?.id?.toString() || slResult?.email_account_id?.toString() || null;
-
-  // Store in database
+  // Store in database — start with warmup limit of 2/day
+  const startLimit = settings?.warmup_start_limit || DEFAULT_WARMUP_START;
   const { data: account, error: insertErr } = await supabase
     .from('email_accounts')
     .insert({
@@ -303,15 +295,13 @@ async function handleCreateAccount(orgId, body, settings) {
       email_address: emailAddress,
       display_name: from_name || local_part,
       first_name: from_name ? from_name.split(' ')[0] : local_part,
-      smartlead_account_id: smartleadAccountId,
-      smartlead_warmup_enabled: true,
-      smartlead_warmup_status: 'in_progress',
       warmup_started_at: new Date().toISOString(),
       smtp_host: smtpHostVal,
       smtp_port: smtpPortVal,
       imap_host: imapHostVal,
       imap_port: imapPortVal,
-      daily_send_limit: settings.default_daily_send_limit || 30,
+      daily_send_limit: startLimit,
+      current_daily_sent: 0,
       status: 'warming',
     })
     .select()
@@ -319,13 +309,12 @@ async function handleCreateAccount(orgId, body, settings) {
 
   if (insertErr) return respond(500, { error: 'Failed to save email account', details: insertErr.message });
 
-  await logActivity(orgId, 'email_account_created', `Created email account ${emailAddress} (Smartlead ID: ${smartleadAccountId})`);
+  await logActivity(orgId, 'email_account_created', `Created email account ${emailAddress} (warmup: ${startLimit}/day)`);
 
   // Auto-provision Zoho mailbox if credentials configured
   let zohoProvisioned = false;
   const zoho = getZohoClient(settings);
   if (zoho) {
-    // Look up forwarding email from domain metadata
     const { data: domainFull } = await supabase
       .from('email_domains')
       .select('metadata')
@@ -345,7 +334,6 @@ async function handleCreateAccount(orgId, body, settings) {
 
       zohoProvisioned = true;
 
-      // Store Zoho account identifiers in metadata
       await supabase
         .from('email_accounts')
         .update({
@@ -373,18 +361,72 @@ async function handleCreateAccount(orgId, body, settings) {
   return respond(200, {
     id: account.id,
     email_address: account.email_address,
-    smartlead_account_id: account.smartlead_account_id,
-    warmup_enabled: account.smartlead_warmup_enabled,
-    warmup_status: account.smartlead_warmup_status,
+    daily_send_limit: startLimit,
     status: account.status,
     zoho_provisioned: zohoProvisioned,
   });
 }
 
-async function handleToggleWarmup(orgId, body, settings) {
-  const { account_id, enabled } = body;
+// ── Send Capacity (for Python agent) ─────────────────────────────────────────
+
+/**
+ * send-capacity — Returns all active/warming accounts with remaining send capacity.
+ * The Python agent calls this to know how many emails it can send from each account.
+ */
+async function handleSendCapacity(orgId) {
+  const settings = await getOrgSettings(orgId);
+
+  const { data: accounts, error } = await supabase
+    .from('email_accounts')
+    .select('*, email_domains!inner(domain, status, metadata)')
+    .eq('org_id', orgId)
+    .in('status', ['warming', 'active']);
+
+  if (error) return respond(500, { error: 'Failed to fetch accounts', details: error.message });
+
+  const capacity = (accounts || []).map(a => {
+    const warmupLimit = calculateWarmupLimit(a, settings);
+    const sent = a.current_daily_sent || 0;
+    const remaining = Math.max(0, warmupLimit - sent);
+
+    return {
+      account_id: a.id,
+      email_address: a.email_address,
+      display_name: a.display_name,
+      domain: a.email_domains.domain,
+      domain_status: a.email_domains.status,
+      smtp_host: a.smtp_host,
+      smtp_port: a.smtp_port,
+      daily_limit: warmupLimit,
+      sent_today: sent,
+      remaining_today: remaining,
+      warmup_day: a.warmup_started_at
+        ? Math.floor((Date.now() - new Date(a.warmup_started_at).getTime()) / (1000 * 60 * 60 * 24))
+        : 0,
+      forward_to: a.email_domains.metadata?.forward_to_email || null,
+    };
+  });
+
+  const totalRemaining = capacity.reduce((sum, a) => sum + a.remaining_today, 0);
+
+  return respond(200, {
+    accounts: capacity,
+    total_remaining: totalRemaining,
+    total_accounts: capacity.length,
+  });
+}
+
+/**
+ * record-send — Called by the Python agent after successfully sending an email.
+ * Increments current_daily_sent and enforces hard cap.
+ */
+async function handleRecordSend(orgId, body) {
+  const { account_id, count: sendCount } = body;
   if (!account_id) return respond(400, { error: 'Missing required field: account_id' });
-  if (enabled === undefined) return respond(400, { error: 'Missing required field: enabled' });
+
+  const numToRecord = sendCount || 1;
+
+  const settings = await getOrgSettings(orgId);
 
   const { data: account, error: accErr } = await supabase
     .from('email_accounts')
@@ -394,84 +436,125 @@ async function handleToggleWarmup(orgId, body, settings) {
     .single();
 
   if (accErr || !account) return respond(404, { error: 'Email account not found.' });
-  if (!account.smartlead_account_id) return respond(400, { error: 'Account not registered with Smartlead.' });
 
-  const sl = getSmartlead(settings);
-  if (!sl) return respond(400, { error: 'Smartlead API key not configured.' });
+  const warmupLimit = calculateWarmupLimit(account, settings);
+  const currentSent = account.current_daily_sent || 0;
+  const newSent = currentSent + numToRecord;
 
-  await sl.updateWarmup(account.smartlead_account_id, enabled);
+  // Hard cap enforcement
+  if (currentSent >= warmupLimit) {
+    return respond(429, {
+      error: 'Daily send limit reached for this account.',
+      daily_limit: warmupLimit,
+      sent_today: currentSent,
+      remaining: 0,
+    });
+  }
 
-  const newStatus = enabled ? 'in_progress' : 'paused';
+  // Allow partial if they try to record more than remaining
+  const actualRecorded = Math.min(numToRecord, warmupLimit - currentSent);
+
   await supabase
     .from('email_accounts')
     .update({
-      smartlead_warmup_enabled: enabled,
-      smartlead_warmup_status: newStatus,
+      current_daily_sent: currentSent + actualRecorded,
+      last_sent_at: new Date().toISOString(),
     })
     .eq('id', account_id);
 
   return respond(200, {
-    id: account.id,
-    warmup_enabled: enabled,
-    warmup_status: newStatus,
+    success: true,
+    recorded: actualRecorded,
+    sent_today: currentSent + actualRecorded,
+    daily_limit: warmupLimit,
+    remaining: warmupLimit - (currentSent + actualRecorded),
   });
 }
 
-async function handleGetWarmupStats(orgId, body, settings) {
-  const { account_id } = body;
-  if (!account_id) return respond(400, { error: 'Missing required field: account_id' });
+/**
+ * warmup-tick — Advance warmup for all accounts in an org.
+ * Recalculates daily_send_limit based on days since warmup_started_at.
+ * Resets current_daily_sent to 0 for the new day.
+ * Marks accounts as 'active' once warmup is complete.
+ * Should be called once per day (via cron, scheduled function, or manually).
+ */
+async function handleWarmupTick(orgId) {
+  const settings = await getOrgSettings(orgId);
+  const maxLimit = settings?.warmup_max_daily_limit || DEFAULT_WARMUP_MAX;
 
-  const { data: account, error: accErr } = await supabase
+  const { data: accounts, error } = await supabase
     .from('email_accounts')
-    .select('smartlead_account_id')
-    .eq('id', account_id)
+    .select('id, warmup_started_at, daily_send_limit, status, current_daily_sent')
     .eq('org_id', orgId)
-    .single();
+    .in('status', ['warming', 'active']);
 
-  if (accErr || !account) return respond(404, { error: 'Email account not found.' });
-  if (!account.smartlead_account_id) return respond(400, { error: 'Account not registered with Smartlead.' });
+  if (error) return respond(500, { error: 'Failed to fetch accounts', details: error.message });
 
-  const sl = getSmartlead(settings);
-  if (!sl) return respond(400, { error: 'Smartlead API key not configured.' });
+  let advanced = 0;
+  let completed = 0;
+  let reset = 0;
 
-  const stats = await sl.getWarmupStats(account.smartlead_account_id);
-  return respond(200, stats);
+  for (const account of (accounts || [])) {
+    const newLimit = calculateWarmupLimit(account, settings);
+    const warmupComplete = newLimit >= maxLimit;
+
+    const updates = {
+      daily_send_limit: newLimit,
+      current_daily_sent: 0, // Reset daily counter
+    };
+
+    if (warmupComplete && account.status === 'warming') {
+      updates.status = 'active';
+      updates.warmup_completed_at = new Date().toISOString();
+      completed++;
+    }
+
+    if (newLimit !== account.daily_send_limit) advanced++;
+    reset++;
+
+    await supabase
+      .from('email_accounts')
+      .update(updates)
+      .eq('id', account.id);
+  }
+
+  await logActivity(orgId, 'warmup_tick',
+    `Daily warmup tick: ${reset} accounts reset, ${advanced} limits advanced, ${completed} warmups completed`
+  );
+
+  return respond(200, {
+    success: true,
+    accounts_reset: reset,
+    limits_advanced: advanced,
+    warmups_completed: completed,
+  });
 }
 
-async function handleAssignAccount(orgId, body, settings) {
+// ── Campaign Actions (local DB only, no Smartlead) ───────────────────────────
+
+async function handleAssignAccount(orgId, body) {
   const { account_id, campaign_id } = body;
   if (!account_id) return respond(400, { error: 'Missing required field: account_id' });
   if (!campaign_id) return respond(400, { error: 'Missing required field: campaign_id' });
 
-  // Validate account
   const { data: account, error: accErr } = await supabase
     .from('email_accounts')
-    .select('id, email_address, smartlead_account_id')
+    .select('id, email_address')
     .eq('id', account_id)
     .eq('org_id', orgId)
     .single();
 
   if (accErr || !account) return respond(404, { error: 'Email account not found.' });
-  if (!account.smartlead_account_id) return respond(400, { error: 'Account not registered with Smartlead.' });
 
-  // Validate campaign
   const { data: campaign, error: campErr } = await supabase
     .from('outreach_campaigns')
-    .select('id, name, smartlead_campaign_id, sending_account_ids')
+    .select('id, name, sending_account_ids')
     .eq('id', campaign_id)
     .eq('org_id', orgId)
     .single();
 
   if (campErr || !campaign) return respond(404, { error: 'Campaign not found.' });
-  if (!campaign.smartlead_campaign_id) return respond(400, { error: 'Campaign not registered with Smartlead.' });
 
-  // Assign in Smartlead
-  const sl = getSmartlead(settings);
-  if (!sl) return respond(400, { error: 'Smartlead API key not configured.' });
-
-  await sl.addEmailsToCampaign(campaign.smartlead_campaign_id, [account.smartlead_account_id]);
-
-  // Update sending_account_ids array in DB
   const currentIds = campaign.sending_account_ids || [];
   if (!currentIds.includes(account.id)) {
     await supabase
@@ -486,8 +569,6 @@ async function handleAssignAccount(orgId, body, settings) {
   });
 }
 
-// ── Campaign Actions ─────────────────────────────────────────────────────────
-
 async function handleListCampaigns(orgId) {
   const { data: campaigns, error } = await supabase
     .from('outreach_campaigns')
@@ -496,39 +577,26 @@ async function handleListCampaigns(orgId) {
     .order('created_at', { ascending: false });
 
   if (error) return respond(500, { error: 'Failed to fetch campaigns', details: error.message });
-
   return respond(200, { campaigns: campaigns || [] });
 }
 
-async function handleCreateCampaign(orgId, body, settings) {
+async function handleCreateCampaign(orgId, body) {
   const { name } = body;
   if (!name) return respond(400, { error: 'Missing required field: name' });
 
-  const sl = getSmartlead(settings);
-  if (!sl) return respond(400, { error: 'Smartlead API key not configured.' });
-
-  const slResult = await sl.createCampaign(name);
-  const smartleadCampaignId = slResult?.id?.toString() || null;
-
   const { data: campaign, error: insertErr } = await supabase
     .from('outreach_campaigns')
-    .insert({
-      org_id: orgId,
-      name,
-      smartlead_campaign_id: smartleadCampaignId,
-      status: 'draft',
-    })
+    .insert({ org_id: orgId, name, status: 'draft' })
     .select()
     .single();
 
   if (insertErr) return respond(500, { error: 'Failed to save campaign', details: insertErr.message });
 
-  await logActivity(orgId, 'campaign_created', `Created campaign "${name}" (Smartlead ID: ${smartleadCampaignId})`);
+  await logActivity(orgId, 'campaign_created', `Created campaign "${name}"`);
 
   return respond(200, {
     id: campaign.id,
     name: campaign.name,
-    smartlead_campaign_id: campaign.smartlead_campaign_id,
     status: campaign.status,
     total_leads: 0,
     total_sent: 0,
@@ -536,7 +604,7 @@ async function handleCreateCampaign(orgId, body, settings) {
   });
 }
 
-async function handleGetCampaign(orgId, body, settings) {
+async function handleGetCampaign(orgId, body) {
   const { campaign_id } = body;
   if (!campaign_id) return respond(400, { error: 'Missing required field: campaign_id' });
 
@@ -549,42 +617,26 @@ async function handleGetCampaign(orgId, body, settings) {
 
   if (campErr || !campaign) return respond(404, { error: 'Campaign not found.' });
 
-  // Fetch assigned accounts
   const accountIds = campaign.sending_account_ids || [];
   let accounts = [];
   if (accountIds.length > 0) {
     const { data: accts } = await supabase
       .from('email_accounts')
-      .select('id, email_address, smartlead_warmup_status, status')
+      .select('id, email_address, status, daily_send_limit, current_daily_sent')
       .in('id', accountIds);
     accounts = accts || [];
   }
 
-  // Fetch reply count from email_conversations
   const { count: replyCount } = await supabase
     .from('email_conversations')
     .select('*', { count: 'exact', head: true })
     .eq('campaign_id', campaign_id)
     .eq('direction', 'inbound');
 
-  // Try to get live Smartlead stats (graceful degradation)
-  let smartleadStats = null;
-  if (campaign.smartlead_campaign_id) {
-    const sl = getSmartlead(settings);
-    if (sl) {
-      try {
-        smartleadStats = await sl.getCampaignStats(campaign.smartlead_campaign_id);
-      } catch (err) {
-        console.error(`Failed to fetch Smartlead stats for campaign ${campaign_id}:`, err.message);
-      }
-    }
-  }
-
   return respond(200, {
     ...campaign,
     accounts,
     reply_count: replyCount || 0,
-    smartlead_stats: smartleadStats,
   });
 }
 
@@ -613,12 +665,7 @@ async function handleListInbox(orgId, body) {
 
   return respond(200, {
     conversations: conversations || [],
-    pagination: {
-      page,
-      limit,
-      total: total || 0,
-      total_pages: Math.ceil((total || 0) / limit),
-    },
+    pagination: { page, limit, total: total || 0, total_pages: Math.ceil((total || 0) / limit) },
   });
 }
 
@@ -635,7 +682,6 @@ async function handleGetConversation(orgId, body) {
 
   if (error || !conversation) return respond(404, { error: 'Conversation not found.' });
 
-  // Auto-mark as read
   if (!conversation.is_read) {
     await supabase
       .from('email_conversations')
@@ -659,19 +705,16 @@ async function handleMarkRead(orgId, body) {
     .eq('org_id', orgId);
 
   if (error) return respond(500, { error: 'Failed to mark as read', details: error.message });
-
   return respond(200, { success: true });
 }
 
 async function handleInboxStats(orgId) {
-  // Total inbound conversations
   const { count: total } = await supabase
     .from('email_conversations')
     .select('*', { count: 'exact', head: true })
     .eq('org_id', orgId)
     .eq('direction', 'inbound');
 
-  // Unread count
   const { count: unread } = await supabase
     .from('email_conversations')
     .select('*', { count: 'exact', head: true })
@@ -679,7 +722,6 @@ async function handleInboxStats(orgId) {
     .eq('direction', 'inbound')
     .eq('is_read', false);
 
-  // Count by campaign
   const { data: byCampaignRaw } = await supabase
     .from('email_conversations')
     .select('campaign_id')
@@ -731,54 +773,37 @@ exports.handler = async (event) => {
   if (!action) return respond(400, { error: 'Missing required field: action' });
 
   try {
-    // Settings actions (don't require Smartlead key)
+    // Settings
     if (action === 'get-settings') return await handleGetSettings(orgId);
     if (action === 'update-settings') return await handleUpdateSettings(orgId, body);
 
-    // Inbox/read-only actions (don't require Smartlead key)
+    // Agent endpoints (send capacity & recording)
+    if (action === 'send-capacity') return await handleSendCapacity(orgId);
+    if (action === 'record-send') return await handleRecordSend(orgId, body);
+    if (action === 'warmup-tick') return await handleWarmupTick(orgId);
+
+    // Account management
+    if (action === 'list-accounts') return await handleListAccounts(orgId);
+    const settings = await getOrgSettings(orgId);
+    if (action === 'create-account') return await handleCreateAccount(orgId, body, settings);
+
+    // Campaign management
+    if (action === 'list-campaigns') return await handleListCampaigns(orgId);
+    if (action === 'create-campaign') return await handleCreateCampaign(orgId, body);
+    if (action === 'get-campaign') return await handleGetCampaign(orgId, body);
+    if (action === 'assign-account') return await handleAssignAccount(orgId, body);
+
+    // Inbox
     if (action === 'list-inbox') return await handleListInbox(orgId, body);
     if (action === 'get-conversation') return await handleGetConversation(orgId, body);
     if (action === 'mark-read') return await handleMarkRead(orgId, body);
     if (action === 'inbox-stats') return await handleInboxStats(orgId);
-    if (action === 'list-campaigns') return await handleListCampaigns(orgId);
 
-    // All remaining actions require Smartlead credentials
-    const settings = await getOrgSettings(orgId);
-
-    // Account listing doesn't need Smartlead key (DB-only)
-    if (action === 'list-accounts') return await handleListAccounts(orgId);
-
-    if (action === 'test-smartlead') return await handleTestSmartlead(orgId);
-
-    // All remaining actions require Smartlead API key
-    if (!settings || !settings.smartlead_api_key) {
-      return respond(400, { error: 'Smartlead API key not configured. Update Email Settings first.' });
-    }
-
-    switch (action) {
-      case 'create-account':
-        return await handleCreateAccount(orgId, body, settings);
-      case 'toggle-warmup':
-        return await handleToggleWarmup(orgId, body, settings);
-      case 'warmup-stats':
-        return await handleGetWarmupStats(orgId, body, settings);
-      case 'assign-account':
-        return await handleAssignAccount(orgId, body, settings);
-      case 'create-campaign':
-        return await handleCreateCampaign(orgId, body, settings);
-      case 'get-campaign':
-        return await handleGetCampaign(orgId, body, settings);
-      default:
-        return respond(400, {
-          error: `Unknown action: ${action}. Valid actions: get-settings, update-settings, test-smartlead, list-accounts, create-account, toggle-warmup, warmup-stats, assign-account, list-campaigns, create-campaign, get-campaign, list-inbox, get-conversation, mark-read, inbox-stats`,
-        });
-    }
+    return respond(400, {
+      error: `Unknown action: ${action}. Valid: get-settings, update-settings, list-accounts, create-account, send-capacity, record-send, warmup-tick, list-campaigns, create-campaign, get-campaign, assign-account, list-inbox, get-conversation, mark-read, inbox-stats`,
+    });
   } catch (error) {
-    if (error.name === 'SmartleadApiError') {
-      console.error(`Smartlead API error (action=${action}):`, error.message, error.responseBody);
-      return respond(error.statusCode || 500, { error: error.message, details: error.responseBody });
-    }
-    console.error(`smartlead-email error (action=${action}):`, error);
+    console.error(`email-api error (action=${action}):`, error);
     return respond(500, { error: error.message });
   }
 };

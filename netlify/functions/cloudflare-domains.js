@@ -380,6 +380,19 @@ async function handleProvisionDns(orgId, settings, body) {
     if (result) results.dkim.push(result);
   }
 
+  // Zoho TXT verification record (if stored from addDomain call)
+  results.zoho_verification = null;
+  const zohoTxtCode = domainRow.metadata?.zoho_txt_verification;
+  if (zohoTxtCode) {
+    const zohoVerifyResult = await createRecord({
+      type: 'TXT',
+      name: domainName,
+      content: zohoTxtCode,
+      ttl: 3600,
+    });
+    results.zoho_verification = !!zohoVerifyResult;
+  }
+
   // Update domain record with provisioning status
   const updateData = {
     status: 'dns_pending',
@@ -512,7 +525,113 @@ async function handleConfigureProvider(orgId, body) {
     success: true,
     email_provider: 'zoho',
     forward_to_email,
+    zoho_verified: existingMetadata.zoho_verification_status === true,
   });
+}
+
+/**
+ * verify-zoho — Trigger Zoho domain verification (tells Zoho to check for the TXT record)
+ */
+async function handleVerifyZoho(orgId, settings, body) {
+  const { domain_id } = body;
+  if (!domain_id) return respond(400, { error: 'Missing required field: domain_id' });
+
+  const { data: domainRow, error: domainErr } = await supabase
+    .from('email_domains')
+    .select('*')
+    .eq('id', domain_id)
+    .eq('org_id', orgId)
+    .single();
+
+  if (domainErr || !domainRow) return respond(404, { error: 'Domain not found.' });
+
+  const zoho = getZohoClient(settings);
+  if (!zoho) {
+    return respond(400, { error: 'Zoho Mail credentials not configured. Update Email Settings first.' });
+  }
+
+  // If domain wasn't added to Zoho yet, add it first
+  const meta = domainRow.metadata || {};
+  if (!meta.zoho_added) {
+    try {
+      const addResult = await zoho.addDomain(domainRow.domain);
+      const zohoData = addResult?.data || {};
+      meta.zoho_added = true;
+      meta.zoho_txt_verification = zohoData.HTMLVerificationCode || null;
+      meta.zoho_cname_verification = zohoData.CNAMEVerificationCode || null;
+      await supabase
+        .from('email_domains')
+        .update({ metadata: meta })
+        .eq('id', domain_id);
+    } catch (err) {
+      return respond(500, { error: `Failed to add domain to Zoho: ${err.message}` });
+    }
+  }
+
+  // Ensure the Zoho TXT verification record exists on Cloudflare DNS
+  const zohoTxtCode = meta.zoho_txt_verification;
+  if (zohoTxtCode && domainRow.cloudflare_zone_id && settings.cloudflare_api_token) {
+    // Check if TXT record already exists before creating
+    const existingRes = await fetch(
+      `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records?type=TXT&per_page=100`,
+      { headers: cfHeaders(settings.cloudflare_api_token) }
+    );
+    const existingData = await existingRes.json();
+    const alreadyExists = (existingData.result || []).some(r => r.content === zohoTxtCode);
+
+    if (!alreadyExists) {
+      const createRes = await fetch(
+        `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records`,
+        {
+          method: 'POST',
+          headers: cfHeaders(settings.cloudflare_api_token),
+          body: JSON.stringify({
+            type: 'TXT',
+            name: domainRow.domain,
+            content: zohoTxtCode,
+            ttl: 3600,
+          }),
+        }
+      );
+      const createData = await createRes.json();
+      if (!createData.success) {
+        console.error('Failed to create Zoho TXT verification record:', createData.errors);
+      }
+    }
+  }
+
+  // Call Zoho's verify endpoint — Zoho checks for the TXT record on the domain
+  try {
+    const result = await zoho.verifyDomain(domainRow.domain, 'verifyDomainByTXT');
+    const verified = result?.data?.verificationStatus === true ||
+                     result?.data?.isVerified === true;
+
+    const updatedMetadata = {
+      ...meta,
+      zoho_verification_status: verified,
+      zoho_verified_at: verified ? new Date().toISOString() : null,
+    };
+
+    await supabase
+      .from('email_domains')
+      .update({ metadata: updatedMetadata })
+      .eq('id', domain_id);
+
+    if (verified) {
+      await logActivity(orgId, 'zoho_domain_verified', `Zoho Mail verified domain ${domainRow.domain}`);
+    }
+
+    return respond(200, {
+      success: true,
+      zoho_verified: verified,
+      domain: domainRow.domain,
+      message: verified
+        ? 'Domain verified with Zoho Mail.'
+        : 'Zoho verification pending. Ensure the TXT record has propagated and try again.',
+    });
+  } catch (err) {
+    return respond(500, { error: `Zoho verification failed: ${err.message}` });
+  }
 }
 
 /**
@@ -614,6 +733,12 @@ exports.handler = async (event) => {
     if (action === 'status') return await handleStatus(orgId, body);
     if (action === 'configure-provider') return await handleConfigureProvider(orgId, body);
 
+    // verify-zoho needs Zoho creds (from settings) but not necessarily Cloudflare
+    if (action === 'verify-zoho') {
+      if (!settings) return respond(400, { error: 'Email settings not configured.' });
+      return await handleVerifyZoho(orgId, settings, body);
+    }
+
     // All other actions require Cloudflare credentials
     if (!settings || !settings.cloudflare_api_token) {
       return respond(400, { error: 'Cloudflare credentials not configured. Update Email Settings first.' });
@@ -631,7 +756,7 @@ exports.handler = async (event) => {
       case 'verify-dns':
         return await handleVerifyDns(orgId, settings, body);
       default:
-        return respond(400, { error: `Unknown action: ${action}. Valid actions: test, search, purchase, provision-dns, verify-dns, configure-provider, list, status` });
+        return respond(400, { error: `Unknown action: ${action}. Valid actions: test, search, purchase, provision-dns, verify-dns, verify-zoho, configure-provider, list, status` });
     }
   } catch (error) {
     console.error(`cloudflare-domains error (action=${action}):`, error);
