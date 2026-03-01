@@ -568,12 +568,43 @@ async function handleVerifyZoho(orgId, settings, body) {
     }
   }
 
+  // Ensure the Zoho TXT verification record exists on Cloudflare DNS
+  const zohoTxtCode = meta.zoho_txt_verification;
+  if (zohoTxtCode && domainRow.cloudflare_zone_id && settings.cloudflare_api_token) {
+    // Check if TXT record already exists before creating
+    const existingRes = await fetch(
+      `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records?type=TXT&per_page=100`,
+      { headers: cfHeaders(settings.cloudflare_api_token) }
+    );
+    const existingData = await existingRes.json();
+    const alreadyExists = (existingData.result || []).some(r => r.content === zohoTxtCode);
+
+    if (!alreadyExists) {
+      const createRes = await fetch(
+        `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records`,
+        {
+          method: 'POST',
+          headers: cfHeaders(settings.cloudflare_api_token),
+          body: JSON.stringify({
+            type: 'TXT',
+            name: domainRow.domain,
+            content: zohoTxtCode,
+            ttl: 3600,
+          }),
+        }
+      );
+      const createData = await createRes.json();
+      if (!createData.success) {
+        console.error('Failed to create Zoho TXT verification record:', createData.errors);
+      }
+    }
+  }
+
   // Call Zoho's verify endpoint — Zoho checks for the TXT record on the domain
   try {
     const result = await zoho.verifyDomain(domainRow.domain, 'verifyDomainByTXT');
     const verified = result?.data?.verificationStatus === true ||
-                     result?.data?.isVerified === true ||
-                     result?.status?.code === 200;
+                     result?.data?.isVerified === true;
 
     const updatedMetadata = {
       ...meta,
