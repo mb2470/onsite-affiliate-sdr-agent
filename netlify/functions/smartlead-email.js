@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { SmartleadService, SmartleadApiError } = require('./lib/smartlead-api');
+const { ZohoMailService } = require('./lib/zoho-mail-api');
 
 // Use service role key (bypasses RLS) for server-side function
 const supabaseKey =
@@ -56,6 +57,21 @@ async function logActivity(orgId, activityType, summary, status = 'success') {
   });
 }
 
+function getZohoClient(settings) {
+  const zoho = settings?.metadata?.zoho;
+  if (!zoho || !zoho.client_id || !zoho.client_secret || !zoho.refresh_token || !zoho.org_id) {
+    return null;
+  }
+  return new ZohoMailService({
+    clientId: zoho.client_id,
+    clientSecret: zoho.client_secret,
+    refreshToken: zoho.refresh_token,
+    orgId: zoho.org_id,
+    accountsDomain: zoho.accounts_domain || undefined,
+    mailDomain: zoho.mail_domain || undefined,
+  });
+}
+
 // ── Settings Actions ─────────────────────────────────────────────────────────
 
 async function handleGetSettings(orgId) {
@@ -71,14 +87,20 @@ async function handleGetSettings(orgId) {
 
   const whois = settings.metadata?.whois || {};
 
+  const zoho = settings.metadata?.zoho || {};
+
   return respond(200, {
     smartlead_api_key: maskKey(settings.smartlead_api_key),
     has_smartlead: !!settings.smartlead_api_key,
     has_cloudflare: !!(settings.cloudflare_api_token && settings.cloudflare_account_id),
     has_gmail: !!settings.gmail_oauth_credentials,
+    has_zoho: !!(zoho.client_id && zoho.client_secret && zoho.refresh_token && zoho.org_id),
     cloudflare_account_id: settings.cloudflare_account_id || '',
     gmail_from_email: settings.gmail_from_email || '',
     gmail_from_name: settings.gmail_from_name || '',
+    zoho_org_id: zoho.org_id || '',
+    zoho_accounts_domain: zoho.accounts_domain || 'https://accounts.zoho.com',
+    zoho_mail_domain: zoho.mail_domain || 'https://mail.zoho.com',
     whois_first_name: whois.first_name || '',
     whois_last_name: whois.last_name || '',
     whois_address: whois.address || '',
@@ -110,25 +132,57 @@ async function handleUpdateSettings(orgId, body) {
   ];
   const hasWhoisUpdate = whoisFields.some(f => body[f] !== undefined);
 
-  if (hasWhoisUpdate) {
+  // Handle Zoho fields → stored in metadata.zoho
+  const zohoFields = [
+    'zoho_client_id', 'zoho_client_secret', 'zoho_refresh_token',
+    'zoho_org_id', 'zoho_accounts_domain', 'zoho_mail_domain',
+  ];
+  const hasZohoUpdate = zohoFields.some(f => body[f] !== undefined);
+
+  if (hasWhoisUpdate || hasZohoUpdate) {
     // Fetch existing metadata to merge
     const existing = await getOrgSettings(orgId);
     const existingMetadata = existing?.metadata || {};
-    const existingWhois = existingMetadata.whois || {};
 
-    const whoisMap = {
-      whois_first_name: 'first_name', whois_last_name: 'last_name',
-      whois_address: 'address', whois_city: 'city', whois_state: 'state',
-      whois_zip: 'zip', whois_country: 'country', whois_phone: 'phone',
-      whois_email: 'email',
-    };
+    if (hasWhoisUpdate) {
+      const existingWhois = existingMetadata.whois || {};
 
-    const newWhois = { ...existingWhois };
-    for (const [bodyKey, whoisKey] of Object.entries(whoisMap)) {
-      if (body[bodyKey] !== undefined) newWhois[whoisKey] = body[bodyKey];
+      const whoisMap = {
+        whois_first_name: 'first_name', whois_last_name: 'last_name',
+        whois_address: 'address', whois_city: 'city', whois_state: 'state',
+        whois_zip: 'zip', whois_country: 'country', whois_phone: 'phone',
+        whois_email: 'email',
+      };
+
+      const newWhois = { ...existingWhois };
+      for (const [bodyKey, whoisKey] of Object.entries(whoisMap)) {
+        if (body[bodyKey] !== undefined) newWhois[whoisKey] = body[bodyKey];
+      }
+
+      existingMetadata.whois = newWhois;
     }
 
-    updates.metadata = { ...existingMetadata, whois: newWhois };
+    if (hasZohoUpdate) {
+      const existingZoho = existingMetadata.zoho || {};
+
+      const zohoMap = {
+        zoho_client_id: 'client_id',
+        zoho_client_secret: 'client_secret',
+        zoho_refresh_token: 'refresh_token',
+        zoho_org_id: 'org_id',
+        zoho_accounts_domain: 'accounts_domain',
+        zoho_mail_domain: 'mail_domain',
+      };
+
+      const newZoho = { ...existingZoho };
+      for (const [bodyKey, zohoKey] of Object.entries(zohoMap)) {
+        if (body[bodyKey] !== undefined) newZoho[zohoKey] = body[bodyKey];
+      }
+
+      existingMetadata.zoho = newZoho;
+    }
+
+    updates.metadata = existingMetadata;
   }
 
   if (Object.keys(updates).length === 0) {
@@ -266,6 +320,55 @@ async function handleCreateAccount(orgId, body, settings) {
 
   await logActivity(orgId, 'email_account_created', `Created email account ${emailAddress} (Smartlead ID: ${smartleadAccountId})`);
 
+  // Auto-provision Zoho mailbox if credentials configured
+  let zohoProvisioned = false;
+  const zoho = getZohoClient(settings);
+  if (zoho) {
+    // Look up forwarding email from domain metadata
+    const { data: domainFull } = await supabase
+      .from('email_domains')
+      .select('metadata')
+      .eq('id', domain_id)
+      .single();
+    const forwardTo = domainFull?.metadata?.forward_to_email || null;
+
+    try {
+      const zohoResult = await zoho.provisionMailbox({
+        emailAddress,
+        password,
+        firstName: from_name ? from_name.split(' ')[0] : local_part,
+        lastName: from_name ? from_name.split(' ').slice(1).join(' ') : '',
+        displayName: from_name || local_part,
+        forwardTo,
+      });
+
+      zohoProvisioned = true;
+
+      // Store Zoho account identifiers in metadata
+      await supabase
+        .from('email_accounts')
+        .update({
+          metadata: {
+            zoho_account_id: zohoResult.accountId || null,
+            zoho_zuid: zohoResult.zuid || null,
+            zoho_imap_enabled: zohoResult.imapEnabled,
+            zoho_forwarding_configured: zohoResult.forwardingConfigured,
+            zoho_forward_to: forwardTo,
+          },
+        })
+        .eq('id', account.id);
+
+      await logActivity(orgId, 'zoho_mailbox_created',
+        `Auto-provisioned Zoho mailbox for ${emailAddress} (IMAP: ${zohoResult.imapEnabled}, Fwd: ${zohoResult.forwardingConfigured})`
+      );
+    } catch (zohoErr) {
+      console.error('Auto-provision Zoho mailbox failed (non-blocking):', zohoErr.message);
+      await logActivity(orgId, 'zoho_mailbox_failed',
+        `Failed to auto-provision Zoho mailbox for ${emailAddress}: ${zohoErr.message}`, 'warning'
+      );
+    }
+  }
+
   return respond(200, {
     id: account.id,
     email_address: account.email_address,
@@ -273,6 +376,7 @@ async function handleCreateAccount(orgId, body, settings) {
     warmup_enabled: account.smartlead_warmup_enabled,
     warmup_status: account.smartlead_warmup_status,
     status: account.status,
+    zoho_provisioned: zohoProvisioned,
   });
 }
 

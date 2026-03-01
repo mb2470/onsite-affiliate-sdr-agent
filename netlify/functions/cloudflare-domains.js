@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { ZohoMailService } = require('./lib/zoho-mail-api');
 
 // Use service role key (bypasses RLS) for server-side function
 const supabaseKey =
@@ -52,6 +53,21 @@ async function logActivity(orgId, activityType, summary, status = 'success') {
     activity_type: activityType,
     summary,
     status,
+  });
+}
+
+function getZohoClient(settings) {
+  const zoho = settings?.metadata?.zoho;
+  if (!zoho || !zoho.client_id || !zoho.client_secret || !zoho.refresh_token || !zoho.org_id) {
+    return null;
+  }
+  return new ZohoMailService({
+    clientId: zoho.client_id,
+    clientSecret: zoho.client_secret,
+    refreshToken: zoho.refresh_token,
+    orgId: zoho.org_id,
+    accountsDomain: zoho.accounts_domain || undefined,
+    mailDomain: zoho.mail_domain || undefined,
   });
 }
 
@@ -209,7 +225,35 @@ async function handlePurchase(orgId, settings, body) {
 
   await logActivity(orgId, 'domain_purchased', `Purchased domain ${domain} via Cloudflare`);
 
-  return respond(201, { domain: domainRow });
+  // Auto-add domain to Zoho Mail if credentials are configured
+  let zohoAdded = false;
+  const zoho = getZohoClient(settings);
+  if (zoho) {
+    try {
+      const zohoResult = await zoho.addDomain(domain);
+      zohoAdded = true;
+      // Store Zoho verification codes in domain metadata
+      const zohoData = zohoResult?.data || {};
+      await supabase
+        .from('email_domains')
+        .update({
+          metadata: {
+            ...(domainRow.metadata || {}),
+            zoho_added: true,
+            zoho_verification_status: zohoData.verificationStatus || false,
+            zoho_txt_verification: zohoData.HTMLVerificationCode || null,
+            zoho_cname_verification: zohoData.CNAMEVerificationCode || null,
+          },
+        })
+        .eq('id', domainRow.id);
+      await logActivity(orgId, 'zoho_domain_added', `Auto-added domain ${domain} to Zoho Mail organization`);
+    } catch (zohoErr) {
+      console.error('Auto-add to Zoho failed (non-blocking):', zohoErr.message);
+      await logActivity(orgId, 'zoho_domain_add_failed', `Failed to auto-add ${domain} to Zoho: ${zohoErr.message}`, 'warning');
+    }
+  }
+
+  return respond(201, { domain: domainRow, zoho_added: zohoAdded });
 }
 
 /**
