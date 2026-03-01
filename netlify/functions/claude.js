@@ -1,12 +1,9 @@
 const Anthropic = require('@anthropic-ai/sdk');
 
+const { corsHeaders } = require('./lib/cors');
+
 exports.handler = async (event) => {
-  // CORS headers
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  };
+  const headers = corsHeaders(event);
 
   // Handle preflight
   if (event.httpMethod === 'OPTIONS') {

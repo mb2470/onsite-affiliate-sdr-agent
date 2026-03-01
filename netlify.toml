@@ -82,7 +82,7 @@
 #   CLOUDFLARE_API_TOKEN       — Cloudflare API token (DNS + Registrar perms)
 #   CLOUDFLARE_ACCOUNT_ID      — Cloudflare account ID
 #   SMARTLEAD_API_KEY          — Smartlead API key
-#   SMARTLEAD_WEBHOOK_SECRET   — Shared secret for webhook validation (optional)
+#   SMARTLEAD_WEBHOOK_SECRET   — Global fallback webhook secret (per-tenant secret in email_settings takes priority)
 #
 #   GOOGLE_CLIENT_ID           — Gmail OAuth client ID (for reply forwarding)
 #   GOOGLE_CLIENT_SECRET       — Gmail OAuth client secret (for reply forwarding)

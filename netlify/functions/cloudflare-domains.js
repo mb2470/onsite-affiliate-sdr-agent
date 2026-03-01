@@ -13,11 +13,10 @@ const supabase = createClient(
 
 const CF_API_BASE = 'https://api.cloudflare.com/client/v4';
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Org-Id',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+const { corsHeaders } = require('./lib/cors');
+
+// Computed per-request in the handler; module-level so helpers can use respond().
+let CORS_HEADERS = {};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -491,6 +490,8 @@ async function handleStatus(orgId, body) {
 // ── Main Handler ─────────────────────────────────────────────────────────────
 
 exports.handler = async (event) => {
+  CORS_HEADERS = corsHeaders(event);
+
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers: CORS_HEADERS, body: '' };
   }
