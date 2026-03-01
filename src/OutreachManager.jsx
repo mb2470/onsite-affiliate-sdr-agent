@@ -118,6 +118,12 @@ function SettingsTab({ orgId }) {
         gmail_from_email: data.gmail_from_email || '',
         gmail_from_name: data.gmail_from_name || '',
         smartlead_webhook_secret: '',
+        zoho_client_id: '',
+        zoho_client_secret: '',
+        zoho_refresh_token: '',
+        zoho_org_id: data.zoho_org_id || '',
+        zoho_accounts_domain: data.zoho_accounts_domain || 'https://accounts.zoho.com',
+        zoho_mail_domain: data.zoho_mail_domain || 'https://mail.zoho.com',
         whois_first_name: data.whois_first_name || '',
         whois_last_name: data.whois_last_name || '',
         whois_address: data.whois_address || '',
@@ -157,8 +163,10 @@ function SettingsTab({ orgId }) {
     setTesting(p => ({ ...p, [service]: true }));
     setTestResults(p => ({ ...p, [service]: null }));
     try {
-      const fn = service === 'smartlead' ? 'smartlead-email' : 'cloudflare-domains';
-      const action = service === 'smartlead' ? 'test-smartlead' : 'test';
+      let fn, action;
+      if (service === 'smartlead') { fn = 'smartlead-email'; action = 'test-smartlead'; }
+      else if (service === 'zoho') { fn = 'zoho-mail'; action = 'test-connection'; }
+      else { fn = 'cloudflare-domains'; action = 'test'; }
       const data = await api(fn, { org_id: orgId, action });
       setTestResults(p => ({ ...p, [service]: { ok: true, data } }));
     } catch (e) {
@@ -231,6 +239,60 @@ function SettingsTab({ orgId }) {
             <input style={inputStyle} placeholder="Cloudflare Account ID" value={f('cloudflare_account_id')} onChange={e => set('cloudflare_account_id', e.target.value)} />
           </div>
         </div>
+      </div>
+
+      {/* Zoho Mail */}
+      <div style={cardStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <h3 style={{ margin: 0, fontSize: '16px' }}>Zoho Mail</h3>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {settings?.has_zoho && <StatusBadge status="active" />}
+            <button style={btnSecondary} onClick={() => handleTest('zoho')} disabled={testing.zoho}>
+              {testing.zoho ? 'Testing...' : 'Test Connection'}
+            </button>
+          </div>
+        </div>
+        {testResults.zoho && (
+          <div style={{ marginBottom: '12px', fontSize: '13px', color: testResults.zoho.ok ? '#4ade80' : '#f87171' }}>
+            {testResults.zoho.ok ? `Connection successful${testResults.zoho.data?.orgName ? ` — ${testResults.zoho.data.orgName}` : ''}` : testResults.zoho.error}
+          </div>
+        )}
+        <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px' }}>
+          Direct Zoho Mail integration for automated mailbox creation, IMAP enabling, and forwarding setup.
+          Create a Self Client in <a href="https://api-console.zoho.com/" target="_blank" rel="noopener noreferrer" style={{ color: 'rgba(144,21,237,0.8)' }}>Zoho API Console</a> with
+          scopes: <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: '4px', fontSize: '11px' }}>ZohoMail.organization.domains.ALL,ZohoMail.organization.accounts.ALL</code>
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div>
+            <label style={labelStyle}>Client ID {settings?.has_zoho && '(saved)'}</label>
+            <input style={inputStyle} type="password" placeholder={settings?.has_zoho ? '••••••••••••' : 'Zoho OAuth Client ID'} value={f('zoho_client_id')} onChange={e => set('zoho_client_id', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Client Secret {settings?.has_zoho && '(saved)'}</label>
+            <input style={inputStyle} type="password" placeholder={settings?.has_zoho ? '••••••••••••' : 'Zoho OAuth Client Secret'} value={f('zoho_client_secret')} onChange={e => set('zoho_client_secret', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Refresh Token {settings?.has_zoho && '(saved)'}</label>
+            <input style={inputStyle} type="password" placeholder={settings?.has_zoho ? '••••••••••••' : 'Zoho OAuth Refresh Token'} value={f('zoho_refresh_token')} onChange={e => set('zoho_refresh_token', e.target.value)} />
+          </div>
+          <div>
+            <label style={labelStyle}>Organization ID (zoid)</label>
+            <input style={inputStyle} placeholder="Zoho Organization ID" value={f('zoho_org_id')} onChange={e => set('zoho_org_id', e.target.value)} />
+          </div>
+        </div>
+        <details style={{ marginTop: '12px' }}>
+          <summary style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>Advanced: Regional endpoints</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '8px' }}>
+            <div>
+              <label style={labelStyle}>Accounts Domain</label>
+              <input style={inputStyle} placeholder="https://accounts.zoho.com" value={f('zoho_accounts_domain')} onChange={e => set('zoho_accounts_domain', e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Mail API Domain</label>
+              <input style={inputStyle} placeholder="https://mail.zoho.com" value={f('zoho_mail_domain')} onChange={e => set('zoho_mail_domain', e.target.value)} />
+            </div>
+          </div>
+        </details>
       </div>
 
       {/* Gmail Forwarding */}
@@ -324,8 +386,9 @@ function DomainsTab({ orgId }) {
   const handlePurchase = async (domain) => {
     setPurchasing(domain);
     try {
-      await api('cloudflare-domains', { org_id: orgId, action: 'purchase', domain });
-      setMsg({ type: 'success', text: `${domain} purchased successfully!` });
+      const result = await api('cloudflare-domains', { org_id: orgId, action: 'purchase', domain });
+      const zohoNote = result.zoho_added ? ' Domain auto-added to Zoho Mail.' : '';
+      setMsg({ type: 'success', text: `${domain} purchased successfully!${zohoNote}` });
       setSearchResults(null);
       setSearchQuery('');
       await load();
@@ -664,8 +727,9 @@ function AccountsTab({ orgId }) {
     }
     setCreating(true);
     try {
-      await api('smartlead-email', { org_id: orgId, action: 'create-account', ...form });
-      setMsg({ type: 'success', text: 'Email account created!' });
+      const result = await api('smartlead-email', { org_id: orgId, action: 'create-account', ...form });
+      const zohoNote = result.zoho_provisioned ? ' Zoho mailbox auto-provisioned (IMAP + forwarding).' : '';
+      setMsg({ type: 'success', text: `Email account created!${zohoNote}` });
       setShowCreate(false);
       setForm({ domain_id: '', local_part: '', password: '', from_name: '' });
       await load();

@@ -295,5 +295,10 @@ export async function getServiceClients(orgId) {
     clients.smartlead = new SmartleadService(settings.smartlead_api_key);
   }
 
+  const zoho = settings.metadata?.zoho;
+  if (zoho?.client_id && zoho?.client_secret && zoho?.refresh_token && zoho?.org_id) {
+    clients.zohoConfig = zoho;
+  }
+
   return clients;
 }
