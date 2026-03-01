@@ -14,6 +14,55 @@ async function api(fn, body) {
   return data;
 }
 
+function sanitizeHtml(html) {
+  if (!html || typeof html !== 'string') return '';
+
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return html;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const blockedTags = ['script', 'iframe', 'object', 'embed', 'form', 'link', 'meta', 'style'];
+
+  blockedTags.forEach((tag) => {
+    doc.querySelectorAll(tag).forEach((node) => node.remove());
+  });
+
+  doc.querySelectorAll('*').forEach((node) => {
+    [...node.attributes].forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value?.trim().toLowerCase() || '';
+
+      if (name.startsWith('on')) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+
+      if ((name === 'href' || name === 'src' || name === 'xlink:href') && value.startsWith('javascript:')) {
+        node.removeAttribute(attr.name);
+      }
+    });
+  });
+
+  return doc.body.innerHTML;
+}
+
+function getDkimRecords(domain) {
+  const direct = Array.isArray(domain?.dkim_records) ? domain.dkim_records : null;
+  if (direct && direct.length > 0) return direct;
+
+  const fallback = [
+    {
+      name: domain?.dkim_name || domain?.dkim_host || domain?.dkim_selector,
+      content: domain?.dkim_content || domain?.dkim_value || domain?.dkim_public_key,
+      type: domain?.dkim_type || 'TXT',
+    },
+  ].filter((record) => record.name && record.content);
+
+  return fallback;
+}
+
 // ── Shared styles ───────────────────────────────────────────────────────────
 
 const cardStyle = {
@@ -313,12 +362,22 @@ function DomainsTab({ orgId }) {
     setPurchasing(null);
   };
 
-  const handleProvision = async (domainId) => {
-    setProvisioning(domainId);
+  const handleProvision = async (domain) => {
+    const dkimRecords = getDkimRecords(domain);
+    setProvisioning(domain.id);
     try {
-      const data = await api('cloudflare-domains', { org_id: orgId, action: 'provision-dns', domain_id: domainId });
+      const data = await api('cloudflare-domains', {
+        org_id: orgId,
+        action: 'provision-dns',
+        domain_id: domain.id,
+        provider: {
+          dkimRecords,
+        },
+      });
       if (data.results?.errors?.length) {
         setMsg({ type: 'error', text: `DNS provisioned with ${data.results.errors.length} error(s)` });
+      } else if (dkimRecords.length === 0) {
+        setMsg({ type: 'error', text: 'DNS provisioned, but no DKIM record was supplied. Add DKIM data and retry setup before verifying.' });
       } else {
         setMsg({ type: 'success', text: 'DNS records provisioned (MX, SPF, DKIM, DMARC).' });
       }
@@ -418,7 +477,7 @@ function DomainsTab({ orgId }) {
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 {d.status === 'purchased' && (
-                  <button style={btnSecondary} onClick={e => { e.stopPropagation(); handleProvision(d.id); }} disabled={provisioning === d.id}>
+                  <button style={btnSecondary} onClick={e => { e.stopPropagation(); handleProvision(d); }} disabled={provisioning === d.id}>
                     {provisioning === d.id ? 'Provisioning...' : 'Setup DNS'}
                   </button>
                 )}
@@ -896,7 +955,7 @@ function InboxTab({ orgId }) {
                   </div>
                   <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '8px', padding: '16px', fontSize: '13px', lineHeight: 1.7, color: 'rgba(255,255,255,0.7)' }}>
                     {detail.body_html ? (
-                      <div dangerouslySetInnerHTML={{ __html: detail.body_html }} />
+                      <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(detail.body_html) }} />
                     ) : (
                       <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{detail.body_text || '(no body)'}</pre>
                     )}
