@@ -164,9 +164,13 @@ class ZohoMailService {
       return { valid: false, error: err.message };
     }
 
+    // Use /domains endpoint — it matches the ZohoMail.organization.domains.ALL
+    // scope that users are instructed to create. The base /api/organization/{zoid}
+    // endpoint requires a broader scope and is for child-org lookups.
     try {
-      const data = await this._request('GET', `/api/organization/${this.orgId}`);
-      return { valid: true, orgName: data?.data?.orgName || null };
+      const data = await this._request('GET', `/api/organization/${this.orgId}/domains`);
+      const domains = data?.data?.map(d => d.domainName) || [];
+      return { valid: true, domains };
     } catch (err) {
       // Token refresh succeeded but org endpoint failed — likely wrong ZOID.
       // Verify by calling an endpoint that doesn't need ZOID.
@@ -181,7 +185,7 @@ class ZohoMailService {
             auth_ok: true,
           };
         } catch {
-          // Token itself is bad
+          // Both failed — token itself may be bad or scopes are insufficient
           return { valid: false, error: err.message };
         }
       }
