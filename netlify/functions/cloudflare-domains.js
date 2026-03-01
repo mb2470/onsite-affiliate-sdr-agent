@@ -424,6 +424,54 @@ async function handleVerifyDns(orgId, settings, body) {
 }
 
 /**
+ * configure-provider — Save email provider config (provider name, forwarding inbox) on a domain
+ */
+async function handleConfigureProvider(orgId, body) {
+  const { domain_id, forward_to_email } = body;
+  if (!domain_id) return respond(400, { error: 'Missing required field: domain_id' });
+  if (!forward_to_email) return respond(400, { error: 'Missing required field: forward_to_email' });
+
+  // Basic email validation
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forward_to_email)) {
+    return respond(400, { error: 'Invalid forwarding email address.' });
+  }
+
+  // Verify domain belongs to org
+  const { data: domainRow, error: domainErr } = await supabase
+    .from('email_domains')
+    .select('*')
+    .eq('id', domain_id)
+    .eq('org_id', orgId)
+    .single();
+
+  if (domainErr || !domainRow) return respond(404, { error: 'Domain not found.' });
+
+  // Merge into existing metadata
+  const existingMetadata = domainRow.metadata || {};
+  const updatedMetadata = {
+    ...existingMetadata,
+    email_provider: 'zoho',
+    forward_to_email,
+    provider_configured_at: new Date().toISOString(),
+  };
+
+  const { error: updateErr } = await supabase
+    .from('email_domains')
+    .update({ metadata: updatedMetadata })
+    .eq('id', domain_id);
+
+  if (updateErr) return respond(500, { error: 'Failed to save provider config', details: updateErr.message });
+
+  await logActivity(orgId, 'provider_configured', `Configured Zoho Mail for ${domainRow.domain} — forwarding replies to ${forward_to_email}`);
+
+  return respond(200, {
+    success: true,
+    email_provider: 'zoho',
+    forward_to_email,
+  });
+}
+
+/**
  * list — List all domains for an org with email account stats
  */
 async function handleList(orgId) {
@@ -537,8 +585,10 @@ exports.handler = async (event) => {
         return await handleProvisionDns(orgId, settings, body);
       case 'verify-dns':
         return await handleVerifyDns(orgId, settings, body);
+      case 'configure-provider':
+        return await handleConfigureProvider(orgId, body);
       default:
-        return respond(400, { error: `Unknown action: ${action}. Valid actions: test, search, purchase, provision-dns, verify-dns, list, status` });
+        return respond(400, { error: `Unknown action: ${action}. Valid actions: test, search, purchase, provision-dns, verify-dns, configure-provider, list, status` });
     }
   } catch (error) {
     console.error(`cloudflare-domains error (action=${action}):`, error);
