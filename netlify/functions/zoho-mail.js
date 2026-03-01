@@ -72,15 +72,25 @@ async function handleTestConnection(orgId, zoho, settings) {
 
   if (result.valid) return respond(200, result);
 
+  // Auth works but scope is missing — return 403 (not a ZOID issue)
+  if (result.scope_issue) {
+    return respond(403, { error: result.error, valid: false, debug: result.debug });
+  }
+
   // Auth works but ZOID is wrong — return 400 (not an auth issue)
   if (result.auth_ok) {
-    return respond(400, { error: result.error, valid: false });
+    return respond(400, { error: result.error, valid: false, debug: result.debug });
   }
 
   // Check if the failure is because the user pasted an auth code instead of a refresh token
   const isInvalidCode = result.error && result.error.includes('invalid_code');
   if (!isInvalidCode) {
-    return respond(401, { error: result.error || 'Invalid Zoho credentials', valid: false });
+    return respond(401, {
+      error: result.error || 'Invalid Zoho credentials',
+      valid: false,
+      details: result.details || null,
+      debug: result.debug || null,
+    });
   }
 
   // Try exchanging the stored value as an authorization code
