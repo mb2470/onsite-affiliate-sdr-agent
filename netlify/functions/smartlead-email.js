@@ -282,16 +282,17 @@ async function handleCreateAccount(orgId, body, settings) {
   const slResult = await sl.addEmailAccount({
     from_email: emailAddress,
     from_name: from_name || local_part,
-    username: emailAddress,
+    user_name: emailAddress,
     password,
     smtp_host: smtpHostVal,
     smtp_port: smtpPortVal,
     imap_host: imapHostVal,
     imap_port: imapPortVal,
+    max_email_per_day: settings.default_daily_send_limit || 30,
     warmup_enabled: true,
   });
 
-  const smartleadAccountId = slResult?.id?.toString() || slResult?.email_account_id?.toString() || null;
+  const smartleadAccountId = slResult?.emailAccountId?.toString() || slResult?.id?.toString() || slResult?.email_account_id?.toString() || null;
 
   // Store in database
   const { data: account, error: insertErr } = await supabase
@@ -775,7 +776,7 @@ exports.handler = async (event) => {
   } catch (error) {
     if (error.name === 'SmartleadApiError') {
       console.error(`Smartlead API error (action=${action}):`, error.message, error.responseBody);
-      return respond(error.statusCode || 500, { error: error.message });
+      return respond(error.statusCode || 500, { error: error.message, details: error.responseBody });
     }
     console.error(`smartlead-email error (action=${action}):`, error);
     return respond(500, { error: error.message });
