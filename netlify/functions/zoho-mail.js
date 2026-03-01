@@ -72,6 +72,11 @@ async function handleTestConnection(orgId, zoho, settings) {
 
   if (result.valid) return respond(200, result);
 
+  // Auth works but ZOID is wrong — return 400 (not an auth issue)
+  if (result.auth_ok) {
+    return respond(400, { error: result.error, valid: false });
+  }
+
   // Check if the failure is because the user pasted an auth code instead of a refresh token
   const isInvalidCode = result.error && result.error.includes('invalid_code');
   if (!isInvalidCode) {
