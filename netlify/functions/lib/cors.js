@@ -18,7 +18,7 @@ const ALLOWED_ORIGINS = [
  * @param {object} event  Netlify function event (needs event.headers)
  * @param {object} [opts]
  * @param {string} [opts.methods]  Override Allow-Methods (default: 'GET, POST, PUT, DELETE, OPTIONS')
- * @param {string} [opts.headers]  Override Allow-Headers (default: 'Content-Type, X-Org-Id')
+ * @param {string} [opts.headers]  Override Allow-Headers (default: 'Content-Type, X-Org-Id, Authorization')
  */
 function corsHeaders(event, opts = {}) {
   const origin = event?.headers?.origin || event?.headers?.Origin || '';
@@ -28,7 +28,7 @@ function corsHeaders(event, opts = {}) {
 
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
-    'Access-Control-Allow-Headers': opts.headers || 'Content-Type, X-Org-Id',
+    'Access-Control-Allow-Headers': opts.headers || 'Content-Type, X-Org-Id, Authorization',
     'Access-Control-Allow-Methods': opts.methods || 'GET, POST, PUT, DELETE, OPTIONS',
   };
 }
