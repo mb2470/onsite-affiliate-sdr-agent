@@ -67,6 +67,7 @@ async function logActivity(orgId, activityType, summary, status = 'success') {
  */
 async function handleTestConnection(zoho) {
   const result = await zoho.testConnection();
+  if (!result.valid) return respond(401, { error: result.error || 'Invalid Zoho credentials', valid: false });
   return respond(200, result);
 }
 
