@@ -568,6 +568,7 @@ exports.handler = async (event) => {
     // Actions that don't need Cloudflare credentials
     if (action === 'list') return await handleList(orgId);
     if (action === 'status') return await handleStatus(orgId, body);
+    if (action === 'configure-provider') return await handleConfigureProvider(orgId, body);
 
     // All other actions require Cloudflare credentials
     if (!settings || !settings.cloudflare_api_token) {
@@ -585,8 +586,6 @@ exports.handler = async (event) => {
         return await handleProvisionDns(orgId, settings, body);
       case 'verify-dns':
         return await handleVerifyDns(orgId, settings, body);
-      case 'configure-provider':
-        return await handleConfigureProvider(orgId, body);
       default:
         return respond(400, { error: `Unknown action: ${action}. Valid actions: test, search, purchase, provision-dns, verify-dns, configure-provider, list, status` });
     }
