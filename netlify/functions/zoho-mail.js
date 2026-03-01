@@ -83,19 +83,35 @@ async function handleTestConnection(orgId, zoho, settings) {
   try {
     tokens = await zoho.exchangeAuthCode(zoho.refreshToken);
   } catch (exchangeErr) {
-    // Distinguish Zoho auth errors (bad code) from transient/network failures
-    const isAuthError = exchangeErr.name === 'ZohoMailApiError'
-      && exchangeErr.statusCode >= 400 && exchangeErr.statusCode < 500;
-    if (isAuthError) {
-      return respond(401, {
-        error: 'The value in "Refresh Token" appears to be an expired or invalid authorization code. '
-          + 'Generate a new code in the Zoho API Console and save it, or exchange the code for a refresh token first.',
+    // Any ZohoMailApiError means Zoho responded (even HTTP 200 with error body).
+    // Only non-ZohoMailApiError (fetch throw, DNS, timeout) is a network failure.
+    if (exchangeErr.name === 'ZohoMailApiError' && exchangeErr.statusCode >= 500) {
+      return respond(502, {
+        error: `Zoho server error during code exchange: ${exchangeErr.message}`,
+        details: exchangeErr.responseBody,
         valid: false,
       });
     }
-    // Network / 5xx — let callers know this is retryable
+    if (exchangeErr.name === 'ZohoMailApiError') {
+      return respond(401, {
+        error: 'The value in "Refresh Token" appears to be an expired or invalid authorization code. '
+          + 'Generate a new code in the Zoho API Console and save it, or exchange the code for a refresh token first.',
+        details: exchangeErr.responseBody,
+        valid: false,
+      });
+    }
+    // Network / DNS / timeout — not a Zoho response at all
     return respond(502, {
       error: `Could not reach Zoho to exchange authorization code: ${exchangeErr.message}`,
+      valid: false,
+    });
+  }
+
+  // Guard against exchange response missing a refresh_token
+  if (!tokens.refresh_token) {
+    return respond(502, {
+      error: 'Zoho code exchange succeeded but did not return a refresh token. '
+        + 'Ensure the Self Client has the correct scopes and try generating a new code.',
       valid: false,
     });
   }
