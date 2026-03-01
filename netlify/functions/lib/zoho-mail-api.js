@@ -196,9 +196,35 @@ class ZohoMailService {
       // Step 3: If the domains call failed, try an endpoint that doesn't need ZOID
       // to determine if the issue is the token or the ZOID.
       if (err.statusCode === 401 || err.statusCode === 403 || err.statusCode === 404) {
+        // A 403 on the /domains endpoint can mean EITHER:
+        //   a) The ZOID is correct but the token lacks ZohoMail.organization.domains.ALL scope
+        //   b) The ZOID is wrong and Zoho returns 403 instead of 404
+        // We distinguish these by checking the error body for scope/permission keywords
+        // and by checking whether /api/accounts also succeeds.
+        const domainBody = err.responseBody || {};
+        const domainBodyStr = JSON.stringify(domainBody).toLowerCase();
+        const looksLikeScopeError = err.statusCode === 403 && (
+          domainBodyStr.includes('scope') ||
+          domainBodyStr.includes('permission') ||
+          domainBodyStr.includes('insufficient') ||
+          domainBodyStr.includes('not authorized') ||
+          domainBodyStr.includes('forbidden')
+        );
+
         try {
           await this._request('GET', '/api/accounts');
-          // Token works, so the problem is the ZOID
+          // Token works for /api/accounts. Now decide: scope issue or wrong ZOID?
+          if (looksLikeScopeError) {
+            return {
+              valid: false,
+              error: `OAuth token works but lacks permission for organization domains (HTTP 403). `
+                + 'Re-generate your refresh token with scope: ZohoMail.organization.domains.ALL',
+              auth_ok: true,
+              scope_issue: true,
+              debug: { step: 'missing_domain_scope', tokenOk, domainErr },
+            };
+          }
+          // 403 without scope keywords, or 401/404 — ZOID is wrong
           return {
             valid: false,
             error: `OAuth credentials are valid, but Organization ID "${this.orgId}" was rejected by Zoho (HTTP ${err.statusCode}). `
