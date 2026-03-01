@@ -353,6 +353,7 @@ function DomainsTab({ orgId }) {
   const [providerSetupDomain, setProviderSetupDomain] = useState(null);
   const [forwardToEmail, setForwardToEmail] = useState('');
   const [savingProvider, setSavingProvider] = useState(null);
+  const [verifyingZoho, setVerifyingZoho] = useState(null);
   const [expandedDomain, setExpandedDomain] = useState(null);
   const [domainStatus, setDomainStatus] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -488,6 +489,24 @@ function DomainsTab({ orgId }) {
     setSavingProvider(null);
   };
 
+  const handleVerifyZoho = async (domainId) => {
+    setVerifyingZoho(domainId);
+    try {
+      const data = await api('cloudflare-domains', {
+        org_id: orgId, action: 'verify-zoho', domain_id: domainId,
+      });
+      if (data.zoho_verified) {
+        setMsg({ type: 'success', text: `Zoho domain verified: ${data.domain}` });
+      } else {
+        setMsg({ type: 'error', text: data.message || 'Zoho verification pending. Ensure TXT record has propagated.' });
+      }
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    }
+    setVerifyingZoho(null);
+  };
+
   const handleExpand = async (domain) => {
     if (expandedDomain === domain.id) {
       setExpandedDomain(null);
@@ -574,15 +593,25 @@ function DomainsTab({ orgId }) {
                     {verifying === d.id ? 'Verifying...' : 'Verify DNS'}
                   </button>
                 )}
-                {(d.status === 'dns_pending' || d.status === 'active') && (
-                  <button
-                    style={{ ...btnSecondary, borderColor: d.metadata?.forward_to_email ? 'rgba(74,222,128,0.3)' : 'rgba(144,21,237,0.3)', color: d.metadata?.forward_to_email ? '#4ade80' : 'rgba(144,21,237,0.8)' }}
-                    onClick={e => { e.stopPropagation(); openProviderSetup(d); }}
-                    disabled={savingProvider === d.id}
-                  >
-                    {d.metadata?.forward_to_email ? 'Provider OK' : 'Configure Provider'}
-                  </button>
-                )}
+                {(d.status === 'dns_pending' || d.status === 'active') && (() => {
+                  const zohoVerified = d.metadata?.zoho_verification_status === true;
+                  const hasProvider = !!d.metadata?.forward_to_email;
+                  const label = !hasProvider ? 'Configure Provider'
+                    : zohoVerified ? 'Zoho Verified' : 'Zoho Unverified';
+                  const borderColor = zohoVerified ? 'rgba(74,222,128,0.3)'
+                    : hasProvider ? 'rgba(251,146,60,0.3)' : 'rgba(144,21,237,0.3)';
+                  const textColor = zohoVerified ? '#4ade80'
+                    : hasProvider ? '#fb923c' : 'rgba(144,21,237,0.8)';
+                  return (
+                    <button
+                      style={{ ...btnSecondary, borderColor, color: textColor }}
+                      onClick={e => { e.stopPropagation(); openProviderSetup(d); }}
+                      disabled={savingProvider === d.id}
+                    >
+                      {label}
+                    </button>
+                  );
+                })()}
                 <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '18px' }}>{expandedDomain === d.id ? '\u25B2' : '\u25BC'}</span>
               </div>
             </div>
@@ -615,13 +644,44 @@ function DomainsTab({ orgId }) {
               </div>
             )}
             {/* Email Provider Setup Panel */}
-            {providerSetupDomain === d.id && (
+            {providerSetupDomain === d.id && (() => {
+              const zohoVerified = d.metadata?.zoho_verification_status === true;
+              return (
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Email Provider Configuration</h4>
                 <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', margin: '0 0 12px', lineHeight: 1.5 }}>
                   Configure Zoho Mail as the sending provider for <strong>{d.domain}</strong>. Since you won&apos;t log into Zoho directly,
                   set a forwarding inbox where all replies will be auto-forwarded.
                 </p>
+                {/* Zoho Domain Verification Status */}
+                <div style={{
+                  padding: '12px 16px', marginBottom: '12px', borderRadius: '8px',
+                  background: zohoVerified ? 'rgba(74,222,128,0.06)' : 'rgba(251,146,60,0.06)',
+                  border: `1px solid ${zohoVerified ? 'rgba(74,222,128,0.2)' : 'rgba(251,146,60,0.2)'}`,
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: zohoVerified ? '#4ade80' : '#fb923c' }}>
+                      Zoho Domain: {zohoVerified ? 'Verified' : 'Unverified'}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', marginTop: '2px' }}>
+                      {zohoVerified
+                        ? 'Zoho has confirmed ownership of this domain.'
+                        : d.metadata?.zoho_added
+                          ? 'Domain added to Zoho but TXT verification is pending. Ensure DNS records are provisioned, then verify.'
+                          : 'Domain not yet added to Zoho. Click verify to add and check.'}
+                    </div>
+                  </div>
+                  {!zohoVerified && (
+                    <button
+                      style={{ ...btnSecondary, borderColor: 'rgba(251,146,60,0.3)', color: '#fb923c', whiteSpace: 'nowrap' }}
+                      onClick={() => handleVerifyZoho(d.id)}
+                      disabled={verifyingZoho === d.id}
+                    >
+                      {verifyingZoho === d.id ? 'Verifying...' : 'Verify with Zoho'}
+                    </button>
+                  )}
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '12px', marginBottom: '12px' }}>
                   <div>
                     <label style={labelStyle}>Email Provider</label>
@@ -650,11 +710,12 @@ function DomainsTab({ orgId }) {
                   </button>
                 </div>
               </div>
-            )}
+              );
+            })()}
             {expandedDomain === d.id && domainStatus && (
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 {domainStatus.status && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
                     {['mx', 'spf', 'dkim', 'dmarc'].map(k => (
                       <div key={k} style={{ textAlign: 'center', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
                         <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>{k}</div>
@@ -663,6 +724,12 @@ function DomainsTab({ orgId }) {
                         </div>
                       </div>
                     ))}
+                    <div style={{ textAlign: 'center', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>Zoho</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: d.metadata?.zoho_verification_status === true ? '#4ade80' : '#fb923c', marginTop: '4px' }}>
+                        {d.metadata?.zoho_verification_status === true ? 'Verified' : 'Unverified'}
+                      </div>
+                    </div>
                   </div>
                 )}
                 {domainStatus.accounts?.length > 0 && (
