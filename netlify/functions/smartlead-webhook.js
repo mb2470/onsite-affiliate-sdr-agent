@@ -85,17 +85,8 @@ exports.handler = async (event) => {
     return respond(400, { error: 'Missing from_email or to_email' });
   }
 
-  // ── 3. Validate webhook secret (env var based) ──────────────────────────
-  const webhookSecret = process.env.SMARTLEAD_WEBHOOK_SECRET;
-  if (webhookSecret) {
-    const queryParams = event.queryStringParameters || {};
-    if (!queryParams.secret || queryParams.secret !== webhookSecret) {
-      return respond(401, { error: 'Invalid webhook secret' });
-    }
-  }
-
   try {
-    // ── 4. Resolve tenant via to_email ──────────────────────────────────
+    // ── 3. Resolve tenant via to_email ──────────────────────────────────
     const { data: account } = await supabase
       .from('email_accounts')
       .select('id, org_id')
@@ -108,6 +99,29 @@ exports.handler = async (event) => {
     }
 
     const orgId = account.org_id;
+
+    // ── 4. Validate webhook secret ──────────────────────────────────────
+    // Per-tenant secret (from email_settings) takes priority, then global
+    // env var. If neither is configured, reject — deny by default.
+    const { data: settings } = await supabase
+      .from('email_settings')
+      .select('smartlead_webhook_secret')
+      .eq('org_id', orgId)
+      .single();
+
+    const tenantSecret = settings?.smartlead_webhook_secret;
+    const globalSecret = process.env.SMARTLEAD_WEBHOOK_SECRET;
+    const expectedSecret = tenantSecret || globalSecret;
+
+    if (!expectedSecret) {
+      console.error(`[Webhook] No webhook secret configured for org ${orgId}`);
+      return respond(401, { error: 'Webhook secret not configured' });
+    }
+
+    const queryParams = event.queryStringParameters || {};
+    if (!queryParams.secret || queryParams.secret !== expectedSecret) {
+      return respond(401, { error: 'Invalid webhook secret' });
+    }
 
     // ── 5. Resolve campaign by smartlead_campaign_id ────────────────────
     let campaignId = null;
