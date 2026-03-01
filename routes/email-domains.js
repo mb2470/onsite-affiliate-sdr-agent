@@ -266,6 +266,64 @@ export async function provisionDns(orgId, domainId, providerConfig) {
   return results;
 }
 
+// ── configureProvider ────────────────────────────────────────────────────
+
+export async function configureProvider(orgId, domainId, forwardToEmail) {
+  if (!forwardToEmail) {
+    const err = new Error("Missing required field: forward_to_email");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forwardToEmail)) {
+    const err = new Error("Invalid forwarding email address");
+    err.status = 400;
+    throw err;
+  }
+
+  // Verify domain belongs to org
+  const { data: domainRow, error: domErr } = await supabase
+    .from("email_domains")
+    .select("*")
+    .eq("id", domainId)
+    .eq("org_id", orgId)
+    .single();
+
+  if (domErr || !domainRow) {
+    const err = new Error("Domain not found");
+    err.status = 404;
+    throw err;
+  }
+
+  // Merge into existing metadata
+  const existingMetadata = domainRow.metadata || {};
+  const updatedMetadata = {
+    ...existingMetadata,
+    email_provider: "zoho",
+    forward_to_email: forwardToEmail,
+    provider_configured_at: new Date().toISOString(),
+  };
+
+  const { error: updateErr } = await supabase
+    .from("email_domains")
+    .update({ metadata: updatedMetadata })
+    .eq("id", domainId);
+
+  if (updateErr) {
+    const err = new Error(
+      "Failed to save provider config: " + updateErr.message
+    );
+    err.status = 500;
+    throw err;
+  }
+
+  return {
+    email_provider: "zoho",
+    forward_to_email: forwardToEmail,
+    domain: domainRow.domain,
+  };
+}
+
 // ── verifyDns ───────────────────────────────────────────────────────────────
 
 export async function verifyDns(orgId, domainId) {

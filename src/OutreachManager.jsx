@@ -288,6 +288,9 @@ function DomainsTab({ orgId }) {
   const [dkimSelector, setDkimSelector] = useState('zoho');
   const [dkimValue, setDkimValue] = useState('');
   const [verifying, setVerifying] = useState(null);
+  const [providerSetupDomain, setProviderSetupDomain] = useState(null);
+  const [forwardToEmail, setForwardToEmail] = useState('');
+  const [savingProvider, setSavingProvider] = useState(null);
   const [expandedDomain, setExpandedDomain] = useState(null);
   const [domainStatus, setDomainStatus] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -391,6 +394,37 @@ function DomainsTab({ orgId }) {
     setVerifying(null);
   };
 
+  const openProviderSetup = (domain) => {
+    if (providerSetupDomain === domain.id) {
+      setProviderSetupDomain(null);
+      setForwardToEmail('');
+      return;
+    }
+    setProviderSetupDomain(domain.id);
+    setForwardToEmail(domain.metadata?.forward_to_email || '');
+  };
+
+  const handleSaveProvider = async (domainId) => {
+    if (!forwardToEmail.trim()) {
+      setMsg({ type: 'error', text: 'Forwarding email is required.' });
+      return;
+    }
+    setSavingProvider(domainId);
+    try {
+      await api('cloudflare-domains', {
+        org_id: orgId, action: 'configure-provider',
+        domain_id: domainId, forward_to_email: forwardToEmail.trim(),
+      });
+      setMsg({ type: 'success', text: 'Email provider configured. Replies will forward to ' + forwardToEmail.trim() });
+      setProviderSetupDomain(null);
+      setForwardToEmail('');
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    }
+    setSavingProvider(null);
+  };
+
   const handleExpand = async (domain) => {
     if (expandedDomain === domain.id) {
       setExpandedDomain(null);
@@ -460,6 +494,11 @@ function DomainsTab({ orgId }) {
                 <span style={{ marginLeft: '12px', color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
                   {d.account_count || 0} account{d.account_count !== 1 ? 's' : ''}
                 </span>
+                {d.metadata?.forward_to_email && (
+                  <span style={{ marginLeft: '10px', color: 'rgba(144,21,237,0.7)', fontSize: '12px' }}>
+                    Fwd: {d.metadata.forward_to_email}
+                  </span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 {d.status === 'purchased' && (
@@ -470,6 +509,15 @@ function DomainsTab({ orgId }) {
                 {(d.status === 'dns_pending' || d.status === 'provisioning') && (
                   <button style={btnSecondary} onClick={e => { e.stopPropagation(); handleVerify(d.id); }} disabled={verifying === d.id}>
                     {verifying === d.id ? 'Verifying...' : 'Verify DNS'}
+                  </button>
+                )}
+                {(d.status === 'dns_pending' || d.status === 'active') && (
+                  <button
+                    style={{ ...btnSecondary, borderColor: d.metadata?.forward_to_email ? 'rgba(74,222,128,0.3)' : 'rgba(144,21,237,0.3)', color: d.metadata?.forward_to_email ? '#4ade80' : 'rgba(144,21,237,0.8)' }}
+                    onClick={e => { e.stopPropagation(); openProviderSetup(d); }}
+                    disabled={savingProvider === d.id}
+                  >
+                    {d.metadata?.forward_to_email ? 'Provider OK' : 'Configure Provider'}
                   </button>
                 )}
                 <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '18px' }}>{expandedDomain === d.id ? '\u25B2' : '\u25BC'}</span>
@@ -499,6 +547,43 @@ function DomainsTab({ orgId }) {
                   <button style={btnSecondary} onClick={() => { setDnsSetupDomain(null); setDkimValue(''); setDkimSelector('zoho'); }}>Cancel</button>
                   <button style={btnPrimary} onClick={() => handleProvision(d.id)} disabled={provisioning === d.id}>
                     {provisioning === d.id ? 'Provisioning...' : 'Provision All DNS Records'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {/* Email Provider Setup Panel */}
+            {providerSetupDomain === d.id && (
+              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Email Provider Configuration</h4>
+                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', margin: '0 0 12px', lineHeight: 1.5 }}>
+                  Configure Zoho Mail as the sending provider for <strong>{d.domain}</strong>. Since you won&apos;t log into Zoho directly,
+                  set a forwarding inbox where all replies will be auto-forwarded.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={labelStyle}>Email Provider</label>
+                    <div style={{ ...inputStyle, background: 'rgba(255,255,255,0.02)', color: 'rgba(255,255,255,0.6)', display: 'flex', alignItems: 'center' }}>
+                      Zoho Mail
+                    </div>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Forward Replies To</label>
+                    <input
+                      style={inputStyle}
+                      type="email"
+                      placeholder="e.g. sam@onsiteaffiliates.com"
+                      value={forwardToEmail}
+                      onChange={e => setForwardToEmail(e.target.value)}
+                    />
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>
+                      All inbound replies to *@{d.domain} will be forwarded to this inbox
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <button style={btnSecondary} onClick={() => { setProviderSetupDomain(null); setForwardToEmail(''); }}>Cancel</button>
+                  <button style={btnPrimary} onClick={() => handleSaveProvider(d.id)} disabled={savingProvider === d.id}>
+                    {savingProvider === d.id ? 'Saving...' : 'Save Provider Config'}
                   </button>
                 </div>
               </div>
