@@ -1,14 +1,9 @@
 const { createClient } = require('@supabase/supabase-js');
 
 // Use service role key (bypasses RLS) for server-side function
-const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY;
-
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  supabaseKey
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
 );
 
 const CORS_HEADERS = {
@@ -16,6 +11,32 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
+
+function respond(statusCode, body) {
+  return { statusCode, headers: CORS_HEADERS, body: JSON.stringify(body) };
+}
+
+/**
+ * Build an RFC 2822 message and return it as a base64url-encoded string
+ * suitable for the Gmail messages/import endpoint.
+ */
+function buildRawMessage({ from, to, subject, body }) {
+  const lines = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject || '(no subject)'}`,
+    `Date: ${new Date().toUTCString()}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    body || '',
+  ];
+  return Buffer.from(lines.join('\r\n'))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
 
 /**
  * Smartlead Reply Webhook
@@ -33,22 +54,21 @@ const CORS_HEADERS = {
  *     campaign_name, campaign_id, lead_id }
  */
 exports.handler = async (event) => {
+  // ── 1. Method gate ──────────────────────────────────────────────────────
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers: CORS_HEADERS, body: '' };
+    return respond(200, {});
   }
 
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Method not allowed' }) };
+    return respond(405, { error: 'Method not allowed' });
   }
 
-  // Return 200 immediately — process asynchronously below
-  // (Netlify Functions are synchronous, so we process in-line but return fast)
-
+  // ── 2. Parse & validate JSON ────────────────────────────────────────────
   let payload;
   try {
     payload = JSON.parse(event.body);
   } catch {
-    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid JSON' }) };
+    return respond(400, { error: 'Invalid JSON' });
   }
 
   const {
@@ -62,11 +82,11 @@ exports.handler = async (event) => {
   } = payload;
 
   if (!from_email || !to_email) {
-    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Missing from_email or to_email' }) };
+    return respond(400, { error: 'Missing from_email or to_email' });
   }
 
   try {
-    // 1. Look up the email account by to_email → determines org
+    // ── 3. Resolve tenant via to_email ──────────────────────────────────
     const { data: account } = await supabase
       .from('email_accounts')
       .select('id, org_id')
@@ -74,28 +94,36 @@ exports.handler = async (event) => {
       .single();
 
     if (!account) {
-      console.error(`Webhook: no email account found for ${to_email}`);
-      return { statusCode: 200, headers: CORS_HEADERS, body: JSON.stringify({ received: true, matched: false }) };
+      console.error(`[Webhook] No email account found for ${to_email}`);
+      return respond(200, { received: true, matched: false });
     }
 
     const orgId = account.org_id;
 
-    // 2. Validate webhook secret — reject if org has a secret configured
-    //    and the request doesn't provide it or it doesn't match
-    const queryParams = event.queryStringParameters || {};
-    const { data: settingsForAuth } = await supabase
+    // ── 4. Validate webhook secret ──────────────────────────────────────
+    // Per-tenant secret (from email_settings) takes priority, then global
+    // env var. If neither is configured, reject — deny by default.
+    const { data: settings } = await supabase
       .from('email_settings')
       .select('smartlead_webhook_secret')
       .eq('org_id', orgId)
       .single();
 
-    if (settingsForAuth?.smartlead_webhook_secret) {
-      if (!queryParams.secret || queryParams.secret !== settingsForAuth.smartlead_webhook_secret) {
-        return { statusCode: 401, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid webhook secret' }) };
-      }
+    const tenantSecret = settings?.smartlead_webhook_secret;
+    const globalSecret = process.env.SMARTLEAD_WEBHOOK_SECRET;
+    const expectedSecret = tenantSecret || globalSecret;
+
+    if (!expectedSecret) {
+      console.error(`[Webhook] No webhook secret configured for org ${orgId}`);
+      return respond(401, { error: 'Webhook secret not configured' });
     }
 
-    // 3. Match campaign by smartlead_campaign_id
+    const queryParams = event.queryStringParameters || {};
+    if (!queryParams.secret || queryParams.secret !== expectedSecret) {
+      return respond(401, { error: 'Invalid webhook secret' });
+    }
+
+    // ── 5. Resolve campaign by smartlead_campaign_id ────────────────────
     let campaignId = null;
     if (smartleadCampaignId) {
       const { data: campaign } = await supabase
@@ -107,7 +135,7 @@ exports.handler = async (event) => {
       if (campaign) campaignId = campaign.id;
     }
 
-    // 4. Create email_conversation
+    // ── 6. INSERT into email_conversations ──────────────────────────────
     const { data: conversation, error: insertErr } = await supabase
       .from('email_conversations')
       .insert({
@@ -128,41 +156,51 @@ exports.handler = async (event) => {
       .single();
 
     if (insertErr) {
-      console.error('Webhook: failed to insert conversation:', insertErr.message);
-      // Return 200 to prevent Smartlead from retrying (retries would create duplicates)
-      return { statusCode: 200, headers: CORS_HEADERS, body: JSON.stringify({ received: true, error: 'Failed to store conversation: ' + insertErr.message }) };
+      console.error('[Webhook] Failed to insert conversation:', insertErr.message);
+      // Return 200 to prevent Smartlead from retrying (retries create duplicates)
+      return respond(200, { received: true, error: 'Failed to store conversation: ' + insertErr.message });
     }
 
-    // 5. Atomically increment campaign's total_replied (race-safe)
+    // ── 7. Increment campaign reply counter (atomic) ────────────────────
     if (campaignId) {
       await supabase.rpc('increment_campaign_replies', { p_campaign_id: campaignId });
     }
 
-    // 6. Forward to Gmail (if configured)
-    await forwardToGmail(orgId, { from_email, to_email, subject, email_body });
-
-    // 7. Log activity
-    await supabase.from('activity_log').insert({
-      org_id: orgId,
-      activity_type: 'email_reply_received',
-      summary: `Inbound reply from ${from_email} to ${to_email}${campaignId ? '' : ' (no campaign match)'}`,
-      status: 'success',
+    // ── 8. Forward to Gmail (optional, fail-silent) ─────────────────────
+    const gmailMessageId = await forwardToGmail(orgId, {
+      from_email,
+      to_email,
+      subject,
+      email_body,
+      email_body_html,
     });
 
-    console.log(`Webhook: stored reply from ${from_email} → ${to_email} (conversation: ${conversation.id})`);
+    // Store gmail_message_id on the conversation row if forwarding succeeded
+    if (gmailMessageId) {
+      await supabase
+        .from('email_conversations')
+        .update({ gmail_message_id: gmailMessageId })
+        .eq('id', conversation.id);
+    }
 
-    return { statusCode: 200, headers: CORS_HEADERS, body: JSON.stringify({ received: true, conversation_id: conversation.id }) };
+    console.log(`[Webhook] Stored reply from ${from_email} → ${to_email} (conversation: ${conversation.id})`);
+
+    // ── 9. Return success ───────────────────────────────────────────────
+    return respond(200, { received: true, conversation_id: conversation.id });
   } catch (error) {
-    console.error('Webhook processing error:', error);
-    return { statusCode: 200, headers: CORS_HEADERS, body: JSON.stringify({ received: true, error: error.message }) };
+    console.error('[Webhook] Processing error:', error);
+    // Always 200 — Smartlead retries on non-2xx, which would create duplicates
+    return respond(200, { received: true, error: error.message });
   }
 };
 
 /**
  * Forward an inbound reply to the merchant's Gmail inbox via OAuth.
  * Fails silently — Gmail forwarding is optional.
+ *
+ * @returns {string|null} gmail_message_id if forwarding succeeded, null otherwise
  */
-async function forwardToGmail(orgId, { from_email, to_email, subject, email_body }) {
+async function forwardToGmail(orgId, { from_email, to_email, subject, email_body, email_body_html }) {
   try {
     const { data: settings } = await supabase
       .from('email_settings')
@@ -170,12 +208,12 @@ async function forwardToGmail(orgId, { from_email, to_email, subject, email_body
       .eq('org_id', orgId)
       .single();
 
-    if (!settings?.gmail_oauth_credentials) return;
+    if (!settings?.gmail_oauth_credentials) return null;
 
     const creds = settings.gmail_oauth_credentials;
     const clientId = creds.client_id || process.env.GOOGLE_CLIENT_ID;
     const clientSecret = creds.client_secret || process.env.GOOGLE_CLIENT_SECRET;
-    if (!clientId || !clientSecret || !creds.refresh_token) return;
+    if (!clientId || !clientSecret || !creds.refresh_token) return null;
 
     // Refresh access token
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -190,54 +228,53 @@ async function forwardToGmail(orgId, { from_email, to_email, subject, email_body
     });
 
     const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) return;
+    const accessToken = tokenData.access_token || creds.access_token;
+    if (!accessToken) return null;
 
-    // Persist refreshed access token back to email_settings
-    await supabase
-      .from('email_settings')
-      .update({
-        gmail_oauth_credentials: {
-          ...creds,
-          access_token: tokenData.access_token,
-        },
-      })
-      .eq('org_id', orgId);
+    // Persist refreshed access token if it changed
+    if (tokenData.access_token && tokenData.access_token !== creds.access_token) {
+      await supabase
+        .from('email_settings')
+        .update({
+          gmail_oauth_credentials: {
+            ...creds,
+            access_token: tokenData.access_token,
+          },
+        })
+        .eq('org_id', orgId);
+    }
 
-    // Build RFC 2822 message to insert into Gmail
+    // Build RFC 2822 message (HTML) and import into Gmail
     const targetEmail = settings.gmail_from_email || to_email;
-    const raw = [
-      `From: ${from_email}`,
-      `To: ${targetEmail}`,
-      `Subject: [Smartlead Reply] ${subject || '(no subject)'}`,
-      'Content-Type: text/plain; charset=utf-8',
-      '',
-      `Reply from: ${from_email}`,
-      `Original recipient: ${to_email}`,
-      '---',
-      email_body || '(empty body)',
-    ].join('\r\n');
-
-    const encodedRaw = Buffer.from(raw).toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-
-    // Insert into Gmail (not send — just add to inbox)
-    await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/import', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        raw: encodedRaw,
-        labelIds: ['INBOX', 'UNREAD'],
-      }),
+    const raw = buildRawMessage({
+      from: from_email,
+      to: targetEmail,
+      subject: `[Smartlead Reply] ${subject || '(no subject)'}`,
+      body: email_body_html || email_body || '',
     });
 
-    console.log(`Gmail: forwarded reply from ${from_email} to ${targetEmail}`);
-  } catch (err) {
-    console.error(`Gmail forwarding failed for org ${orgId}:`, err.message);
-    // Fail silently — Gmail forwarding is optional
+    const importRes = await fetch(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/import',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ raw, labelIds: ['INBOX', 'UNREAD'] }),
+      }
+    );
+
+    const importData = await importRes.json();
+
+    if (importData?.id) {
+      console.log(`[Webhook] Gmail: forwarded reply from ${from_email} to ${targetEmail} (${importData.id})`);
+      return importData.id;
+    }
+
+    return null;
+  } catch (gmailErr) {
+    console.error(`[Webhook] Gmail forward failed for org ${orgId}:`, gmailErr.message);
+    return null;
   }
 }
