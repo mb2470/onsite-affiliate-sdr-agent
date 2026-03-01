@@ -160,9 +160,31 @@ class ZohoMailService {
   async testConnection() {
     try {
       await this._ensureAccessToken();
+    } catch (err) {
+      return { valid: false, error: err.message };
+    }
+
+    try {
       const data = await this._request('GET', `/api/organization/${this.orgId}`);
       return { valid: true, orgName: data?.data?.orgName || null };
     } catch (err) {
+      // Token refresh succeeded but org endpoint failed — likely wrong ZOID.
+      // Verify by calling an endpoint that doesn't need ZOID.
+      if (err.statusCode === 401 || err.statusCode === 403 || err.statusCode === 404) {
+        try {
+          await this._request('GET', '/api/accounts');
+          // Token works, so the problem is the ZOID
+          return {
+            valid: false,
+            error: `OAuth credentials are valid, but Organization ID "${this.orgId}" was rejected by Zoho (HTTP ${err.statusCode}). `
+              + 'The ZOID is not your User ID — find it in the Zoho Mail Admin Console URL (mail.zoho.com).',
+            auth_ok: true,
+          };
+        } catch {
+          // Token itself is bad
+          return { valid: false, error: err.message };
+        }
+      }
       return { valid: false, error: err.message };
     }
   }
