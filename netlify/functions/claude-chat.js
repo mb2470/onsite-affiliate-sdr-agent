@@ -794,12 +794,10 @@ GUIDELINES:
 //   { tool_calls }  → Execute tools server-side, return results
 // The agentic loop lives in the frontend (ChatPanel.jsx) to avoid Netlify's 26s timeout.
 
+const { corsHeaders } = require('./lib/cors');
+
 exports.handler = async (event) => {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  };
+  const headers = corsHeaders(event);
 
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
   if (event.httpMethod !== 'POST')

@@ -1,6 +1,7 @@
 // CSV Contact Matcher - PRODUCTION VERSION
 // Optimized for large datasets with timeout protection
 
+const { corsHeaders } = require('./lib/cors');
 const { google } = require('googleapis');
 
 // Normalize domain for fuzzy matching
@@ -267,12 +268,7 @@ exports.handler = async (event, context) => {
   // Set timeout to 25 seconds (Netlify functions have 26s limit)
   context.callbackWaitsForEmptyEventLoop = false;
   
-  // Add CORS headers
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
-  };
+  const headers = { ...corsHeaders(event), 'Content-Type': 'application/json' };
 
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };

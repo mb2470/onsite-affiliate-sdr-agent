@@ -6,11 +6,10 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
 );
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+const { corsHeaders } = require('./lib/cors');
+
+// Computed per-request in the handler; module-level so respond() can use it.
+let CORS_HEADERS = {};
 
 function respond(statusCode, body) {
   return { statusCode, headers: CORS_HEADERS, body: JSON.stringify(body) };
@@ -54,6 +53,8 @@ function buildRawMessage({ from, to, subject, body }) {
  *     campaign_name, campaign_id, lead_id }
  */
 exports.handler = async (event) => {
+  CORS_HEADERS = corsHeaders(event);
+
   // ── 1. Method gate ──────────────────────────────────────────────────────
   if (event.httpMethod === 'OPTIONS') {
     return respond(200, {});
