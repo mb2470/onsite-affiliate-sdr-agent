@@ -78,6 +78,14 @@ class ZohoMailService {
       );
     }
 
+    if (!data.access_token) {
+      throw new ZohoMailApiError(
+        'Zoho OAuth returned 200 but no access_token in response',
+        200,
+        data
+      );
+    }
+
     this._accessToken = data.access_token;
     this._tokenExpiresAt = Date.now() + (data.expires_in || 3600) * 1000;
     return this._accessToken;
@@ -158,22 +166,35 @@ class ZohoMailService {
   // ── Connection Test ─────────────────────────────────────────────────────
 
   async testConnection() {
+    // Step 1: Refresh the access token
+    let tokenOk = false;
     try {
       await this._ensureAccessToken();
+      tokenOk = true;
     } catch (err) {
-      return { valid: false, error: err.message };
+      return {
+        valid: false,
+        error: err.message,
+        details: err.responseBody || null,
+        debug: { step: 'token_refresh', tokenOk: false },
+      };
     }
 
-    // Use /domains endpoint — it matches the ZohoMail.organization.domains.ALL
-    // scope that users are instructed to create. The base /api/organization/{zoid}
-    // endpoint requires a broader scope and is for child-org lookups.
+    // Step 2: Use /domains endpoint — it matches the ZohoMail.organization.domains.ALL
+    // scope that users are instructed to create.
     try {
       const data = await this._request('GET', `/api/organization/${this.orgId}/domains`);
       const domains = data?.data?.map(d => d.domainName) || [];
       return { valid: true, domains };
     } catch (err) {
-      // Token refresh succeeded but org endpoint failed — likely wrong ZOID.
-      // Verify by calling an endpoint that doesn't need ZOID.
+      const domainErr = {
+        status: err.statusCode,
+        body: err.responseBody || null,
+        url: `/api/organization/${this.orgId}/domains`,
+      };
+
+      // Step 3: If the domains call failed, try an endpoint that doesn't need ZOID
+      // to determine if the issue is the token or the ZOID.
       if (err.statusCode === 401 || err.statusCode === 403 || err.statusCode === 404) {
         try {
           await this._request('GET', '/api/accounts');
@@ -183,13 +204,30 @@ class ZohoMailService {
             error: `OAuth credentials are valid, but Organization ID "${this.orgId}" was rejected by Zoho (HTTP ${err.statusCode}). `
               + 'The ZOID is not your User ID — find it in the Zoho Mail Admin Console URL (mail.zoho.com).',
             auth_ok: true,
+            debug: { step: 'zoid_wrong', tokenOk, domainErr },
           };
-        } catch {
-          // Both failed — token itself may be bad or scopes are insufficient
-          return { valid: false, error: err.message };
+        } catch (acctErr) {
+          // Both failed — token scopes may be insufficient
+          return {
+            valid: false,
+            error: `Zoho rejected both API calls (HTTP ${err.statusCode}). `
+              + 'Your refresh token may lack the required scopes. '
+              + 'Re-generate it with scopes: ZohoMail.organization.domains.ALL,ZohoMail.organization.accounts.ALL',
+            debug: {
+              step: 'both_failed',
+              tokenOk,
+              domainErr,
+              accountsErr: { status: acctErr.statusCode, body: acctErr.responseBody || null },
+            },
+          };
         }
       }
-      return { valid: false, error: err.message };
+      return {
+        valid: false,
+        error: err.message,
+        details: err.responseBody || null,
+        debug: { step: 'domains_call', tokenOk, domainErr },
+      };
     }
   }
 
