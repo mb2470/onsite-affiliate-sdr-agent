@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import DOMPurify from 'dompurify';
 import { supabase } from './supabaseClient';
 
 // ── API helper ──────────────────────────────────────────────────────────────
@@ -12,40 +13,6 @@ async function api(fn, body) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
-}
-
-function sanitizeHtml(html) {
-  if (!html || typeof html !== 'string') return '';
-
-  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
-    return html;
-  }
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-  const blockedTags = ['script', 'iframe', 'object', 'embed', 'form', 'link', 'meta', 'style'];
-
-  blockedTags.forEach((tag) => {
-    doc.querySelectorAll(tag).forEach((node) => node.remove());
-  });
-
-  doc.querySelectorAll('*').forEach((node) => {
-    [...node.attributes].forEach((attr) => {
-      const name = attr.name.toLowerCase();
-      const value = attr.value?.trim().toLowerCase() || '';
-
-      if (name.startsWith('on')) {
-        node.removeAttribute(attr.name);
-        return;
-      }
-
-      if ((name === 'href' || name === 'src' || name === 'xlink:href') && value.startsWith('javascript:')) {
-        node.removeAttribute(attr.name);
-      }
-    });
-  });
-
-  return doc.body.innerHTML;
 }
 
 function getDkimRecords(domain) {
@@ -317,6 +284,9 @@ function DomainsTab({ orgId }) {
   const [searching, setSearching] = useState(false);
   const [purchasing, setPurchasing] = useState(null);
   const [provisioning, setProvisioning] = useState(null);
+  const [dnsSetupDomain, setDnsSetupDomain] = useState(null);
+  const [dkimSelector, setDkimSelector] = useState('zoho');
+  const [dkimValue, setDkimValue] = useState('');
   const [verifying, setVerifying] = useState(null);
   const [expandedDomain, setExpandedDomain] = useState(null);
   const [domainStatus, setDomainStatus] = useState(null);
@@ -362,25 +332,41 @@ function DomainsTab({ orgId }) {
     setPurchasing(null);
   };
 
-  const handleProvision = async (domain) => {
-    const dkimRecords = getDkimRecords(domain);
-    setProvisioning(domain.id);
+  const handleProvision = async (domainId) => {
+    const domainRow = domains.find(d => d.id === domainId);
+    const domainName = domainRow?.domain || '';
+
+    // Build DKIM records: prefer manual input, fall back to stored domain data
+    let dkimRecords;
+    if (dkimValue.trim()) {
+      dkimRecords = [{
+        type: 'TXT',
+        name: `${dkimSelector.trim()}._domainkey.${domainName}`,
+        content: dkimValue.trim(),
+      }];
+    } else {
+      dkimRecords = getDkimRecords(domainRow);
+    }
+
+    if (dkimRecords.length === 0) {
+      setMsg({ type: 'error', text: 'DKIM value is required. Copy it from your email provider (e.g. Zoho Admin > Email Authentication > DKIM).' });
+      return;
+    }
+
+    setProvisioning(domainId);
     try {
       const data = await api('cloudflare-domains', {
-        org_id: orgId,
-        action: 'provision-dns',
-        domain_id: domain.id,
-        provider: {
-          dkimRecords,
-        },
+        org_id: orgId, action: 'provision-dns', domain_id: domainId,
+        provider: { dkimRecords },
       });
       if (data.results?.errors?.length) {
-        setMsg({ type: 'error', text: `DNS provisioned with ${data.results.errors.length} error(s)` });
-      } else if (dkimRecords.length === 0) {
-        setMsg({ type: 'error', text: 'DNS provisioned, but no DKIM record was supplied. Add DKIM data and retry setup before verifying.' });
+        setMsg({ type: 'error', text: `DNS provisioned with ${data.results.errors.length} error(s). Check DKIM value.` });
       } else {
         setMsg({ type: 'success', text: 'DNS records provisioned (MX, SPF, DKIM, DMARC).' });
       }
+      setDnsSetupDomain(null);
+      setDkimSelector('zoho');
+      setDkimValue('');
       await load();
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
@@ -477,7 +463,7 @@ function DomainsTab({ orgId }) {
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 {d.status === 'purchased' && (
-                  <button style={btnSecondary} onClick={e => { e.stopPropagation(); handleProvision(d); }} disabled={provisioning === d.id}>
+                  <button style={btnSecondary} onClick={e => { e.stopPropagation(); setDnsSetupDomain(dnsSetupDomain === d.id ? null : d.id); }} disabled={provisioning === d.id}>
                     {provisioning === d.id ? 'Provisioning...' : 'Setup DNS'}
                   </button>
                 )}
@@ -489,6 +475,34 @@ function DomainsTab({ orgId }) {
                 <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '18px' }}>{expandedDomain === d.id ? '\u25B2' : '\u25BC'}</span>
               </div>
             </div>
+            {/* DNS Setup Panel with DKIM input */}
+            {dnsSetupDomain === d.id && (
+              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>DKIM Configuration</h4>
+                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', margin: '0 0 12px', lineHeight: 1.5 }}>
+                  MX, SPF, and DMARC records will be auto-configured. Provide your DKIM record from your email provider (e.g. Zoho Admin &gt; Email Authentication &gt; DKIM).
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={labelStyle}>DKIM Selector</label>
+                    <input style={inputStyle} placeholder="zoho" value={dkimSelector} onChange={e => setDkimSelector(e.target.value)} />
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '4px' }}>
+                      Creates: {dkimSelector || 'zoho'}._domainkey.{d.domain}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>DKIM TXT Value</label>
+                    <input style={inputStyle} placeholder="v=DKIM1; k=rsa; p=MIGfMA0GCS..." value={dkimValue} onChange={e => setDkimValue(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <button style={btnSecondary} onClick={() => { setDnsSetupDomain(null); setDkimValue(''); setDkimSelector('zoho'); }}>Cancel</button>
+                  <button style={btnPrimary} onClick={() => handleProvision(d.id)} disabled={provisioning === d.id}>
+                    {provisioning === d.id ? 'Provisioning...' : 'Provision All DNS Records'}
+                  </button>
+                </div>
+              </div>
+            )}
             {expandedDomain === d.id && domainStatus && (
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 {domainStatus.status && (
@@ -955,7 +969,7 @@ function InboxTab({ orgId }) {
                   </div>
                   <div style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '8px', padding: '16px', fontSize: '13px', lineHeight: 1.7, color: 'rgba(255,255,255,0.7)' }}>
                     {detail.body_html ? (
-                      <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(detail.body_html) }} />
+                      <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(detail.body_html, { ALLOWED_TAGS: ['p', 'br', 'b', 'i', 'em', 'strong', 'a', 'ul', 'ol', 'li', 'div', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'img', 'hr'], ALLOWED_ATTR: ['href', 'target', 'rel', 'src', 'alt', 'width', 'height', 'style', 'class'], ALLOW_DATA_ATTR: false }) }} />
                     ) : (
                       <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{detail.body_text || '(no body)'}</pre>
                     )}
