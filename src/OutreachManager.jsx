@@ -11,7 +11,11 @@ async function api(fn, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const msg = data.error || `Request failed (${res.status})`;
+    const hint = data.hint ? ` — ${data.hint}` : '';
+    throw new Error(`${msg}${hint}`);
+  }
   return data;
 }
 
@@ -180,8 +184,8 @@ function SettingsTab({ orgId }) {
   return (
     <div>
       {msg && (
-        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
-          <span style={{ color: msg.type === 'error' ? '#f87171' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
+        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : msg.type === 'warning' ? 'rgba(250,204,21,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : msg.type === 'warning' ? 'rgba(250,204,21,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
+          <span style={{ color: msg.type === 'error' ? '#f87171' : msg.type === 'warning' ? '#facc15' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
         </div>
       )}
 
@@ -350,6 +354,9 @@ function DomainsTab({ orgId }) {
     try {
       const data = await api('cloudflare-domains', { org_id: orgId, action: 'search', query: searchQuery.trim() });
       setSearchResults(data.domains || []);
+      if (data.warning) {
+        setMsg({ type: 'warning', text: data.warning });
+      }
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     }
@@ -497,8 +504,8 @@ function DomainsTab({ orgId }) {
   return (
     <div>
       {msg && (
-        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
-          <span style={{ color: msg.type === 'error' ? '#f87171' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
+        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : msg.type === 'warning' ? 'rgba(250,204,21,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : msg.type === 'warning' ? 'rgba(250,204,21,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
+          <span style={{ color: msg.type === 'error' ? '#f87171' : msg.type === 'warning' ? '#facc15' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
           <button onClick={() => setMsg(null)} style={{ float: 'right', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>x</button>
         </div>
       )}
@@ -792,8 +799,8 @@ function AccountsTab({ orgId }) {
   return (
     <div>
       {msg && (
-        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
-          <span style={{ color: msg.type === 'error' ? '#f87171' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
+        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : msg.type === 'warning' ? 'rgba(250,204,21,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : msg.type === 'warning' ? 'rgba(250,204,21,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
+          <span style={{ color: msg.type === 'error' ? '#f87171' : msg.type === 'warning' ? '#facc15' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
           <button onClick={() => setMsg(null)} style={{ float: 'right', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>x</button>
         </div>
       )}
@@ -946,8 +953,8 @@ function CampaignsTab({ orgId }) {
   return (
     <div>
       {msg && (
-        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
-          <span style={{ color: msg.type === 'error' ? '#f87171' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
+        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : msg.type === 'warning' ? 'rgba(250,204,21,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : msg.type === 'warning' ? 'rgba(250,204,21,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
+          <span style={{ color: msg.type === 'error' ? '#f87171' : msg.type === 'warning' ? '#facc15' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
           <button onClick={() => setMsg(null)} style={{ float: 'right', background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer' }}>x</button>
         </div>
       )}
@@ -1091,8 +1098,8 @@ function InboxTab({ orgId }) {
   return (
     <div>
       {msg && (
-        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
-          <span style={{ color: msg.type === 'error' ? '#f87171' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
+        <div style={{ ...cardStyle, borderColor: msg.type === 'error' ? 'rgba(248,113,113,0.3)' : msg.type === 'warning' ? 'rgba(250,204,21,0.3)' : 'rgba(74,222,128,0.3)', background: msg.type === 'error' ? 'rgba(248,113,113,0.06)' : msg.type === 'warning' ? 'rgba(250,204,21,0.06)' : 'rgba(74,222,128,0.06)', marginBottom: '20px' }}>
+          <span style={{ color: msg.type === 'error' ? '#f87171' : msg.type === 'warning' ? '#facc15' : '#4ade80', fontSize: '14px' }}>{msg.text}</span>
         </div>
       )}
 
