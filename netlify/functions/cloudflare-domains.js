@@ -617,6 +617,11 @@ async function handleVerifyZoho(orgId, settings, body) {
       zoho_verified_at: verified ? new Date().toISOString() : null,
     };
 
+    // If Zoho returned a failure reason, store it for debugging
+    if (!verified && result?.data) {
+      updatedMetadata.zoho_verify_error = result.data.verificationCode || result.data.error || null;
+    }
+
     await supabase
       .from('email_domains')
       .update({ metadata: updatedMetadata })
@@ -632,13 +637,47 @@ async function handleVerifyZoho(orgId, settings, body) {
       domain: domainRow.domain,
       message: verified
         ? 'Domain verified with Zoho Mail.'
-        : 'Zoho verification pending. Ensure the TXT record has propagated and try again.',
+        : `Zoho verification pending. ${result?.data?.verificationCode || result?.data?.error || 'Ensure the TXT record has propagated and try again.'}`,
     });
   } catch (err) {
-    console.error('Zoho verifyDomain error:', err.message, err.responseBody || '');
+    console.error('Zoho verifyDomain error:', err.message, JSON.stringify(err.responseBody || ''));
+    const zohoBody = err.responseBody || {};
+    const zohoMsg = typeof zohoBody === 'object'
+      ? (zohoBody.data?.message || zohoBody.message || zohoBody.data?.error || JSON.stringify(zohoBody))
+      : String(zohoBody);
+
+    // If Zoho returns 400 (domain not found/invalid), try re-adding the domain
+    if (err.statusCode === 400 || err.statusCode === 404) {
+      try {
+        console.log(`Zoho verify returned ${err.statusCode}, re-adding domain ${domainRow.domain}...`);
+        const addResult = await zoho.addDomain(domainRow.domain);
+        const zohoData = addResult?.data || {};
+
+        // Update stored verification codes
+        meta.zoho_added = true;
+        meta.zoho_txt_verification = zohoData.CNAMEVerificationCode || zohoData.HTMLVerificationCode || null;
+        meta.zoho_cname_verification = zohoData.CNAMEVerificationCode || null;
+        await supabase
+          .from('email_domains')
+          .update({ metadata: meta })
+          .eq('id', domain_id);
+
+        return respond(200, {
+          success: false,
+          zoho_verified: false,
+          domain: domainRow.domain,
+          message: 'Domain re-added to Zoho. TXT verification record updated — click Verify again after DNS propagates.',
+          verification_code: meta.zoho_txt_verification,
+        });
+      } catch (readdErr) {
+        // Re-add also failed — surface both errors
+        console.error('Zoho re-add also failed:', readdErr.message, readdErr.responseBody || '');
+      }
+    }
+
     const status = err.statusCode || 502;
     return respond(status, {
-      error: `Zoho verification failed: ${err.message}`,
+      error: `Zoho verification failed (HTTP ${err.statusCode || '?'}): ${zohoMsg}`,
       details: err.responseBody || null,
     });
   }
