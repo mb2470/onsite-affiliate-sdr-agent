@@ -341,6 +341,7 @@ async function handleCreateAccount(orgId, body, settings) {
             zoho_account_id: zohoResult.accountId || null,
             zoho_zuid: zohoResult.zuid || null,
             zoho_imap_enabled: zohoResult.imapEnabled,
+            zoho_send_mail_configured: zohoResult.sendMailConfigured,
             zoho_forwarding_configured: zohoResult.forwardingConfigured,
             zoho_forward_to: forwardTo,
           },
@@ -348,7 +349,7 @@ async function handleCreateAccount(orgId, body, settings) {
         .eq('id', account.id);
 
       await logActivity(orgId, 'zoho_mailbox_created',
-        `Auto-provisioned Zoho mailbox for ${emailAddress} (IMAP: ${zohoResult.imapEnabled}, Fwd: ${zohoResult.forwardingConfigured})`
+        `Auto-provisioned Zoho mailbox for ${emailAddress} (IMAP: ${zohoResult.imapEnabled}, Send: ${zohoResult.sendMailConfigured}, Fwd: ${zohoResult.forwardingConfigured})`
       );
     } catch (zohoErr) {
       console.error('Auto-provision Zoho mailbox failed (non-blocking):', zohoErr.message);

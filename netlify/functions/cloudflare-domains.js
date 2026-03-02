@@ -712,6 +712,25 @@ async function handleVerifyZoho(orgId, settings, body) {
       updatedMetadata.zoho_verify_error = result.data.verificationCode || result.data.error || null;
     }
 
+    // Auto-enable mail hosting after successful verification (Step 3)
+    let mailHostingEnabled = false;
+    if (verified && !meta.zoho_mail_hosting_enabled) {
+      try {
+        await zoho.enableMailHosting(domainRow.domain);
+        updatedMetadata.zoho_mail_hosting_enabled = true;
+        updatedMetadata.zoho_mail_hosting_enabled_at = new Date().toISOString();
+        mailHostingEnabled = true;
+        await logActivity(orgId, 'zoho_mail_hosting_enabled', `Enabled Zoho mail hosting for ${domainRow.domain}`);
+      } catch (hostingErr) {
+        console.error('Failed to enable Zoho mail hosting (non-blocking):', hostingErr.message, hostingErr.responseBody || '');
+        updatedMetadata.zoho_mail_hosting_error = hostingErr.message;
+        await logActivity(orgId, 'zoho_mail_hosting_failed',
+          `Failed to enable mail hosting for ${domainRow.domain}: ${hostingErr.message}`, 'warning');
+      }
+    } else if (meta.zoho_mail_hosting_enabled) {
+      mailHostingEnabled = true;
+    }
+
     await supabase
       .from('email_domains')
       .update({ metadata: updatedMetadata })
@@ -724,9 +743,10 @@ async function handleVerifyZoho(orgId, settings, body) {
     return respond(200, {
       success: true,
       zoho_verified: verified,
+      mail_hosting_enabled: mailHostingEnabled,
       domain: domainRow.domain,
       message: verified
-        ? 'Domain verified with Zoho Mail.'
+        ? `Domain verified with Zoho Mail.${mailHostingEnabled ? ' Mail hosting enabled.' : ' Warning: mail hosting could not be enabled — retry or enable manually.'}`
         : `Zoho verification pending. ${result?.data?.verificationCode || result?.data?.error || 'Ensure the TXT record has propagated and try again.'}`,
     });
   } catch (err) {
