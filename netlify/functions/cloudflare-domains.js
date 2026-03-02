@@ -156,6 +156,7 @@ async function handleSearch(orgId, settings, body) {
 
   // Check each domain in parallel — collect results and errors separately
   let authError = null;
+  let transportFailures = 0;
   const results = await Promise.allSettled(
     domainsToCheck.map(async (domainName) => {
       const url = `${CF_API_BASE}/accounts/${accountId}/registrar/domains/${encodeURIComponent(domainName)}`;
@@ -164,6 +165,7 @@ async function handleSearch(orgId, settings, body) {
         res = await fetchWithTimeout(url, { headers: cfHeaders(settings.cloudflare_api_token) });
       } catch (fetchErr) {
         console.error(`Fetch failed for ${domainName}:`, fetchErr.message);
+        transportFailures++;
         return null; // skip this TLD on network/timeout errors
       }
 
@@ -172,6 +174,7 @@ async function handleSearch(orgId, settings, body) {
         data = await res.json();
       } catch {
         console.error(`Invalid JSON from Cloudflare for ${domainName}, HTTP ${res.status}`);
+        transportFailures++;
         return null;
       }
 
@@ -206,10 +209,22 @@ async function handleSearch(orgId, settings, body) {
     });
   }
 
-  // If we got some results but also had an auth error, return partial results with a warning
+  // If ALL checks failed due to transport errors (Cloudflare unreachable), surface that
+  if (domains.length === 0 && transportFailures === domainsToCheck.length) {
+    return respond(502, {
+      error: 'Could not reach Cloudflare API for any domain check. The service may be temporarily unavailable.',
+      hint: 'Try again in a few moments. If the problem persists, check your network or Cloudflare status.',
+    });
+  }
+
+  // Build warnings for partial failures
+  const warnings = [];
+  if (authError) warnings.push(`Some TLDs could not be checked: ${authError}`);
+  if (transportFailures > 0 && domains.length > 0) warnings.push(`${transportFailures} TLD(s) could not be reached`);
+
   return respond(200, {
     domains,
-    ...(authError ? { warning: `Some TLDs could not be checked: ${authError}` } : {}),
+    ...(warnings.length ? { warning: warnings.join('. ') } : {}),
   });
 }
 
@@ -924,7 +939,8 @@ exports.handler = async (event) => {
     if (error.message && error.message.includes('timed out')) {
       return respond(504, { error: error.message });
     }
-    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.cause?.code === 'ECONNREFUSED') {
+    const errCode = error.code || error.cause?.code;
+    if (errCode === 'ECONNREFUSED' || errCode === 'ENOTFOUND' || errCode === 'ECONNRESET') {
       return respond(502, { error: 'Could not reach Cloudflare API. Please try again.' });
     }
 
