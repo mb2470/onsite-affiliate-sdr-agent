@@ -32,6 +32,21 @@ async function getCachedApolloStatus(email) {
 }
 
 /**
+ * Check whether this email has previously bounced.
+ * We treat bounced contacts as permanently suppressed.
+ */
+async function isPermanentlySuppressed(email) {
+  const { data } = await supabase
+    .from('activity_log')
+    .select('id')
+    .eq('activity_type', 'email_bounced')
+    .ilike('summary', `Bounced: ${email} %`)
+    .limit(1);
+
+  return !!(data && data.length > 0);
+}
+
+/**
  * Check if a contact already has a valid (non-expired) ELV verification cached
  * in the contacts table. Returns the cached result or null.
  */
@@ -176,6 +191,15 @@ exports.handler = async (event) => {
     const preVerified = [];
 
     for (const email of allEmails) {
+      if (await isPermanentlySuppressed(email)) {
+        blocked.push({ email, status: 'previously_bounced_suppressed' });
+        console.log(`🚫 Blocked (Suppressed bounce): ${email}`);
+
+        // Keep contact_database clean even if this address got rediscovered.
+        await supabase.from('contact_database').delete().eq('email', email);
+        continue;
+      }
+
       const cachedApollo = await getCachedApolloStatus(email);
 
       if (cachedApollo) {

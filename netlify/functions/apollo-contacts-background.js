@@ -50,6 +50,18 @@ async function searchApollo(domain) {
   return await response.json();
 }
 
+
+async function isPermanentlySuppressed(email) {
+  const { data } = await supabase
+    .from('activity_log')
+    .select('id')
+    .eq('activity_type', 'email_bounced')
+    .ilike('summary', `Bounced: ${email} %`)
+    .limit(1);
+
+  return !!(data && data.length > 0);
+}
+
 async function enrichPeople(personIds) {
   const response = await fetch('https://api.apollo.io/api/v1/people/bulk_match', {
     method: 'POST',
@@ -169,11 +181,19 @@ exports.handler = async (event, context) => {
 
           allInvalid = false;
 
+          const normalizedEmail = match.email.toLowerCase();
+
+          // Never re-add a contact that previously bounced.
+          if (await isPermanentlySuppressed(normalizedEmail)) {
+            console.log(`  🚫 Skipping suppressed bounced contact: ${normalizedEmail}`);
+            continue;
+          }
+
           // Check if email already exists
           const { data: existing } = await supabase
             .from('contact_database')
             .select('id')
-            .eq('email', match.email.toLowerCase())
+            .eq('email', normalizedEmail)
             .limit(1);
 
           if (existing && existing.length > 0) {
@@ -186,7 +206,7 @@ exports.handler = async (event, context) => {
           const { error: insertErr } = await supabase.from('contact_database').insert({
             first_name: match.first_name || null,
             last_name: match.last_name || null,
-            email: match.email.toLowerCase(),
+            email: normalizedEmail,
             title: match.title || null,
             website: domain,
             account_name: match.organization?.name || domain,
