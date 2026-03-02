@@ -40,6 +40,20 @@ async function getCachedApolloStatus(email) {
 }
 
 /**
+ * Check if an email previously bounced and is permanently suppressed.
+ */
+async function isPermanentlySuppressed(email) {
+  const { data } = await supabase
+    .from('activity_log')
+    .select('id')
+    .eq('activity_type', 'email_bounced')
+    .ilike('summary', `Bounced: ${email} %`)
+    .limit(1);
+
+  return !!(data && data.length > 0);
+}
+
+/**
  * Check cached ELV status from contacts table.
  */
 async function getCachedElvStatus(email) {
@@ -112,6 +126,11 @@ exports.handler = async (event) => {
     const results = [];
 
     for (const email of emails) {
+      if (await isPermanentlySuppressed(email)) {
+        results.push({ email, status: 'previously_bounced_suppressed', safe: false, source: 'suppression' });
+        continue;
+      }
+
       // Stage 1: Check cached Apollo status
       const apollo = await getCachedApolloStatus(email);
 
