@@ -334,6 +334,10 @@ function DomainsTab({ orgId }) {
   const [domainStatus, setDomainStatus] = useState(null);
   const [msg, setMsg] = useState(null);
 
+  const hasRequiredDns = (domain) => !!(domain?.mx_verified && domain?.spf_verified && domain?.dkim_verified && domain?.dmarc_verified);
+  const isZohoVerified = (domain) => domain?.metadata?.zoho_verification_status === true;
+  const isDomainActive = (domain) => hasRequiredDns(domain) && isZohoVerified(domain);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -426,7 +430,10 @@ function DomainsTab({ orgId }) {
       const data = await api('cloudflare-domains', { org_id: orgId, action: 'verify-dns', domain_id: domainId });
       setDomainStatus(data);
       if (data.all_verified) {
-        setMsg({ type: 'success', text: 'All DNS records verified!' });
+        const statusNote = data.zoho_verified
+          ? 'Domain is fully active (DNS complete + Zoho verified).'
+          : 'DNS is complete. Final step: verify the domain in Zoho.';
+        setMsg({ type: data.zoho_verified ? 'success' : 'warning', text: statusNote });
       } else {
         setMsg({ type: 'error', text: 'Some DNS records are not yet propagated.' });
       }
@@ -475,9 +482,10 @@ function DomainsTab({ orgId }) {
         org_id: orgId, action: 'verify-zoho', domain_id: domainId,
       });
       if (data.zoho_verified) {
-        setMsg({ type: 'success', text: `Zoho domain verified: ${data.domain}` });
+        const fullActive = data.verification?.mx && data.verification?.spf && data.verification?.dkim;
+        setMsg({ type: 'success', text: fullActive ? `Zoho verified: ${data.domain}. Domain is now active.` : `Zoho domain verified: ${data.domain}` });
       } else {
-        setMsg({ type: 'error', text: data.message || 'Zoho verification pending. Ensure TXT record has propagated.' });
+        setMsg({ type: 'warning', text: data.message || 'Zoho verification pending. Ensure TXT record has propagated.' });
       }
       await load();
     } catch (e) {
@@ -562,9 +570,12 @@ function DomainsTab({ orgId }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => handleExpand(d)}>
               <div>
                 <span style={{ fontWeight: 600, fontSize: '15px' }}>{d.domain}</span>
-                <span style={{ marginLeft: '12px' }}><StatusBadge status={d.status} /></span>
+                <span style={{ marginLeft: '12px' }}><StatusBadge status={isDomainActive(d) ? 'active' : d.status} /></span>
                 <span style={{ marginLeft: '12px', color: 'rgba(255,255,255,0.35)', fontSize: '12px' }}>
                   {d.account_count || 0} account{d.account_count !== 1 ? 's' : ''}
+                </span>
+                <span style={{ marginLeft: '10px', ...badgeStyle(hasRequiredDns(d) ? '#4ade80' : '#facc15') }}>
+                  {hasRequiredDns(d) ? 'DNS complete' : 'DNS incomplete'}
                 </span>
                 {d.metadata?.forward_to_email && (
                   <span style={{ marginLeft: '10px', color: 'rgba(144,21,237,0.7)', fontSize: '12px' }}>
@@ -573,18 +584,18 @@ function DomainsTab({ orgId }) {
                 )}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                {d.status === 'purchased' && (
+                {!hasRequiredDns(d) && (
                   <button style={btnSecondary} onClick={e => { e.stopPropagation(); setDnsSetupDomain(dnsSetupDomain === d.id ? null : d.id); }} disabled={provisioning === d.id}>
                     {provisioning === d.id ? 'Provisioning...' : 'Setup DNS'}
                   </button>
                 )}
-                {(d.status === 'dns_pending' || d.status === 'provisioning') && (
+                {!hasRequiredDns(d) && (
                   <button style={btnSecondary} onClick={e => { e.stopPropagation(); handleVerify(d.id); }} disabled={verifying === d.id}>
                     {verifying === d.id ? 'Verifying...' : 'Verify DNS'}
                   </button>
                 )}
-                {(d.status === 'dns_pending' || d.status === 'active') && (() => {
-                  const zohoVerified = d.metadata?.zoho_verification_status === true;
+                {hasRequiredDns(d) && (() => {
+                  const zohoVerified = isZohoVerified(d);
                   const hasProvider = !!d.metadata?.forward_to_email;
                   const label = !hasProvider ? 'Configure Provider'
                     : zohoVerified ? 'Zoho Verified' : 'Zoho Unverified';
@@ -635,7 +646,7 @@ function DomainsTab({ orgId }) {
             )}
             {/* Email Provider Setup Panel */}
             {providerSetupDomain === d.id && (() => {
-              const zohoVerified = d.metadata?.zoho_verification_status === true;
+              const zohoVerified = isZohoVerified(d);
               return (
               <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Email Provider Configuration</h4>
@@ -716,8 +727,8 @@ function DomainsTab({ orgId }) {
                     ))}
                     <div style={{ textAlign: 'center', padding: '8px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px' }}>
                       <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase' }}>Zoho</div>
-                      <div style={{ fontSize: '13px', fontWeight: 600, color: d.metadata?.zoho_verification_status === true ? '#4ade80' : '#fb923c', marginTop: '4px' }}>
-                        {d.metadata?.zoho_verification_status === true ? 'Verified' : 'Unverified'}
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: isZohoVerified(d) ? '#4ade80' : '#fb923c', marginTop: '4px' }}>
+                        {isZohoVerified(d) ? 'Verified' : 'Unverified'}
                       </div>
                     </div>
                   </div>

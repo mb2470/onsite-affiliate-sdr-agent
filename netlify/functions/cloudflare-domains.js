@@ -157,6 +157,68 @@ function isCloudflareAuthError(httpStatus, errors) {
   return (errors || []).some(e => authCodes.has(e.code));
 }
 
+
+function normalizeDnsName(name) {
+  return String(name || '').replace(/\.$/, '').toLowerCase();
+}
+
+async function upsertDnsRecord(zoneId, apiToken, record) {
+  const targetName = normalizeDnsName(record.name);
+  const query = new URLSearchParams({
+    type: record.type,
+    name: targetName,
+    per_page: '100',
+  });
+
+  const listRes = await fetchWithTimeout(
+    `${CF_API_BASE}/zones/${zoneId}/dns_records?${query.toString()}`,
+    { headers: cfHeaders(apiToken) }
+  );
+  const listData = await listRes.json();
+
+  if (!listData.success) {
+    return { ok: false, errors: listData.errors || [{ message: 'Failed to query existing DNS records.' }] };
+  }
+
+  const existingRecords = listData.result || [];
+  const match = existingRecords.find((r) => {
+    if (normalizeDnsName(r.name) !== targetName) return false;
+    // MX can have multiple records on same name; match by priority so updates are deterministic.
+    if (record.type === 'MX') return Number(r.priority || 0) === Number(record.priority || 0);
+    // TXT/CNAME/etc should be unique by type+name in our provisioning flow.
+    return true;
+  });
+
+  if (match) {
+    const updateRes = await fetchWithTimeout(
+      `${CF_API_BASE}/zones/${zoneId}/dns_records/${match.id}`,
+      {
+        method: 'PUT',
+        headers: cfHeaders(apiToken),
+        body: JSON.stringify({
+          ...record,
+          proxied: false,
+        }),
+      }
+    );
+    const updateData = await updateRes.json();
+    if (!updateData.success) return { ok: false, errors: updateData.errors || [{ message: 'Failed to update DNS record.' }] };
+    return { ok: true, record: updateData.result, operation: 'updated' };
+  }
+
+  const createRes = await fetchWithTimeout(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
+    method: 'POST',
+    headers: cfHeaders(apiToken),
+    body: JSON.stringify({
+      ...record,
+      proxied: false,
+    }),
+  });
+  const createData = await createRes.json();
+  if (!createData.success) return { ok: false, errors: createData.errors || [{ message: 'Failed to create DNS record.' }] };
+  return { ok: true, record: createData.result, operation: 'created' };
+}
+
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 /**
@@ -500,17 +562,12 @@ async function handleProvisionDns(orgId, settings, body) {
 
   // Helper to create a DNS record
   async function createRecord(record) {
-    const res = await fetchWithTimeout(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
-      method: 'POST',
-      headers: cfHeaders(settings.cloudflare_api_token),
-      body: JSON.stringify(record),
-    });
-    const data = await res.json();
-    if (!data.success) {
-      results.errors.push({ record, errors: data.errors });
+    const upsert = await upsertDnsRecord(zoneId, settings.cloudflare_api_token, record);
+    if (!upsert.ok) {
+      results.errors.push({ record, errors: upsert.errors });
       return null;
     }
-    return data.result;
+    return upsert.record;
   }
 
   // MX records
@@ -633,7 +690,8 @@ async function handleVerifyDns(orgId, settings, body) {
   const hasDmarc = records.some(r => r.type === 'TXT' && r.name.startsWith('_dmarc.'));
 
   const allVerified = hasMx && hasSpf && hasDkim && hasDmarc;
-  const newStatus = allVerified ? 'active' : 'dns_pending';
+  const zohoVerified = domainRow.metadata?.zoho_verification_status === true;
+  const newStatus = allVerified && zohoVerified ? 'active' : 'dns_pending';
 
   // Update domain record
   await supabase
@@ -650,6 +708,7 @@ async function handleVerifyDns(orgId, settings, body) {
   return respond(200, {
     status: { mx: hasMx, spf: hasSpf, dkim: hasDkim, dmarc: hasDmarc },
     all_verified: allVerified,
+    zoho_verified: zohoVerified,
     domain_status: newStatus,
   });
 }
