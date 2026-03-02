@@ -241,7 +241,7 @@ async function handlePurchase(orgId, settings, body) {
             ...(domainRow.metadata || {}),
             zoho_added: true,
             zoho_verification_status: zohoData.verificationStatus || false,
-            zoho_txt_verification: zohoData.HTMLVerificationCode || null,
+            zoho_txt_verification: zohoData.CNAMEVerificationCode || zohoData.HTMLVerificationCode || null,
             zoho_cname_verification: zohoData.CNAMEVerificationCode || null,
           },
         })
@@ -557,14 +557,19 @@ async function handleVerifyZoho(orgId, settings, body) {
       const addResult = await zoho.addDomain(domainRow.domain);
       const zohoData = addResult?.data || {};
       meta.zoho_added = true;
-      meta.zoho_txt_verification = zohoData.HTMLVerificationCode || null;
+      meta.zoho_txt_verification = zohoData.CNAMEVerificationCode || zohoData.HTMLVerificationCode || null;
       meta.zoho_cname_verification = zohoData.CNAMEVerificationCode || null;
       await supabase
         .from('email_domains')
         .update({ metadata: meta })
         .eq('id', domain_id);
     } catch (err) {
-      return respond(500, { error: `Failed to add domain to Zoho: ${err.message}` });
+      console.error('Zoho addDomain error:', err.message, err.responseBody || '');
+      const status = err.statusCode || 502;
+      return respond(status, {
+        error: `Failed to add domain to Zoho: ${err.message}`,
+        details: err.responseBody || null,
+      });
     }
   }
 
@@ -630,7 +635,12 @@ async function handleVerifyZoho(orgId, settings, body) {
         : 'Zoho verification pending. Ensure the TXT record has propagated and try again.',
     });
   } catch (err) {
-    return respond(500, { error: `Zoho verification failed: ${err.message}` });
+    console.error('Zoho verifyDomain error:', err.message, err.responseBody || '');
+    const status = err.statusCode || 502;
+    return respond(status, {
+      error: `Zoho verification failed: ${err.message}`,
+      details: err.responseBody || null,
+    });
   }
 }
 
