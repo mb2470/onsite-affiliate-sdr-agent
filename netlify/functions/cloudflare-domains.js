@@ -130,7 +130,14 @@ async function handleSearch(orgId, settings, body) {
       const data = await res.json();
 
       if (!data.success) {
-        console.error(`CF domain check failed for ${domainName}:`, JSON.stringify(data.errors));
+        const errCodes = (data.errors || []).map(e => e.code);
+        // 1000-level = auth errors, 2000-level = permission errors
+        const isAuthError = errCodes.some(c => c >= 1000 && c < 3000) || res.status === 401 || res.status === 403;
+        if (isAuthError) {
+          const errMsg = (data.errors || []).map(e => e.message).join('; ');
+          throw new Error(`Cloudflare API error: ${errMsg || `HTTP ${res.status}`}`);
+        }
+        // Non-auth errors (e.g. unsupported TLD, domain not found) — skip this domain
         return null;
       }
 
@@ -143,6 +150,12 @@ async function handleSearch(orgId, settings, body) {
       };
     })
   );
+
+  // If any domain check threw an auth/API error, surface it
+  const apiError = results.find(r => r.status === 'rejected');
+  if (apiError) {
+    return respond(502, { error: apiError.reason.message });
+  }
 
   const domains = results
     .filter(r => r.status === 'fulfilled' && r.value !== null)
@@ -189,8 +202,22 @@ async function handlePurchase(orgId, settings, body) {
   );
   const domainData = await domainRes.json();
 
-  // If the domain isn't registered in their Cloudflare account, tell them to register first
-  if (!domainData.success || !domainData.result) {
+  // Distinguish auth/API errors from domain-not-found
+  if (!domainData.success) {
+    const errCodes = (domainData.errors || []).map(e => e.code);
+    const errMsg = (domainData.errors || []).map(e => e.message).join('; ');
+    const isAuthError = errCodes.some(c => c >= 1000 && c < 3000) || domainRes.status === 401 || domainRes.status === 403;
+    if (isAuthError) {
+      return respond(502, {
+        error: `Cloudflare API error: ${errMsg || `HTTP ${domainRes.status}`}. Check your API token permissions.`,
+      });
+    }
+    return respond(400, {
+      error: `Domain ${domain} not found in your Cloudflare account. Register it first at the Cloudflare Dashboard, then import it here.`,
+      dashboard_url: `https://dash.cloudflare.com/${accountId}/domains/register`,
+    });
+  }
+  if (!domainData.result) {
     return respond(400, {
       error: `Domain ${domain} not found in your Cloudflare account. Register it first at the Cloudflare Dashboard, then import it here.`,
       dashboard_url: `https://dash.cloudflare.com/${accountId}/domains/register`,
