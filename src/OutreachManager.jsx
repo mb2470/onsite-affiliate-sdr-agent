@@ -361,7 +361,7 @@ function DomainsTab({ orgId }) {
     try {
       const result = await api('cloudflare-domains', { org_id: orgId, action: 'purchase', domain });
       const zohoNote = result.zoho_added ? ' Domain auto-added to Zoho Mail.' : '';
-      setMsg({ type: 'success', text: `${domain} purchased successfully!${zohoNote}` });
+      setMsg({ type: 'success', text: `${domain} imported successfully!${zohoNote}` });
       setSearchResults(null);
       setSearchQuery('');
       await load();
@@ -503,32 +503,43 @@ function DomainsTab({ orgId }) {
         </div>
       )}
 
-      {/* Search & Purchase */}
+      {/* Search & Import */}
       <div style={cardStyle}>
-        <h3 style={{ margin: '0 0 12px', fontSize: '16px' }}>Search & Purchase Domain</h3>
+        <h3 style={{ margin: '0 0 12px', fontSize: '16px' }}>Search & Import Domain</h3>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <input style={{ ...inputStyle, flex: 1 }} placeholder="e.g. acmecorp" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
+          <input style={{ ...inputStyle, flex: 1 }} placeholder="e.g. acmecorp or acmecorp.com" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
           <button style={btnPrimary} onClick={handleSearch} disabled={searching}>
             {searching ? 'Searching...' : 'Search'}
           </button>
         </div>
+        <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '6px' }}>
+          Register domains at <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" style={{ color: 'rgba(144,21,237,0.7)' }}>Cloudflare Dashboard</a>, then import them here.
+        </div>
         {searchResults && (
           <div style={{ marginTop: '12px' }}>
             {searchResults.length === 0 ? (
-              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>No available domains found.</div>
+              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>No results found. Check the domain name and try again.</div>
             ) : (
               searchResults.map(d => (
                 <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
                   <div>
                     <span style={{ fontWeight: 600 }}>{d.name}</span>
-                    {d.available && <span style={{ marginLeft: '12px', color: '#4ade80', fontSize: '13px' }}>${d.price ?? '?'}/yr</span>}
-                    {!d.available && <span style={{ marginLeft: '12px', color: '#f87171', fontSize: '13px' }}>Unavailable</span>}
+                    {d.available && d.price != null && <span style={{ marginLeft: '12px', color: '#4ade80', fontSize: '13px' }}>${d.price}/yr</span>}
+                    {d.available && <span style={{ marginLeft: '12px', color: '#4ade80', fontSize: '13px' }}>Available</span>}
+                    {!d.available && <span style={{ marginLeft: '12px', color: '#f59e0b', fontSize: '13px' }}>Registered</span>}
                   </div>
-                  {d.available && (
-                    <button style={btnPrimary} onClick={() => handlePurchase(d.name)} disabled={purchasing === d.name}>
-                      {purchasing === d.name ? 'Purchasing...' : 'Buy'}
-                    </button>
-                  )}
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {!d.available && (
+                      <button style={btnPrimary} onClick={() => handlePurchase(d.name)} disabled={purchasing === d.name}>
+                        {purchasing === d.name ? 'Importing...' : 'Import'}
+                      </button>
+                    )}
+                    {d.available && (
+                      <a href={`https://dash.cloudflare.com`} target="_blank" rel="noopener noreferrer" style={{ ...btnPrimary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>
+                        Register
+                      </a>
+                    )}
+                  </div>
                 </div>
               ))
             )}
