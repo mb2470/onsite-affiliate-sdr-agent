@@ -2,8 +2,9 @@
  * ZohoMailService — Wrapper for the Zoho Mail Organization Admin API
  *
  * Handles OAuth token refresh and provides methods for:
- * - Domain management (add, verify, list)
+ * - Domain management (add, verify, list, enable mail hosting)
  * - User/mailbox creation
+ * - Send-mail details configuration (from-address authorization)
  * - Email forwarding configuration
  * - IMAP access enabling
  *
@@ -278,6 +279,17 @@ class ZohoMailService {
     });
   }
 
+  /**
+   * Enable email hosting for a verified domain.
+   * Must be called AFTER verifyDomain succeeds.
+   * https://www.zoho.com/mail/help/api/put-enable-hosting.html
+   */
+  async enableMailHosting(domainName) {
+    return this._request('PUT', `/api/organization/${this.orgId}/domains/${encodeURIComponent(domainName)}`, {
+      mode: 'enableMailHosting',
+    });
+  }
+
   // ── User / Mailbox Management ───────────────────────────────────────────
 
   async addUser({ emailAddress, password, firstName, lastName, displayName }) {
@@ -296,6 +308,25 @@ class ZohoMailService {
 
   async getUserDetails(accountId) {
     return this._request('GET', `/api/organization/${this.orgId}/accounts/${accountId}`);
+  }
+
+  // ── Send Mail Configuration ────────────────────────────────────────────
+
+  /**
+   * Configure send-mail (from-address) details on a mailbox account.
+   * Sets the account's from-address and display name so Zoho knows
+   * this account is authorized to send as that address.
+   * https://www.zoho.com/mail/help/api/put-to-add-send-mail-details.html
+   */
+  async addSendMailDetails(accountId, zuid, { fromAddress, displayName }) {
+    return this._request('PUT', `/api/organization/${this.orgId}/accounts/${accountId}`, {
+      zuid,
+      mode: 'addSendMailDetails',
+      sendMailDetails: [{
+        fromAddress,
+        displayName: displayName || fromAddress.split('@')[0],
+      }],
+    });
   }
 
   // ── Email Forwarding ───────────────────────────────────────────────────
@@ -339,9 +370,13 @@ class ZohoMailService {
    * Provision a complete mailbox:
    * 1. Create the user account
    * 2. Enable IMAP access
-   * 3. Set up email forwarding (if forwardTo provided)
+   * 3. Configure send-mail details (from-address)
+   * 4. Set up email forwarding (if forwardTo provided)
    *
-   * Returns { user, imapEnabled, forwardingConfigured }
+   * Note: enableMailHosting must be called on the domain BEFORE provisioning
+   * mailboxes. That step is handled by handleVerifyZoho in cloudflare-domains.js.
+   *
+   * Returns { user, accountId, zuid, imapEnabled, sendMailConfigured, forwardingConfigured }
    */
   async provisionMailbox({ emailAddress, password, firstName, lastName, displayName, forwardTo }) {
     // Step 1: Create user
@@ -373,7 +408,19 @@ class ZohoMailService {
       console.error('Failed to enable IMAP for new mailbox:', err.message);
     }
 
-    // Step 3: Configure forwarding
+    // Step 3: Configure send-mail details (from-address authorization)
+    let sendMailConfigured = false;
+    try {
+      await this.addSendMailDetails(accountId, zuid, {
+        fromAddress: emailAddress,
+        displayName: displayName || firstName || emailAddress.split('@')[0],
+      });
+      sendMailConfigured = true;
+    } catch (err) {
+      console.error('Failed to configure send-mail details for new mailbox:', err.message);
+    }
+
+    // Step 4: Configure forwarding
     let forwardingConfigured = false;
     if (forwardTo) {
       try {
@@ -390,6 +437,7 @@ class ZohoMailService {
       accountId,
       zuid,
       imapEnabled,
+      sendMailConfigured,
       forwardingConfigured,
     };
   }

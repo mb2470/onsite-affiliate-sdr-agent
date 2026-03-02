@@ -71,13 +71,43 @@ function getZohoClient(settings) {
   });
 }
 
+// ── Fetch with timeout ───────────────────────────────────────────────────────
+
+const FETCH_TIMEOUT_MS = 15000; // 15s — leaves headroom inside Netlify's 26s limit
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('Cloudflare API request timed out. Please try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Determine whether a Cloudflare error response represents an auth/permissions
+ * problem vs. a benign "unsupported TLD" or "domain not found" type error.
+ */
+function isCloudflareAuthError(httpStatus, errors) {
+  if (httpStatus === 401 || httpStatus === 403) return true;
+  const authCodes = new Set([6003, 6100, 6103, 9109, 10000]);
+  return (errors || []).some(e => authCodes.has(e.code));
+}
+
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 /**
  * test — Verify Cloudflare API token is valid
  */
 async function handleTest(orgId, settings) {
-  const res = await fetch(`${CF_API_BASE}/user/tokens/verify`, {
+  const res = await fetchWithTimeout(`${CF_API_BASE}/user/tokens/verify`, {
     headers: cfHeaders(settings.cloudflare_api_token),
   });
 
@@ -111,7 +141,9 @@ async function handleSearch(orgId, settings, body) {
 
   // Strip whitespace. If user entered a full domain (has a dot), check just that.
   // Otherwise, check the base name across popular TLDs.
-  const trimmed = query.trim().toLowerCase();
+  const trimmed = query.trim().toLowerCase().replace(/[^a-z0-9.\-]/g, '');
+  if (!trimmed) return respond(400, { error: 'Invalid search query.' });
+
   let domainsToCheck;
   if (trimmed.includes('.')) {
     domainsToCheck = [trimmed];
@@ -122,22 +154,36 @@ async function handleSearch(orgId, settings, body) {
     ];
   }
 
-  // Check each domain in parallel
+  // Check each domain in parallel — collect results and errors separately
+  let authError = null;
+  let transportFailures = 0;
   const results = await Promise.allSettled(
     domainsToCheck.map(async (domainName) => {
       const url = `${CF_API_BASE}/accounts/${accountId}/registrar/domains/${encodeURIComponent(domainName)}`;
-      const res = await fetch(url, { headers: cfHeaders(settings.cloudflare_api_token) });
-      const data = await res.json();
+      let res;
+      try {
+        res = await fetchWithTimeout(url, { headers: cfHeaders(settings.cloudflare_api_token) });
+      } catch (fetchErr) {
+        console.error(`Fetch failed for ${domainName}:`, fetchErr.message);
+        transportFailures++;
+        return null; // skip this TLD on network/timeout errors
+      }
+
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        console.error(`Invalid JSON from Cloudflare for ${domainName}, HTTP ${res.status}`);
+        transportFailures++;
+        return null;
+      }
 
       if (!data.success) {
-        const errCodes = (data.errors || []).map(e => e.code);
-        // 1000-level = auth errors, 2000-level = permission errors
-        const isAuthError = errCodes.some(c => c >= 1000 && c < 3000) || res.status === 401 || res.status === 403;
-        if (isAuthError) {
+        if (isCloudflareAuthError(res.status, data.errors)) {
           const errMsg = (data.errors || []).map(e => e.message).join('; ');
-          throw new Error(`Cloudflare API error: ${errMsg || `HTTP ${res.status}`}`);
+          authError = errMsg || `HTTP ${res.status}`;
         }
-        // Non-auth errors (e.g. unsupported TLD, domain not found) — skip this domain
+        // Non-auth errors (unsupported TLD, not found, etc.) — skip this domain
         return null;
       }
 
@@ -151,17 +197,35 @@ async function handleSearch(orgId, settings, body) {
     })
   );
 
-  // If any domain check threw an auth/API error, surface it
-  const apiError = results.find(r => r.status === 'rejected');
-  if (apiError) {
-    return respond(502, { error: apiError.reason.message });
-  }
-
   const domains = results
     .filter(r => r.status === 'fulfilled' && r.value !== null)
     .map(r => r.value);
 
-  return respond(200, { domains });
+  // If ALL checks failed with an auth error and we got zero results, surface the auth error
+  if (domains.length === 0 && authError) {
+    return respond(502, {
+      error: `Cloudflare API error: ${authError}`,
+      hint: 'Check that your API token has "Account > Registrar > Read" permission and the Account ID is correct in Email Settings.',
+    });
+  }
+
+  // If ALL checks failed due to transport errors (Cloudflare unreachable), surface that
+  if (domains.length === 0 && transportFailures === domainsToCheck.length) {
+    return respond(502, {
+      error: 'Could not reach Cloudflare API for any domain check. The service may be temporarily unavailable.',
+      hint: 'Try again in a few moments. If the problem persists, check your network or Cloudflare status.',
+    });
+  }
+
+  // Build warnings for partial failures
+  const warnings = [];
+  if (authError) warnings.push(`Some TLDs could not be checked: ${authError}`);
+  if (transportFailures > 0 && domains.length > 0) warnings.push(`${transportFailures} TLD(s) could not be reached`);
+
+  return respond(200, {
+    domains,
+    ...(warnings.length ? { warning: warnings.join('. ') } : {}),
+  });
 }
 
 /**
@@ -196,7 +260,7 @@ async function handlePurchase(orgId, settings, body) {
   }
 
   // Verify domain is in the Cloudflare account
-  const domainRes = await fetch(
+  const domainRes = await fetchWithTimeout(
     `${CF_API_BASE}/accounts/${accountId}/registrar/domains/${encodeURIComponent(domain)}`,
     { headers: cfHeaders(settings.cloudflare_api_token) }
   );
@@ -204,12 +268,11 @@ async function handlePurchase(orgId, settings, body) {
 
   // Distinguish auth/API errors from domain-not-found
   if (!domainData.success) {
-    const errCodes = (domainData.errors || []).map(e => e.code);
     const errMsg = (domainData.errors || []).map(e => e.message).join('; ');
-    const isAuthError = errCodes.some(c => c >= 1000 && c < 3000) || domainRes.status === 401 || domainRes.status === 403;
-    if (isAuthError) {
+    if (isCloudflareAuthError(domainRes.status, domainData.errors)) {
       return respond(502, {
         error: `Cloudflare API error: ${errMsg || `HTTP ${domainRes.status}`}. Check your API token permissions.`,
+        hint: 'Ensure your API token has "Account > Registrar > Read" permission.',
       });
     }
     return respond(400, {
@@ -236,7 +299,7 @@ async function handlePurchase(orgId, settings, body) {
 
   // Fetch the zone ID
   let zoneId = null;
-  const zoneRes = await fetch(
+  const zoneRes = await fetchWithTimeout(
     `${CF_API_BASE}/zones?name=${encodeURIComponent(domain)}&account.id=${accountId}`,
     { headers: cfHeaders(settings.cloudflare_api_token) }
   );
@@ -320,7 +383,7 @@ async function handleProvisionDns(orgId, settings, body) {
 
   // If no zone ID stored, try to find or create one
   if (!zoneId) {
-    const zoneRes = await fetch(
+    const zoneRes = await fetchWithTimeout(
       `${CF_API_BASE}/zones?name=${encodeURIComponent(domainRow.domain)}&account.id=${accountId}`,
       { headers: cfHeaders(settings.cloudflare_api_token) }
     );
@@ -330,7 +393,7 @@ async function handleProvisionDns(orgId, settings, body) {
       zoneId = zoneData.result[0].id;
     } else {
       // Create zone
-      const createRes = await fetch(`${CF_API_BASE}/zones`, {
+      const createRes = await fetchWithTimeout(`${CF_API_BASE}/zones`, {
         method: 'POST',
         headers: cfHeaders(settings.cloudflare_api_token),
         body: JSON.stringify({
@@ -368,7 +431,7 @@ async function handleProvisionDns(orgId, settings, body) {
 
   // Helper to create a DNS record
   async function createRecord(record) {
-    const res = await fetch(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
+    const res = await fetchWithTimeout(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
       method: 'POST',
       headers: cfHeaders(settings.cloudflare_api_token),
       body: JSON.stringify(record),
@@ -482,7 +545,7 @@ async function handleVerifyDns(orgId, settings, body) {
   if (!zoneId) return respond(400, { error: 'No Cloudflare zone ID found for this domain. Run provision-dns first.' });
 
   // List all DNS records on the zone
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${CF_API_BASE}/zones/${zoneId}/dns_records?per_page=100`,
     { headers: cfHeaders(settings.cloudflare_api_token) }
   );
@@ -619,7 +682,7 @@ async function handleVerifyZoho(orgId, settings, body) {
   const zohoTxtCode = meta.zoho_txt_verification;
   if (zohoTxtCode && domainRow.cloudflare_zone_id && settings.cloudflare_api_token) {
     // Check if TXT record already exists before creating
-    const existingRes = await fetch(
+    const existingRes = await fetchWithTimeout(
       `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records?type=TXT&per_page=100`,
       { headers: cfHeaders(settings.cloudflare_api_token) }
     );
@@ -627,7 +690,7 @@ async function handleVerifyZoho(orgId, settings, body) {
     const alreadyExists = (existingData.result || []).some(r => r.content === zohoTxtCode);
 
     if (!alreadyExists) {
-      const createRes = await fetch(
+      const createRes = await fetchWithTimeout(
         `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records`,
         {
           method: 'POST',
@@ -664,6 +727,25 @@ async function handleVerifyZoho(orgId, settings, body) {
       updatedMetadata.zoho_verify_error = result.data.verificationCode || result.data.error || null;
     }
 
+    // Auto-enable mail hosting after successful verification (Step 3)
+    let mailHostingEnabled = false;
+    if (verified && !meta.zoho_mail_hosting_enabled) {
+      try {
+        await zoho.enableMailHosting(domainRow.domain);
+        updatedMetadata.zoho_mail_hosting_enabled = true;
+        updatedMetadata.zoho_mail_hosting_enabled_at = new Date().toISOString();
+        mailHostingEnabled = true;
+        await logActivity(orgId, 'zoho_mail_hosting_enabled', `Enabled Zoho mail hosting for ${domainRow.domain}`);
+      } catch (hostingErr) {
+        console.error('Failed to enable Zoho mail hosting (non-blocking):', hostingErr.message, hostingErr.responseBody || '');
+        updatedMetadata.zoho_mail_hosting_error = hostingErr.message;
+        await logActivity(orgId, 'zoho_mail_hosting_failed',
+          `Failed to enable mail hosting for ${domainRow.domain}: ${hostingErr.message}`, 'warning');
+      }
+    } else if (meta.zoho_mail_hosting_enabled) {
+      mailHostingEnabled = true;
+    }
+
     await supabase
       .from('email_domains')
       .update({ metadata: updatedMetadata })
@@ -676,9 +758,10 @@ async function handleVerifyZoho(orgId, settings, body) {
     return respond(200, {
       success: true,
       zoho_verified: verified,
+      mail_hosting_enabled: mailHostingEnabled,
       domain: domainRow.domain,
       message: verified
-        ? 'Domain verified with Zoho Mail.'
+        ? `Domain verified with Zoho Mail.${mailHostingEnabled ? ' Mail hosting enabled.' : ' Warning: mail hosting could not be enabled — retry or enable manually.'}`
         : `Zoho verification pending. ${result?.data?.verificationCode || result?.data?.error || 'Ensure the TXT record has propagated and try again.'}`,
     });
   } catch (err) {
@@ -851,6 +934,16 @@ exports.handler = async (event) => {
     }
   } catch (error) {
     console.error(`cloudflare-domains error (action=${action}):`, error);
-    return respond(500, { error: error.message });
+
+    // Distinguish timeout vs network vs unexpected errors
+    if (error.message && error.message.includes('timed out')) {
+      return respond(504, { error: error.message });
+    }
+    const errCode = error.code || error.cause?.code;
+    if (errCode === 'ECONNREFUSED' || errCode === 'ENOTFOUND' || errCode === 'ECONNRESET') {
+      return respond(502, { error: 'Could not reach Cloudflare API. Please try again.' });
+    }
+
+    return respond(500, { error: error.message || 'An unexpected error occurred.' });
   }
 };
