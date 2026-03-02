@@ -273,6 +273,10 @@ class ZohoMailService {
     });
   }
 
+  async getDomain(domainName) {
+    return this._request('GET', `/api/organization/${this.orgId}/domains/${encodeURIComponent(domainName)}`);
+  }
+
   async verifyDomain(domainName, method = 'verifyDomainByTXT') {
     return this._request('PUT', `/api/organization/${this.orgId}/domains/${encodeURIComponent(domainName)}`, {
       mode: method,
