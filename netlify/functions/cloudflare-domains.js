@@ -98,7 +98,9 @@ async function handleTest(orgId, settings) {
 }
 
 /**
- * search — Search for available domains via Cloudflare Registrar
+ * search — Check domain availability via Cloudflare Registrar.
+ * Cloudflare has no search endpoint — we check individual domain names
+ * using GET /registrar/domains/{domain_name} for common TLDs.
  */
 async function handleSearch(orgId, settings, body) {
   const { query } = body;
@@ -107,40 +109,79 @@ async function handleSearch(orgId, settings, body) {
   const accountId = settings.cloudflare_account_id;
   if (!accountId) return respond(400, { error: 'Cloudflare account_id not configured in Email Settings.' });
 
-  // Cloudflare domain search endpoint
-  const url = `${CF_API_BASE}/accounts/${accountId}/registrar/domains/search?query=${encodeURIComponent(query)}`;
-  const res = await fetch(url, {
-    headers: cfHeaders(settings.cloudflare_api_token),
-  });
-
-  const data = await res.json();
-
-  if (!data.success) {
-    console.error('Cloudflare search error:', JSON.stringify(data.errors));
-    return respond(500, { error: 'Cloudflare domain search failed', details: data.errors });
+  // Strip whitespace. If user entered a full domain (has a dot), check just that.
+  // Otherwise, check the base name across popular TLDs.
+  const trimmed = query.trim().toLowerCase();
+  let domainsToCheck;
+  if (trimmed.includes('.')) {
+    domainsToCheck = [trimmed];
+  } else {
+    domainsToCheck = [
+      `${trimmed}.com`, `${trimmed}.net`, `${trimmed}.org`,
+      `${trimmed}.io`, `${trimmed}.co`, `${trimmed}.dev`,
+    ];
   }
 
-  const domains = (data.result || []).map(d => ({
-    name: d.name,
-    available: d.available,
-    price: d.price,
-  }));
+  // Check each domain in parallel
+  const results = await Promise.allSettled(
+    domainsToCheck.map(async (domainName) => {
+      const url = `${CF_API_BASE}/accounts/${accountId}/registrar/domains/${encodeURIComponent(domainName)}`;
+      const res = await fetch(url, { headers: cfHeaders(settings.cloudflare_api_token) });
+      const data = await res.json();
+
+      if (!data.success) {
+        const errCodes = (data.errors || []).map(e => e.code);
+        // 1000-level = auth errors, 2000-level = permission errors
+        const isAuthError = errCodes.some(c => c >= 1000 && c < 3000) || res.status === 401 || res.status === 403;
+        if (isAuthError) {
+          const errMsg = (data.errors || []).map(e => e.message).join('; ');
+          throw new Error(`Cloudflare API error: ${errMsg || `HTTP ${res.status}`}`);
+        }
+        // Non-auth errors (e.g. unsupported TLD, domain not found) — skip this domain
+        return null;
+      }
+
+      const d = data.result || {};
+      return {
+        name: domainName,
+        available: d.can_register === true,
+        price: d.fees?.register_fee ?? null,
+        supported_tld: d.supported_tld ?? true,
+      };
+    })
+  );
+
+  // If any domain check threw an auth/API error, surface it
+  const apiError = results.find(r => r.status === 'rejected');
+  if (apiError) {
+    return respond(502, { error: apiError.reason.message });
+  }
+
+  const domains = results
+    .filter(r => r.status === 'fulfilled' && r.value !== null)
+    .map(r => r.value);
 
   return respond(200, { domains });
 }
 
 /**
- * purchase — Buy a domain via Cloudflare Registrar
+ * purchase — Register a domain and import it into the system.
+ *
+ * Cloudflare's domain registration API is not publicly available (Enterprise only).
+ * Instead we:
+ *   1. Verify the domain is in the user's Cloudflare account (already registered)
+ *   2. Look up its zone ID
+ *   3. Import it into our email_domains table
+ *   4. Auto-add to Zoho if configured
+ *
+ * The user registers the domain via Cloudflare Dashboard first, then clicks "Import".
  */
 async function handlePurchase(orgId, settings, body) {
-  const { domain, years } = body;
+  const { domain } = body;
   if (!domain) return respond(400, { error: 'Missing required field: domain' });
 
   const accountId = settings.cloudflare_account_id;
   if (!accountId) return respond(400, { error: 'Cloudflare account_id not configured in Email Settings.' });
-
-  const whois = settings.metadata?.whois;
-  if (!whois) return respond(400, { error: 'WHOIS contact info not configured in Email Settings metadata.whois.' });
 
   // Check if domain already exists in our DB for this org
   const { data: existing } = await supabase
@@ -154,38 +195,46 @@ async function handlePurchase(orgId, settings, body) {
     return respond(400, { error: `Domain ${domain} already exists in your account.` });
   }
 
-  // Purchase via Cloudflare Registrar API
-  const purchaseUrl = `${CF_API_BASE}/accounts/${accountId}/registrar/domains`;
-  const purchaseRes = await fetch(purchaseUrl, {
-    method: 'POST',
-    headers: cfHeaders(settings.cloudflare_api_token),
-    body: JSON.stringify({
-      name: domain,
-      years: years || 1,
-      registrant: {
-        first_name: whois.first_name,
-        last_name: whois.last_name,
-        address: whois.address,
-        city: whois.city,
-        state: whois.state,
-        zip: whois.zip,
-        country: whois.country,
-        phone: whois.phone,
-        email: whois.email,
-        organization: whois.organization,
-      },
-    }),
-  });
+  // Verify domain is in the Cloudflare account
+  const domainRes = await fetch(
+    `${CF_API_BASE}/accounts/${accountId}/registrar/domains/${encodeURIComponent(domain)}`,
+    { headers: cfHeaders(settings.cloudflare_api_token) }
+  );
+  const domainData = await domainRes.json();
 
-  const purchaseData = await purchaseRes.json();
-
-  if (!purchaseData.success) {
-    console.error('Cloudflare purchase error:', JSON.stringify(purchaseData.errors));
-    await logActivity(orgId, 'domain_purchase_failed', `Failed to purchase ${domain}: ${JSON.stringify(purchaseData.errors)}`, 'error');
-    return respond(500, { error: 'Domain purchase failed', details: purchaseData.errors });
+  // Distinguish auth/API errors from domain-not-found
+  if (!domainData.success) {
+    const errCodes = (domainData.errors || []).map(e => e.code);
+    const errMsg = (domainData.errors || []).map(e => e.message).join('; ');
+    const isAuthError = errCodes.some(c => c >= 1000 && c < 3000) || domainRes.status === 401 || domainRes.status === 403;
+    if (isAuthError) {
+      return respond(502, {
+        error: `Cloudflare API error: ${errMsg || `HTTP ${domainRes.status}`}. Check your API token permissions.`,
+      });
+    }
+    return respond(400, {
+      error: `Domain ${domain} not found in your Cloudflare account. Register it first at the Cloudflare Dashboard, then import it here.`,
+      dashboard_url: `https://dash.cloudflare.com/${accountId}/domains/register`,
+    });
+  }
+  if (!domainData.result) {
+    return respond(400, {
+      error: `Domain ${domain} not found in your Cloudflare account. Register it first at the Cloudflare Dashboard, then import it here.`,
+      dashboard_url: `https://dash.cloudflare.com/${accountId}/domains/register`,
+    });
   }
 
-  // Fetch the zone ID (Cloudflare auto-creates a zone for registered domains)
+  const cfDomain = domainData.result;
+
+  // If it shows as available for registration, it hasn't been purchased yet
+  if (cfDomain.can_register && !cfDomain.current_registrar) {
+    return respond(400, {
+      error: `Domain ${domain} is available but not yet registered. Register it at the Cloudflare Dashboard first, then import it here.`,
+      dashboard_url: `https://dash.cloudflare.com/${accountId}/domains/register/${encodeURIComponent(domain)}`,
+    });
+  }
+
+  // Fetch the zone ID
   let zoneId = null;
   const zoneRes = await fetch(
     `${CF_API_BASE}/zones?name=${encodeURIComponent(domain)}&account.id=${accountId}`,
@@ -196,11 +245,6 @@ async function handlePurchase(orgId, settings, body) {
     zoneId = zoneData.result[0].id;
   }
 
-  // Calculate expiry
-  const now = new Date();
-  const expiresAt = new Date(now);
-  expiresAt.setFullYear(expiresAt.getFullYear() + (years || 1));
-
   // Insert into email_domains
   const { data: domainRow, error: insertError } = await supabase
     .from('email_domains')
@@ -209,9 +253,8 @@ async function handlePurchase(orgId, settings, body) {
       domain,
       status: 'purchased',
       registrar: 'cloudflare',
-      purchased_at: now.toISOString(),
-      expires_at: expiresAt.toISOString(),
-      purchase_price: purchaseData.result?.price || null,
+      purchased_at: new Date().toISOString(),
+      expires_at: cfDomain.expires_at || null,
       cloudflare_zone_id: zoneId,
       cloudflare_account_id: accountId,
     })
@@ -220,10 +263,10 @@ async function handlePurchase(orgId, settings, body) {
 
   if (insertError) {
     console.error('DB insert error:', insertError.message);
-    return respond(500, { error: 'Domain purchased but failed to save to database', details: insertError.message });
+    return respond(500, { error: 'Failed to save domain to database', details: insertError.message });
   }
 
-  await logActivity(orgId, 'domain_purchased', `Purchased domain ${domain} via Cloudflare`);
+  await logActivity(orgId, 'domain_imported', `Imported domain ${domain} from Cloudflare`);
 
   // Auto-add domain to Zoho Mail if credentials are configured
   let zohoAdded = false;
@@ -232,7 +275,6 @@ async function handlePurchase(orgId, settings, body) {
     try {
       const zohoResult = await zoho.addDomain(domain);
       zohoAdded = true;
-      // Store Zoho verification codes in domain metadata
       const zohoData = zohoResult?.data || {};
       await supabase
         .from('email_domains')
