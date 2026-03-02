@@ -71,6 +71,62 @@ function getZohoClient(settings) {
   });
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return null;
+}
+
+function extractZohoDnsBundle(payload) {
+  const data = payload?.data || payload || {};
+
+  const verificationToken = firstNonEmpty(
+    data.zbcode,
+    data.zbCode,
+    data.ZBCODE,
+    data.txtVerificationCode,
+    data.TXTVerificationCode,
+    data.CNAMEVerificationCode,
+    data.HTMLVerificationCode
+  );
+
+  const dkimEntries = [];
+  const candidates = [];
+  if (Array.isArray(data.dkim)) candidates.push(...data.dkim);
+  if (Array.isArray(data.dkimRecords)) candidates.push(...data.dkimRecords);
+  if (Array.isArray(data.domainKeys)) candidates.push(...data.domainKeys);
+  if (data.dkimSelector || data.dkimValue || data.dkimPublicKey) candidates.push(data);
+
+  for (const item of candidates) {
+    const selector = firstNonEmpty(item.selector, item.dkimSelector, item.domainKey, item.name);
+    const value = firstNonEmpty(item.value, item.publicKey, item.dkimValue, item.dkimPublicKey, item.content);
+    if (!selector || !value) continue;
+    const normalized = String(value).startsWith('v=DKIM1') ? String(value) : `v=DKIM1; k=rsa; p=${value}`;
+    dkimEntries.push({ selector: String(selector).trim(), value: normalized });
+  }
+
+  return { verificationToken, dkimEntries };
+}
+
+async function ensureDomainInZohoAndGetDns(zoho, domainName) {
+  let response;
+  try {
+    response = await zoho.addDomain(domainName);
+  } catch (err) {
+    if (err.statusCode !== 400 && err.statusCode !== 409) throw err;
+  }
+
+  let details = null;
+  try {
+    details = await zoho.getDomain(domainName);
+  } catch (err) {
+    if (!response) throw err;
+  }
+
+  return extractZohoDnsBundle(details || response || {});
+}
+
 // ── Fetch with timeout ───────────────────────────────────────────────────────
 
 const FETCH_TIMEOUT_MS = 15000; // 15s — leaves headroom inside Netlify's 26s limit
@@ -99,6 +155,67 @@ function isCloudflareAuthError(httpStatus, errors) {
   if (httpStatus === 401 || httpStatus === 403) return true;
   const authCodes = new Set([6003, 6100, 6103, 9109, 10000]);
   return (errors || []).some(e => authCodes.has(e.code));
+}
+
+
+function normalizeDnsName(name) {
+  return String(name || '').replace(/\.$/, '').toLowerCase();
+}
+
+async function upsertDnsRecord(zoneId, apiToken, record) {
+  const targetName = normalizeDnsName(record.name);
+  const query = new URLSearchParams({
+    type: record.type,
+    name: targetName,
+    per_page: '100',
+  });
+
+  const listRes = await fetchWithTimeout(
+    `${CF_API_BASE}/zones/${zoneId}/dns_records?${query.toString()}`,
+    { headers: cfHeaders(apiToken) }
+  );
+  const listData = await listRes.json();
+
+  if (!listData.success) {
+    return { ok: false, errors: listData.errors || [{ message: 'Failed to query existing DNS records.' }] };
+  }
+
+  const existingRecords = listData.result || [];
+  const match = existingRecords.find((r) => {
+    if (normalizeDnsName(r.name) !== targetName) return false;
+    if (String(r.content || '') !== String(record.content || '')) return false;
+    if (record.type === 'MX') return Number(r.priority || 0) === Number(record.priority || 0);
+    return true;
+  });
+
+  if (match) {
+    const updateRes = await fetchWithTimeout(
+      `${CF_API_BASE}/zones/${zoneId}/dns_records/${match.id}`,
+      {
+        method: 'PUT',
+        headers: cfHeaders(apiToken),
+        body: JSON.stringify({
+          ...record,
+          proxied: false,
+        }),
+      }
+    );
+    const updateData = await updateRes.json();
+    if (!updateData.success) return { ok: false, errors: updateData.errors || [{ message: 'Failed to update DNS record.' }] };
+    return { ok: true, record: updateData.result, operation: 'updated' };
+  }
+
+  const createRes = await fetchWithTimeout(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
+    method: 'POST',
+    headers: cfHeaders(apiToken),
+    body: JSON.stringify({
+      ...record,
+      proxied: false,
+    }),
+  });
+  const createData = await createRes.json();
+  if (!createData.success) return { ok: false, errors: createData.errors || [{ message: 'Failed to create DNS record.' }] };
+  return { ok: true, record: createData.result, operation: 'created' };
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────
@@ -336,18 +453,17 @@ async function handlePurchase(orgId, settings, body) {
   const zoho = getZohoClient(settings);
   if (zoho) {
     try {
-      const zohoResult = await zoho.addDomain(domain);
+      const zohoDns = await ensureDomainInZohoAndGetDns(zoho, domain);
       zohoAdded = true;
-      const zohoData = zohoResult?.data || {};
       await supabase
         .from('email_domains')
         .update({
           metadata: {
             ...(domainRow.metadata || {}),
             zoho_added: true,
-            zoho_verification_status: zohoData.verificationStatus || false,
-            zoho_txt_verification: zohoData.CNAMEVerificationCode || zohoData.HTMLVerificationCode || null,
-            zoho_cname_verification: zohoData.CNAMEVerificationCode || null,
+            zoho_verification_status: false,
+            zoho_txt_verification: zohoDns.verificationToken,
+            zoho_dkim_records: zohoDns.dkimEntries,
           },
         })
         .eq('id', domainRow.id);
@@ -417,31 +533,40 @@ async function handleProvisionDns(orgId, settings, body) {
       .eq('id', domain_id);
   }
 
+  const zoho = getZohoClient(settings);
+  let zohoDns = { verificationToken: null, dkimEntries: [] };
+  if (zoho) {
+    try {
+      zohoDns = await ensureDomainInZohoAndGetDns(zoho, domainRow.domain);
+    } catch (err) {
+      console.error('Failed to fetch Zoho domain DNS bundle:', err.message, err.responseBody || '');
+    }
+  }
+
   // Build DNS records — default to Zoho if no provider specified
   const mxRecords = provider?.mxRecords || [
     { content: 'mx.zoho.com', priority: 10 },
     { content: 'mx2.zoho.com', priority: 20 },
     { content: 'mx3.zoho.com', priority: 50 },
   ];
-  const spfInclude = provider?.spfInclude || 'zoho.com';
-  const dkimRecords = provider?.dkimRecords || [];
+  const spfValue = provider?.spfValue || 'v=spf1 include:zoho.com ~all';
+  const dkimRecords = provider?.dkimRecords || zohoDns.dkimEntries.map((entry) => ({
+    type: 'TXT',
+    name: `${entry.selector}._domainkey.${domainRow.domain}`,
+    content: entry.value,
+  }));
   const domainName = domainRow.domain;
 
-  const results = { mx: [], spf: null, dkim: [], dmarc: null, errors: [] };
+  const results = { mx: [], spf: null, dkim: [], dmarc: null, zoho_verification: null, errors: [] };
 
   // Helper to create a DNS record
   async function createRecord(record) {
-    const res = await fetchWithTimeout(`${CF_API_BASE}/zones/${zoneId}/dns_records`, {
-      method: 'POST',
-      headers: cfHeaders(settings.cloudflare_api_token),
-      body: JSON.stringify(record),
-    });
-    const data = await res.json();
-    if (!data.success) {
-      results.errors.push({ record, errors: data.errors });
+    const upsert = await upsertDnsRecord(zoneId, settings.cloudflare_api_token, record);
+    if (!upsert.ok) {
+      results.errors.push({ record, errors: upsert.errors });
       return null;
     }
-    return data.result;
+    return upsert.record;
   }
 
   // MX records
@@ -460,7 +585,7 @@ async function handleProvisionDns(orgId, settings, body) {
   const spfResult = await createRecord({
     type: 'TXT',
     name: domainName,
-    content: `v=spf1 include:${spfInclude} -all`,
+    content: spfValue,
     ttl: 3600,
   });
   if (spfResult) results.spf = spfResult;
@@ -474,7 +599,7 @@ async function handleProvisionDns(orgId, settings, body) {
   });
   if (dmarcResult) results.dmarc = dmarcResult;
 
-  // DKIM records (if provided)
+  // DKIM records
   for (const dkim of dkimRecords) {
     const result = await createRecord({
       type: dkim.type || 'TXT',
@@ -485,14 +610,13 @@ async function handleProvisionDns(orgId, settings, body) {
     if (result) results.dkim.push(result);
   }
 
-  // Zoho TXT verification record (if stored from addDomain call)
-  results.zoho_verification = null;
-  const zohoTxtCode = domainRow.metadata?.zoho_txt_verification;
-  if (zohoTxtCode) {
+  // Zoho verification record
+  const zohoVerificationCode = zohoDns.verificationToken || domainRow.metadata?.zoho_txt_verification;
+  if (zohoVerificationCode) {
     const zohoVerifyResult = await createRecord({
       type: 'TXT',
       name: domainName,
-      content: zohoTxtCode,
+      content: zohoVerificationCode,
       ttl: 3600,
     });
     results.zoho_verification = !!zohoVerifyResult;
@@ -507,21 +631,22 @@ async function handleProvisionDns(orgId, settings, body) {
     spf_verified: !!results.spf,
     dmarc_verified: !!results.dmarc,
     dkim_verified: results.dkim.length > 0,
+    metadata: {
+      ...(domainRow.metadata || {}),
+      zoho_added: zoho ? true : domainRow.metadata?.zoho_added,
+      zoho_txt_verification: zohoVerificationCode || domainRow.metadata?.zoho_txt_verification || null,
+      zoho_dkim_records: zohoDns.dkimEntries.length ? zohoDns.dkimEntries : (domainRow.metadata?.zoho_dkim_records || []),
+    },
   };
-
-  // If all verified, set active
-  if (updateData.mx_verified && updateData.spf_verified && updateData.dmarc_verified && updateData.dkim_verified) {
-    updateData.status = 'active';
-  }
 
   await supabase
     .from('email_domains')
     .update(updateData)
     .eq('id', domain_id);
 
-  await logActivity(orgId, 'dns_provisioned', `DNS records provisioned for ${domainName} (MX: ${results.mx.length}, SPF: ${results.spf ? 'yes' : 'no'}, DKIM: ${results.dkim.length}, DMARC: ${results.dmarc ? 'yes' : 'no'})`);
+  await logActivity(orgId, 'dns_provisioned', `DNS records provisioned for ${domainName} (MX: ${results.mx.length}, SPF: ${results.spf ? 'yes' : 'no'}, DKIM: ${results.dkim.length}, verification: ${results.zoho_verification ? 'yes' : 'no'})`);
 
-  return respond(200, { results });
+  return respond(200, { results, zoho_dns_bundle: zohoDns });
 }
 
 /**
@@ -564,7 +689,8 @@ async function handleVerifyDns(orgId, settings, body) {
   const hasDmarc = records.some(r => r.type === 'TXT' && r.name.startsWith('_dmarc.'));
 
   const allVerified = hasMx && hasSpf && hasDkim && hasDmarc;
-  const newStatus = allVerified ? 'active' : 'dns_pending';
+  const zohoVerified = domainRow.metadata?.zoho_verification_status === true;
+  const newStatus = allVerified && zohoVerified ? 'active' : 'dns_pending';
 
   // Update domain record
   await supabase
@@ -581,6 +707,7 @@ async function handleVerifyDns(orgId, settings, body) {
   return respond(200, {
     status: { mx: hasMx, spf: hasSpf, dkim: hasDkim, dmarc: hasDmarc },
     all_verified: allVerified,
+    zoho_verified: zohoVerified,
     domain_status: newStatus,
   });
 }
@@ -655,157 +782,117 @@ async function handleVerifyZoho(orgId, settings, body) {
     return respond(400, { error: 'Zoho Mail credentials not configured. Update Email Settings first.' });
   }
 
-  // If domain wasn't added to Zoho yet, add it first
   const meta = domainRow.metadata || {};
-  if (!meta.zoho_added) {
-    try {
-      const addResult = await zoho.addDomain(domainRow.domain);
-      const zohoData = addResult?.data || {};
-      meta.zoho_added = true;
-      meta.zoho_txt_verification = zohoData.CNAMEVerificationCode || zohoData.HTMLVerificationCode || null;
-      meta.zoho_cname_verification = zohoData.CNAMEVerificationCode || null;
-      await supabase
-        .from('email_domains')
-        .update({ metadata: meta })
-        .eq('id', domain_id);
-    } catch (err) {
-      console.error('Zoho addDomain error:', err.message, err.responseBody || '');
-      const status = err.statusCode || 502;
-      return respond(status, {
-        error: `Failed to add domain to Zoho: ${err.message}`,
-        details: err.responseBody || null,
-      });
-    }
-  }
 
-  // Ensure the Zoho TXT verification record exists on Cloudflare DNS
-  const zohoTxtCode = meta.zoho_txt_verification;
-  if (zohoTxtCode && domainRow.cloudflare_zone_id && settings.cloudflare_api_token) {
-    // Check if TXT record already exists before creating
-    const existingRes = await fetchWithTimeout(
-      `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records?type=TXT&per_page=100`,
-      { headers: cfHeaders(settings.cloudflare_api_token) }
-    );
-    const existingData = await existingRes.json();
-    const alreadyExists = (existingData.result || []).some(r => r.content === zohoTxtCode);
-
-    if (!alreadyExists) {
-      const createRes = await fetchWithTimeout(
-        `${CF_API_BASE}/zones/${domainRow.cloudflare_zone_id}/dns_records`,
-        {
-          method: 'POST',
-          headers: cfHeaders(settings.cloudflare_api_token),
-          body: JSON.stringify({
-            type: 'TXT',
-            name: domainRow.domain,
-            content: zohoTxtCode,
-            ttl: 3600,
-          }),
-        }
-      );
-      const createData = await createRes.json();
-      if (!createData.success) {
-        console.error('Failed to create Zoho TXT verification record:', createData.errors);
-      }
-    }
-  }
-
-  // Call Zoho's verify endpoint — Zoho checks for the TXT record on the domain
+  // Ensure domain exists in Zoho and refresh verification/DKIM metadata.
+  let zohoDns = { verificationToken: null, dkimEntries: [] };
   try {
-    const result = await zoho.verifyDomain(domainRow.domain, 'verifyDomainByTXT');
-    const verified = result?.data?.verificationStatus === true ||
-                     result?.data?.isVerified === true;
-
-    const updatedMetadata = {
-      ...meta,
-      zoho_verification_status: verified,
-      zoho_verified_at: verified ? new Date().toISOString() : null,
-    };
-
-    // If Zoho returned a failure reason, store it for debugging
-    if (!verified && result?.data) {
-      updatedMetadata.zoho_verify_error = result.data.verificationCode || result.data.error || null;
-    }
-
-    // Auto-enable mail hosting after successful verification (Step 3)
-    let mailHostingEnabled = false;
-    if (verified && !meta.zoho_mail_hosting_enabled) {
-      try {
-        await zoho.enableMailHosting(domainRow.domain);
-        updatedMetadata.zoho_mail_hosting_enabled = true;
-        updatedMetadata.zoho_mail_hosting_enabled_at = new Date().toISOString();
-        mailHostingEnabled = true;
-        await logActivity(orgId, 'zoho_mail_hosting_enabled', `Enabled Zoho mail hosting for ${domainRow.domain}`);
-      } catch (hostingErr) {
-        console.error('Failed to enable Zoho mail hosting (non-blocking):', hostingErr.message, hostingErr.responseBody || '');
-        updatedMetadata.zoho_mail_hosting_error = hostingErr.message;
-        await logActivity(orgId, 'zoho_mail_hosting_failed',
-          `Failed to enable mail hosting for ${domainRow.domain}: ${hostingErr.message}`, 'warning');
-      }
-    } else if (meta.zoho_mail_hosting_enabled) {
-      mailHostingEnabled = true;
-    }
-
-    await supabase
-      .from('email_domains')
-      .update({ metadata: updatedMetadata })
-      .eq('id', domain_id);
-
-    if (verified) {
-      await logActivity(orgId, 'zoho_domain_verified', `Zoho Mail verified domain ${domainRow.domain}`);
-    }
-
-    return respond(200, {
-      success: true,
-      zoho_verified: verified,
-      mail_hosting_enabled: mailHostingEnabled,
-      domain: domainRow.domain,
-      message: verified
-        ? `Domain verified with Zoho Mail.${mailHostingEnabled ? ' Mail hosting enabled.' : ' Warning: mail hosting could not be enabled — retry or enable manually.'}`
-        : `Zoho verification pending. ${result?.data?.verificationCode || result?.data?.error || 'Ensure the TXT record has propagated and try again.'}`,
-    });
+    zohoDns = await ensureDomainInZohoAndGetDns(zoho, domainRow.domain);
   } catch (err) {
-    console.error('Zoho verifyDomain error:', err.message, JSON.stringify(err.responseBody || ''));
-    const zohoBody = err.responseBody || {};
-    const zohoMsg = typeof zohoBody === 'object'
-      ? (zohoBody.data?.message || zohoBody.message || zohoBody.data?.error || JSON.stringify(zohoBody))
-      : String(zohoBody);
-
-    // If Zoho returns 400 (domain not found/invalid), try re-adding the domain
-    if (err.statusCode === 400 || err.statusCode === 404) {
-      try {
-        console.log(`Zoho verify returned ${err.statusCode}, re-adding domain ${domainRow.domain}...`);
-        const addResult = await zoho.addDomain(domainRow.domain);
-        const zohoData = addResult?.data || {};
-
-        // Update stored verification codes
-        meta.zoho_added = true;
-        meta.zoho_txt_verification = zohoData.CNAMEVerificationCode || zohoData.HTMLVerificationCode || null;
-        meta.zoho_cname_verification = zohoData.CNAMEVerificationCode || null;
-        await supabase
-          .from('email_domains')
-          .update({ metadata: meta })
-          .eq('id', domain_id);
-
-        return respond(200, {
-          success: false,
-          zoho_verified: false,
-          domain: domainRow.domain,
-          message: 'Domain re-added to Zoho. TXT verification record updated — click Verify again after DNS propagates.',
-          verification_code: meta.zoho_txt_verification,
-        });
-      } catch (readdErr) {
-        // Re-add also failed — surface both errors
-        console.error('Zoho re-add also failed:', readdErr.message, readdErr.responseBody || '');
-      }
-    }
-
+    console.error('Zoho add/get domain error:', err.message, err.responseBody || '');
     const status = err.statusCode || 502;
     return respond(status, {
-      error: `Zoho verification failed (HTTP ${err.statusCode || '?'}): ${zohoMsg}`,
+      error: `Failed to sync domain with Zoho: ${err.message}`,
       details: err.responseBody || null,
     });
   }
+
+  const updatedMeta = {
+    ...meta,
+    zoho_added: true,
+    zoho_txt_verification: zohoDns.verificationToken || meta.zoho_txt_verification || null,
+    zoho_dkim_records: zohoDns.dkimEntries.length ? zohoDns.dkimEntries : (meta.zoho_dkim_records || []),
+  };
+
+  await supabase
+    .from('email_domains')
+    .update({ metadata: updatedMeta })
+    .eq('id', domain_id);
+
+  const checks = {
+    domain: { mode: 'verifyDomainByTXT', ok: false, detail: null },
+    mx: { mode: 'verifyMXRecords', ok: false, detail: null },
+    spf: { mode: 'verifySPFRecord', ok: false, detail: null },
+    dkim: { mode: 'verifyDKIMRecord', ok: false, detail: null },
+  };
+
+  for (const key of Object.keys(checks)) {
+    const check = checks[key];
+    try {
+      const result = await zoho.verifyDomain(domainRow.domain, check.mode);
+      const data = result?.data || {};
+      check.ok = data.verificationStatus === true || data.isVerified === true || data.status === 'success';
+      check.detail = data;
+    } catch (err) {
+      check.ok = false;
+      check.detail = err.responseBody || { message: err.message };
+    }
+  }
+
+  const fullyVerified = checks.domain.ok && checks.mx.ok && checks.spf.ok && checks.dkim.ok;
+
+  const metadataPatch = {
+    ...updatedMeta,
+    zoho_verification_status: fullyVerified,
+    zoho_verified_at: fullyVerified ? new Date().toISOString() : null,
+    zoho_verify_checks: {
+      domain: checks.domain.ok,
+      mx: checks.mx.ok,
+      spf: checks.spf.ok,
+      dkim: checks.dkim.ok,
+    },
+    zoho_verify_error: fullyVerified ? null : JSON.stringify({
+      domain: checks.domain.detail,
+      mx: checks.mx.detail,
+      spf: checks.spf.detail,
+      dkim: checks.dkim.detail,
+    }),
+  };
+
+  let mailHostingEnabled = !!meta.zoho_mail_hosting_enabled;
+  if (fullyVerified && !mailHostingEnabled) {
+    try {
+      await zoho.enableMailHosting(domainRow.domain);
+      metadataPatch.zoho_mail_hosting_enabled = true;
+      metadataPatch.zoho_mail_hosting_enabled_at = new Date().toISOString();
+      mailHostingEnabled = true;
+      await logActivity(orgId, 'zoho_mail_hosting_enabled', `Enabled Zoho mail hosting for ${domainRow.domain}`);
+    } catch (hostingErr) {
+      console.error('Failed to enable Zoho mail hosting (non-blocking):', hostingErr.message, hostingErr.responseBody || '');
+      metadataPatch.zoho_mail_hosting_error = hostingErr.message;
+      await logActivity(orgId, 'zoho_mail_hosting_failed', `Failed to enable mail hosting for ${domainRow.domain}: ${hostingErr.message}`, 'warning');
+    }
+  }
+
+  const dnsComplete = domainRow.mx_verified && domainRow.spf_verified && domainRow.dkim_verified && domainRow.dmarc_verified;
+
+  await supabase
+    .from('email_domains')
+    .update({
+      metadata: metadataPatch,
+      status: fullyVerified && dnsComplete ? 'active' : 'dns_pending',
+    })
+    .eq('id', domain_id);
+
+  if (fullyVerified) {
+    await logActivity(orgId, 'zoho_domain_verified', `Zoho Mail verified domain ${domainRow.domain} (ownership, MX, SPF, DKIM)`);
+  }
+
+  return respond(200, {
+    success: true,
+    domain: domainRow.domain,
+    zoho_verified: fullyVerified,
+    mail_hosting_enabled: mailHostingEnabled,
+    verification: {
+      ownership: checks.domain.ok,
+      mx: checks.mx.ok,
+      spf: checks.spf.ok,
+      dkim: checks.dkim.ok,
+    },
+    message: fullyVerified
+      ? `Zoho verification complete for ${domainRow.domain}.`
+      : 'Zoho verification pending. Ensure DNS records have propagated, then retry verification.',
+  });
 }
 
 /**
