@@ -183,8 +183,9 @@ async function upsertDnsRecord(zoneId, apiToken, record) {
   const existingRecords = listData.result || [];
   const match = existingRecords.find((r) => {
     if (normalizeDnsName(r.name) !== targetName) return false;
-    if (String(r.content || '') !== String(record.content || '')) return false;
+    // MX can have multiple records on same name; match by priority so updates are deterministic.
     if (record.type === 'MX') return Number(r.priority || 0) === Number(record.priority || 0);
+    // TXT/CNAME/etc should be unique by type+name in our provisioning flow.
     return true;
   });
 
