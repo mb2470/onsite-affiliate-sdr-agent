@@ -865,14 +865,9 @@ async function handleVerifyZoho(orgId, settings, body) {
     }
   }
 
-  const dnsComplete = domainRow.mx_verified && domainRow.spf_verified && domainRow.dkim_verified && domainRow.dmarc_verified;
-
   await supabase
     .from('email_domains')
-    .update({
-      metadata: metadataPatch,
-      status: fullyVerified && dnsComplete ? 'active' : 'dns_pending',
-    })
+    .update({ metadata: metadataPatch })
     .eq('id', domain_id);
 
   if (fullyVerified) {
