@@ -6,6 +6,10 @@ export default function AgentMonitor() {
   const [stats, setStats] = useState({ emailsToday: 0, repliesToday: 0, maxPerDay: 20, lastHeartbeat: null });
   const [senderAccounts, setSenderAccounts] = useState([]);
   const [savingSenderId, setSavingSenderId] = useState(null);
+  const [addingSender, setAddingSender] = useState(false);
+  const [senderError, setSenderError] = useState('');
+  const [newSender, setNewSender] = useState({ email: '', displayName: 'Sam Reid', dailyLimit: 30 });
+  const [activeOrgId, setActiveOrgId] = useState(null);
   const [isCheckingReplies, setIsCheckingReplies] = useState(false);
   const [replyResult, setReplyResult] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
@@ -66,6 +70,13 @@ export default function AgentMonitor() {
     // Load sender accounts + per-account limits for agent routing
     const { data: accounts } = await supabase
       .from('email_accounts')
+      .select('id, org_id, email_address, daily_send_limit, current_daily_sent, status')
+      .order('created_at', { ascending: false });
+    const nextAccounts = accounts || [];
+    setSenderAccounts(nextAccounts);
+
+    const resolvedOrgId = s?.org_id || nextAccounts[0]?.org_id || null;
+    setActiveOrgId(resolvedOrgId);
       .select('id, email_address, daily_send_limit, current_daily_sent, status')
       .order('created_at', { ascending: false });
     setSenderAccounts(accounts || []);
@@ -76,10 +87,19 @@ export default function AgentMonitor() {
     if (!Number.isFinite(parsedLimit) || parsedLimit < 1) return;
 
     setSavingSenderId(accountId);
+    setSenderError('');
+
+    const { error } = await supabase
     await supabase
       .from('email_accounts')
       .update({ daily_send_limit: parsedLimit })
       .eq('id', accountId);
+
+    if (error) {
+      setSenderError(error.message || 'Failed to update sender daily limit.');
+      setSavingSenderId(null);
+      return;
+    }
 
     setSenderAccounts((prev) => prev.map((account) => (
       account.id === accountId
@@ -87,6 +107,81 @@ export default function AgentMonitor() {
         : account
     )));
     setSavingSenderId(null);
+  };
+
+
+  const handleAddSenderAccount = async () => {
+    const email = (newSender.email || '').trim().toLowerCase();
+    const dailyLimit = parseInt(newSender.dailyLimit, 10);
+
+    if (!activeOrgId) {
+      setSenderError('Could not determine org for this workspace yet.');
+      return;
+    }
+
+    if (!email || !email.includes('@')) {
+      setSenderError('Enter a valid sender email address.');
+      return;
+    }
+
+    if (!Number.isFinite(dailyLimit) || dailyLimit < 1) {
+      setSenderError('Daily limit must be at least 1.');
+      return;
+    }
+
+    const [localPart, domainName] = email.split('@');
+    if (!localPart || !domainName) {
+      setSenderError('Sender email format is invalid.');
+      return;
+    }
+
+    const existing = senderAccounts.find((account) => account.email_address?.toLowerCase() === email);
+    if (existing) {
+      setSenderError('That sender email is already configured.');
+      return;
+    }
+
+    setAddingSender(true);
+    setSenderError('');
+
+    const { data: existingDomain, error: domainError } = await supabase
+      .from('email_domains')
+      .select('id, domain')
+      .eq('org_id', activeOrgId)
+      .ilike('domain', domainName)
+      .limit(1)
+      .maybeSingle();
+
+    if (domainError || !existingDomain) {
+      setSenderError(`No matching sender domain found for ${domainName}. Add/verify this domain first.`);
+      setAddingSender(false);
+      return;
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('email_accounts')
+      .insert({
+        org_id: activeOrgId,
+        domain_id: existingDomain.id,
+        email_address: email,
+        display_name: (newSender.displayName || 'Sam Reid').trim(),
+        first_name: (newSender.displayName || 'Sam').trim().split(' ')[0],
+        daily_send_limit: dailyLimit,
+        current_daily_sent: 0,
+        status: 'active',
+      })
+      .select('id, org_id, email_address, daily_send_limit, current_daily_sent, status')
+      .single();
+
+    if (insertError) {
+      setSenderError(insertError.message || 'Failed to add sender account.');
+      setAddingSender(false);
+      return;
+    }
+
+    setSenderAccounts((prev) => [inserted, ...prev]);
+    setNewSender({ email: '', displayName: newSender.displayName || 'Sam Reid', dailyLimit: 30 });
+    setAddingSender(false);
   };
 
   const getDateRange = () => {
@@ -423,6 +518,65 @@ export default function AgentMonitor() {
               <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px', marginBottom: '10px' }}>
                 Configure how many emails the agent can send from each Sam inbox per day (example: 50 from one account and 10 from another).
               </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1.2fr 1fr 120px 100px',
+                gap: '8px',
+                alignItems: 'end',
+                marginBottom: '12px',
+              }}>
+                <div>
+                  <label style={{ ...settingLabelStyle, opacity: 0.5 }}>Sender Email</label>
+                  <input
+                    type="email"
+                    value={newSender.email}
+                    placeholder="sam@onsite-affiliate.net"
+                    onChange={(e) => setNewSender((prev) => ({ ...prev, email: e.target.value }))}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={{ ...settingLabelStyle, opacity: 0.5 }}>Display Name</label>
+                  <input
+                    value={newSender.displayName}
+                    placeholder="Sam Reid"
+                    onChange={(e) => setNewSender((prev) => ({ ...prev, displayName: e.target.value }))}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={{ ...settingLabelStyle, opacity: 0.5 }}>Daily Limit</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={newSender.dailyLimit}
+                    onChange={(e) => setNewSender((prev) => ({ ...prev, dailyLimit: parseInt(e.target.value, 10) || 1 }))}
+                    style={inputStyle}
+                  />
+                </div>
+                <button
+                  onClick={handleAddSenderAccount}
+                  disabled={addingSender}
+                  style={{
+                    height: '42px',
+                    marginTop: '8px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.18)',
+                    background: 'rgba(255,255,255,0.04)',
+                    color: 'rgba(255,255,255,0.9)',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    fontWeight: 600,
+                  }}
+                >
+                  {addingSender ? 'Adding…' : '+ Add'}
+                </button>
+              </div>
+
+              {senderError && (
+                <div style={{ fontSize: '12px', color: '#f87171', marginBottom: '10px' }}>{senderError}</div>
+              )}
 
               {senderAccounts.length === 0 ? (
                 <div style={{ fontSize: '12px', opacity: 0.45 }}>No sender inboxes found in email_accounts yet.</div>
