@@ -77,9 +77,6 @@ export default function AgentMonitor() {
 
     const resolvedOrgId = s?.org_id || nextAccounts[0]?.org_id || null;
     setActiveOrgId(resolvedOrgId);
-      .select('id, email_address, daily_send_limit, current_daily_sent, status')
-      .order('created_at', { ascending: false });
-    setSenderAccounts(accounts || []);
   };
 
   const handleUpdateSenderLimit = async (accountId, dailyLimit) => {
@@ -90,7 +87,6 @@ export default function AgentMonitor() {
     setSenderError('');
 
     const { error } = await supabase
-    await supabase
       .from('email_accounts')
       .update({ daily_send_limit: parsedLimit })
       .eq('id', accountId);
