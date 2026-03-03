@@ -964,6 +964,10 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers: CORS_HEADERS, body: '' };
   }
 
+  return respond(410, {
+    error: 'Outreach Manager has been deprecated. Domain acquisition, Cloudflare, Smartlead, and Zoho configuration are now handled offline.',
+  });
+
   if (event.httpMethod !== 'POST') {
     return respond(400, { error: 'Only POST requests are supported.' });
   }

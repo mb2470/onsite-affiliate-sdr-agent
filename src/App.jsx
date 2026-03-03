@@ -9,7 +9,6 @@ import { generateEmail, setEmailIcpContext, getCachedEmail, personalizeEmail } f
 import { findContacts, verifyContactEmails } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
 import ChatPanel from './ChatPanel';
-import OutreachManager from './OutreachManager';
 
 function App() {
   // Auth state
@@ -1241,7 +1240,6 @@ function AuthenticatedApp({ session }) {
               { key: 'enrich', label: 'Enrich Leads', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
               { key: 'agent', label: 'Manage Agent', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> },
               { key: 'manual', label: 'Manual Outreach', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> },
-              { key: 'outreach', label: 'Outreach Manager', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> },
               { key: 'audience', label: 'Create Audiences', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
             ].map(item => (
               <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
@@ -3264,7 +3262,7 @@ function AuthenticatedApp({ session }) {
                     <div className="help-step-num">5</div>
                     <div>
                       <h4>Set Up Email Infrastructure</h4>
-                      <p>Open <strong>Outreach Manager</strong> to configure your sending infrastructure — connect Smartlead and Cloudflare API keys in <em>Settings</em>, purchase and verify sending domains, create email accounts with warmup, and set up campaigns.</p>
+                      <p>Domain acquisition and DNS setup are now handled offline. Once your sender inboxes are ready, use <strong>Manual Outreach</strong> or <strong>Manage Agent</strong> to run campaigns from the platform.</p>
                     </div>
                   </div>
                   <div className="help-step">
@@ -3309,12 +3307,12 @@ function AuthenticatedApp({ session }) {
                     <p>Set up an autonomous SDR agent that runs on a schedule — enriching new leads, generating emails, and sending outreach within daily limits you configure.</p>
                   </div>
                   <div className="help-feature-card">
-                    <h4>Outreach Manager</h4>
-                    <p>Full email infrastructure management — purchase and verify sending domains via Cloudflare, create Smartlead email accounts with warmup, build campaigns, and monitor your inbox for replies.</p>
+                    <h4>Manual Outreach</h4>
+                    <p>Generate personalized emails, verify contact addresses, and send directly from your configured sender accounts while keeping all outreach history in one place.</p>
                   </div>
                   <div className="help-feature-card">
-                    <h4>Domain Management</h4>
-                    <p>Search and purchase sending domains, auto-provision DNS records (MX, SPF, DKIM, DMARC), and verify propagation — all from the Outreach Manager Domains tab.</p>
+                    <h4>Pipeline Visibility</h4>
+                    <p>Track contact status, email history, and replies in the Pipeline view so you can prioritize follow-ups and measure campaign performance.</p>
                   </div>
                   <div className="help-feature-card">
                     <h4>Create Audiences</h4>
@@ -3352,15 +3350,15 @@ function AuthenticatedApp({ session }) {
                   </div>
                   <div className="help-faq-item">
                     <h4>How do I set up email sending domains?</h4>
-                    <p>Go to <strong>Outreach Manager &gt; Settings</strong> to connect your Cloudflare and Smartlead API keys, then use the <strong>Domains</strong> tab to search, purchase, and provision DNS records. The system auto-configures MX, SPF, DKIM, and DMARC for email deliverability.</p>
+                    <p>Sending domain purchase and DNS configuration are now handled offline. After setup is complete, connect your sending mailbox credentials in your existing workflow and continue outreach from Pipeline, Manual Outreach, or Manage Agent.</p>
                   </div>
                   <div className="help-faq-item">
                     <h4>What is email warmup?</h4>
-                    <p>Warmup gradually builds sending reputation for new email accounts by exchanging real emails with other accounts in Smartlead's network. Toggle warmup on in the <strong>Accounts</strong> tab and monitor stats. Most accounts need 2-3 weeks of warmup before sending campaigns.</p>
+                    <p>Email warmup is still recommended, but it is now managed outside this app. Complete warmup in your preferred deliverability tooling before ramping outbound volume in Manual Outreach or the automated agent.</p>
                   </div>
                   <div className="help-faq-item">
                     <h4>How do I monitor campaign replies?</h4>
-                    <p>The <strong>Outreach Manager &gt; Inbox</strong> tab shows all inbound replies organized by campaign. Click any conversation to view the full message. Unread replies are highlighted and counts are shown in the stats bar.</p>
+                    <p>Use the <strong>Pipeline</strong> view to monitor contacted leads, reply status, and outreach history. This includes the latest delivery and response activity for each lead.</p>
                   </div>
                   <div className="help-faq-item">
                     <h4>Is my data secure?</h4>
@@ -3391,12 +3389,8 @@ function AuthenticatedApp({ session }) {
             <ChatPanel />
           )}
 
-          {/* ═══ OUTREACH MANAGER ═══ */}
-          {activeView === 'outreach' && (
-            <div className="view-container">
-              <OutreachManager />
-            </div>
-          )}
+
+
 
         </main>
       </div>
