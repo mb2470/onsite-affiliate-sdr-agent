@@ -9,6 +9,7 @@ export default function AgentMonitor() {
   const [addingSender, setAddingSender] = useState(false);
   const [senderError, setSenderError] = useState('');
   const [newSender, setNewSender] = useState({ email: '', displayName: 'Sam Reid', dailyLimit: 30 });
+  const [activeOrgId, setActiveOrgId] = useState(null);
   const [isCheckingReplies, setIsCheckingReplies] = useState(false);
   const [replyResult, setReplyResult] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
@@ -69,9 +70,13 @@ export default function AgentMonitor() {
     // Load sender accounts + per-account limits for agent routing
     const { data: accounts } = await supabase
       .from('email_accounts')
-      .select('id, email_address, daily_send_limit, current_daily_sent, status')
+      .select('id, org_id, email_address, daily_send_limit, current_daily_sent, status')
       .order('created_at', { ascending: false });
-    setSenderAccounts(accounts || []);
+    const nextAccounts = accounts || [];
+    setSenderAccounts(nextAccounts);
+
+    const resolvedOrgId = s?.org_id || nextAccounts[0]?.org_id || null;
+    setActiveOrgId(resolvedOrgId);
   };
 
   const handleUpdateSenderLimit = async (accountId, dailyLimit) => {
@@ -105,8 +110,8 @@ export default function AgentMonitor() {
     const email = (newSender.email || '').trim().toLowerCase();
     const dailyLimit = parseInt(newSender.dailyLimit, 10);
 
-    if (!settings?.org_id) {
-      setSenderError('Could not determine org_id from agent settings.');
+    if (!activeOrgId) {
+      setSenderError('Could not determine org for this workspace yet.');
       return;
     }
 
@@ -126,13 +131,19 @@ export default function AgentMonitor() {
       return;
     }
 
+    const existing = senderAccounts.find((account) => account.email_address?.toLowerCase() === email);
+    if (existing) {
+      setSenderError('That sender email is already configured.');
+      return;
+    }
+
     setAddingSender(true);
     setSenderError('');
 
     const { data: existingDomain, error: domainError } = await supabase
       .from('email_domains')
       .select('id, domain')
-      .eq('org_id', settings.org_id)
+      .eq('org_id', activeOrgId)
       .ilike('domain', domainName)
       .limit(1)
       .maybeSingle();
@@ -146,7 +157,7 @@ export default function AgentMonitor() {
     const { data: inserted, error: insertError } = await supabase
       .from('email_accounts')
       .insert({
-        org_id: settings.org_id,
+        org_id: activeOrgId,
         domain_id: existingDomain.id,
         email_address: email,
         display_name: (newSender.displayName || 'Sam Reid').trim(),
@@ -155,7 +166,7 @@ export default function AgentMonitor() {
         current_daily_sent: 0,
         status: 'active',
       })
-      .select('id, email_address, daily_send_limit, current_daily_sent, status')
+      .select('id, org_id, email_address, daily_send_limit, current_daily_sent, status')
       .single();
 
     if (insertError) {
