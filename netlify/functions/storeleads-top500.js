@@ -3,7 +3,7 @@ const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogS
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
 );
 
 const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
@@ -43,8 +43,12 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
+    const body = JSON.parse(event.body || '{}');
+    const orgId = body.org_id || event.headers['x-org-id'];
+    if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
+
     // Load scoring config from ICP profile
-    const config = await getIcpScoringConfig(supabase);
+    const config = await getIcpScoringConfig(supabase, orgId);
     console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
 
     // Get existing websites
@@ -52,7 +56,7 @@ exports.handler = async (event) => {
     let from = 0;
     let hasMore = true;
     while (hasMore) {
-      const { data } = await supabase.from('leads').select('website').range(from, from + 999);
+      const { data } = await supabase.from('leads').select('website').eq('org_id', orgId).range(from, from + 999);
       if (data && data.length > 0) {
         data.forEach(l => existingWebsites.add(l.website.toLowerCase().replace(/^www\./, '')));
         from += 1000;
@@ -95,6 +99,7 @@ exports.handler = async (event) => {
         }
 
         const { error: insertError } = await supabase.from('leads').insert({
+          org_id: orgId,
           website: cleanName,
           status: 'enriched',
           source: 'storeleads_top500',
@@ -141,6 +146,7 @@ exports.handler = async (event) => {
         .from('leads')
         .select('id, website, icp_fit')
         .eq('source', 'storeleads_top500')
+        .eq('org_id', orgId)
         .is('has_contacts', null);
 
       let contactsMatched = 0;
@@ -151,6 +157,7 @@ exports.handler = async (event) => {
         const { data: contacts } = await supabase
           .from('contact_database')
           .select('first_name, last_name, email')
+          .eq('org_id', orgId)
           .or(`website.ilike.%${cleanDomain}%,email_domain.ilike.%${cleanDomain}%`)
           .limit(1);
 
@@ -160,10 +167,10 @@ exports.handler = async (event) => {
             has_contacts: true,
             contact_name: [c.first_name, c.last_name].filter(Boolean).join(' '),
             contact_email: c.email,
-          }).eq('id', lead.id);
+          }).eq('id', lead.id).eq('org_id', orgId);
           contactsMatched++;
         } else {
-          await supabase.from('leads').update({ has_contacts: false }).eq('id', lead.id);
+          await supabase.from('leads').update({ has_contacts: false }).eq('id', lead.id).eq('org_id', orgId);
 
           // Opt 3: For HIGH leads with no DB matches, trigger Apollo discovery
           if (lead.icp_fit === 'HIGH' && APOLLO_API_KEY) {
@@ -171,7 +178,7 @@ exports.handler = async (event) => {
               fetch('/.netlify/functions/apollo-find-contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ domain: cleanDomain, leadId: lead.id }),
+                body: JSON.stringify({ domain: cleanDomain, leadId: lead.id, org_id: orgId }),
               }).catch(err => console.error(`Apollo discovery error for ${cleanDomain}: ${err.message}`))
             );
           }
@@ -195,6 +202,7 @@ exports.handler = async (event) => {
     console.log(`✅ Top 500 import complete:`, summary);
 
     await supabase.from('activity_log').insert({
+      org_id: orgId,
       activity_type: 'lead_discovery',
       summary: `Top 500 import: fetched ${totalFetched}, added ${newAdded} new (${alreadyExisted} already existed)`,
       status: 'success',

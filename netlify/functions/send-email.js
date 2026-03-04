@@ -3,7 +3,7 @@ const { classifyApolloStatus, APOLLO_SAFE_STATUSES } = require('./lib/apollo-ver
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
 );
 
 const ELV_API_KEY = process.env.EMAILLISTVERIFY_API_KEY;
@@ -19,10 +19,11 @@ const VERIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * Look up a contact's cached apollo_email_status from contact_database.
  * Contacts are pre-verified during discovery (Opt 1), so we just read the status.
  */
-async function getCachedApolloStatus(email) {
+async function getCachedApolloStatus(email, orgId) {
   const { data } = await supabase
     .from('contact_database')
     .select('apollo_email_status, apollo_verified_at')
+    .eq('org_id', orgId)
     .eq('email', email)
     .not('apollo_email_status', 'is', null)
     .limit(1);
@@ -35,10 +36,11 @@ async function getCachedApolloStatus(email) {
  * Check whether this email has previously bounced.
  * We treat bounced contacts as permanently suppressed.
  */
-async function isPermanentlySuppressed(email) {
+async function isPermanentlySuppressed(email, orgId) {
   const { data } = await supabase
     .from('activity_log')
     .select('id')
+    .eq('org_id', orgId)
     .eq('activity_type', 'email_bounced')
     .ilike('summary', `Bounced: ${email} %`)
     .limit(1);
@@ -50,10 +52,11 @@ async function isPermanentlySuppressed(email) {
  * Check if a contact already has a valid (non-expired) ELV verification cached
  * in the contacts table. Returns the cached result or null.
  */
-async function getCachedVerification(email) {
+async function getCachedVerification(email, orgId) {
   const { data } = await supabase
     .from('contacts')
     .select('elv_status, elv_verified_at')
+    .eq('org_id', orgId)
     .eq('email', email)
     .not('elv_status', 'is', null)
     .not('elv_verified_at', 'is', null)
@@ -78,23 +81,25 @@ async function getCachedVerification(email) {
 /**
  * Save verification result to both contacts and contact_database tables.
  */
-async function saveVerification(email, status) {
+async function saveVerification(email, status, orgId) {
   const now = new Date().toISOString();
 
   await supabase
     .from('contacts')
     .update({ elv_status: status, elv_verified_at: now })
+    .eq('org_id', orgId)
     .eq('email', email);
 
   await supabase
     .from('contact_database')
     .update({ elv_status: status, elv_verified_at: now })
+    .eq('org_id', orgId)
     .eq('email', email);
 }
 
-async function verifyEmail(email) {
+async function verifyEmail(email, orgId) {
   // 1. Check for a valid cached verification first
-  const cached = await getCachedVerification(email);
+  const cached = await getCachedVerification(email, orgId);
   if (cached) return cached;
 
   // 2. No valid cache — do a live verification
@@ -114,10 +119,10 @@ async function verifyEmail(email) {
 
     if (!safe && BAD_STATUSES.includes(status)) {
       console.log(`🗑️ Removing invalid email ${email} from contact_database`);
-      await supabase.from('contact_database').delete().eq('email', email);
+      await supabase.from('contact_database').delete().eq('org_id', orgId).eq('email', email);
     }
 
-    await saveVerification(email, status);
+    await saveVerification(email, status, orgId);
 
     return { email, status, safe, cached: false, verifiedAt: new Date().toISOString() };
   } catch (e) {
@@ -175,7 +180,12 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const { to, bcc, subject, body, leadId, website, contactDetails } = JSON.parse(event.body);
+    const { to, bcc, subject, body, leadId, website, contactDetails, org_id } = JSON.parse(event.body || '{}');
+    const orgId = org_id || event.headers['x-org-id'];
+
+    if (!orgId) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
+    }
 
     if (!to && (!bcc || bcc.length === 0)) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No recipients' }) };
@@ -191,16 +201,16 @@ exports.handler = async (event) => {
     const preVerified = [];
 
     for (const email of allEmails) {
-      if (await isPermanentlySuppressed(email)) {
+      if (await isPermanentlySuppressed(email, orgId)) {
         blocked.push({ email, status: 'previously_bounced_suppressed' });
         console.log(`🚫 Blocked (Suppressed bounce): ${email}`);
 
         // Keep contact_database clean even if this address got rediscovered.
-        await supabase.from('contact_database').delete().eq('email', email);
+        await supabase.from('contact_database').delete().eq('org_id', orgId).eq('email', email);
         continue;
       }
 
-      const cachedApollo = await getCachedApolloStatus(email);
+      const cachedApollo = await getCachedApolloStatus(email, orgId);
 
       if (cachedApollo) {
         const action = classifyApolloStatus(cachedApollo.apollo_email_status);
@@ -213,7 +223,7 @@ exports.handler = async (event) => {
           // Should have been caught during discovery, but safety net
           blocked.push({ email, status: `apollo_${cachedApollo.apollo_email_status}` });
           console.log(`🚫 Blocked (Apollo): ${email} [${cachedApollo.apollo_email_status}]`);
-          await supabase.from('contact_database').delete().eq('email', email);
+          await supabase.from('contact_database').delete().eq('org_id', orgId).eq('email', email);
         } else {
           // extrapolated, catch_all, unavailable — route to ELV
           emailsForElv.push(email);
@@ -229,7 +239,7 @@ exports.handler = async (event) => {
     }
 
     // ── Step 2: ELV verification for non-Apollo-verified emails ────
-    const elvResults = await Promise.all(emailsForElv.map(e => verifyEmail(e)));
+    const elvResults = await Promise.all(emailsForElv.map(e => verifyEmail(e, orgId)));
     const elvSafe = elvResults.filter(r => r.safe).map(r => r.email);
     const elvBlocked = elvResults.filter(r => !r.safe);
 
@@ -247,6 +257,7 @@ exports.handler = async (event) => {
 
     if (verificationSummary && leadId) {
       await supabase.from('activity_log').insert({
+        org_id: orgId,
         activity_type: 'email_verified',
         lead_id: leadId,
         summary: verificationSummary,
@@ -311,6 +322,7 @@ exports.handler = async (event) => {
         email_subject: subject,
         email_body: body,
         sent_at: new Date().toISOString(),
+        org_id: orgId,
       };
     });
 
@@ -325,9 +337,10 @@ exports.handler = async (event) => {
         contact_name: firstContact.contact_name || null,
         contact_email: firstContact.contact_email || null,
         updated_at: new Date().toISOString(),
-      }).eq('id', leadId);
+      }).eq('id', leadId).eq('org_id', orgId);
 
       await supabase.from('activity_log').insert({
+        org_id: orgId,
         activity_type: 'email_sent',
         lead_id: leadId,
         summary: `Email sent to ${safeEmails.join(', ')}${blockedEmails.length ? ` (${blockedEmails.length} blocked)` : ''}`,

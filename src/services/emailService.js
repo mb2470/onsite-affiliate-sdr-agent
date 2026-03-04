@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient';
+import { resolveOrgId } from './orgService';
 
 // Module-level ICP profile cache (set from App.jsx via setEmailIcpContext)
 let _emailIcpContext = null;
@@ -133,12 +134,14 @@ function buildEmailPrompt(lead, firstName) {
 
 // Check outreach_log for a previously sent email for this lead that can be reused.
 // Returns { subject, body, contactName, sentAt } or null if none found.
-export const getCachedEmail = async (website) => {
+export const getCachedEmail = async (website, orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   const cleanDomain = website.toLowerCase().replace(/^www\./, '');
 
   const { data, error } = await supabase
     .from('outreach_log')
     .select('email_subject, email_body, contact_name, sent_at')
+    .eq('org_id', scopedOrgId)
     .ilike('website', `%${cleanDomain}%`)
     .order('sent_at', { ascending: false })
     .limit(1);

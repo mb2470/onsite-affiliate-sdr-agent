@@ -27,10 +27,11 @@ const VERIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * Check cached Apollo email status from contact_database.
  */
-async function getCachedApolloStatus(email) {
+async function getCachedApolloStatus(email, orgId) {
   const { data } = await supabase
     .from('contact_database')
     .select('apollo_email_status, apollo_verified_at')
+    .eq('org_id', orgId)
     .eq('email', email)
     .not('apollo_email_status', 'is', null)
     .limit(1);
@@ -42,10 +43,11 @@ async function getCachedApolloStatus(email) {
 /**
  * Check if an email previously bounced and is permanently suppressed.
  */
-async function isPermanentlySuppressed(email) {
+async function isPermanentlySuppressed(email, orgId) {
   const { data } = await supabase
     .from('activity_log')
     .select('id')
+    .eq('org_id', orgId)
     .eq('activity_type', 'email_bounced')
     .ilike('summary', `Bounced: ${email} %`)
     .limit(1);
@@ -56,10 +58,11 @@ async function isPermanentlySuppressed(email) {
 /**
  * Check cached ELV status from contacts table.
  */
-async function getCachedElvStatus(email) {
+async function getCachedElvStatus(email, orgId) {
   const { data } = await supabase
     .from('contacts')
     .select('elv_status, elv_verified_at')
+    .eq('org_id', orgId)
     .eq('email', email)
     .not('elv_status', 'is', null)
     .not('elv_verified_at', 'is', null)
@@ -77,7 +80,7 @@ async function getCachedElvStatus(email) {
 /**
  * Run live ELV verification and cache the result.
  */
-async function verifyViaElv(email) {
+async function verifyViaElv(email, orgId) {
   if (!ELV_API_KEY) {
     return { status: 'skipped', safe: true };
   }
@@ -94,12 +97,14 @@ async function verifyViaElv(email) {
     await supabase
       .from('contacts')
       .update({ elv_status: status, elv_verified_at: now })
+      .eq('org_id', orgId)
       .eq('email', email);
 
     // Also cache in contact_database
     await supabase
       .from('contact_database')
       .update({ elv_status: status, elv_verified_at: now })
+      .eq('org_id', orgId)
       .eq('email', email);
 
     return { status, safe };
@@ -117,7 +122,12 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const { emails } = JSON.parse(event.body || '{}');
+    const { emails, org_id } = JSON.parse(event.body || '{}');
+    const orgId = org_id || event.headers['x-org-id'];
+
+    if (!orgId) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
+    }
 
     if (!emails || emails.length === 0) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No emails provided' }) };
@@ -126,13 +136,13 @@ exports.handler = async (event) => {
     const results = [];
 
     for (const email of emails) {
-      if (await isPermanentlySuppressed(email)) {
+      if (await isPermanentlySuppressed(email, orgId)) {
         results.push({ email, status: 'previously_bounced_suppressed', safe: false, source: 'suppression' });
         continue;
       }
 
       // Stage 1: Check cached Apollo status
-      const apollo = await getCachedApolloStatus(email);
+      const apollo = await getCachedApolloStatus(email, orgId);
 
       if (apollo) {
         const action = classifyApolloStatus(apollo.apollo_email_status);
@@ -149,14 +159,14 @@ exports.handler = async (event) => {
       }
 
       // Stage 2: Check cached ELV status
-      const cachedElv = await getCachedElvStatus(email);
+      const cachedElv = await getCachedElvStatus(email, orgId);
       if (cachedElv) {
         results.push({ email, status: cachedElv.status, safe: cachedElv.safe, source: 'elv_cached' });
         continue;
       }
 
       // Stage 3: Live ELV verification
-      const elv = await verifyViaElv(email);
+      const elv = await verifyViaElv(email, orgId);
       results.push({ email, status: elv.status, safe: elv.safe, source: 'elv' });
     }
 

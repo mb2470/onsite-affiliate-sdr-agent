@@ -8,6 +8,7 @@ import { enrichLeads, setIcpContext } from './services/enrichService';
 import { generateEmail, setEmailIcpContext, getCachedEmail, personalizeEmail } from './services/emailService';
 import { findContacts, verifyContactEmails } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
+import { clearCachedOrgId } from './services/orgService';
 import ChatPanel from './ChatPanel';
 
 function App() {
@@ -24,6 +25,7 @@ function App() {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      clearCachedOrgId();
       setSession(session);
     });
 
@@ -58,6 +60,10 @@ function App() {
 }
 
 function AuthenticatedApp({ session }) {
+  const [orgLoading, setOrgLoading] = useState(true);
+  const [organizations, setOrganizations] = useState([]);
+  const [orgId, setOrgId] = useState(null);
+
   // Global state
   const [activeView, setActiveView] = useState('add');
   const [totalLeadCount, setTotalLeadCount] = useState(0);
@@ -200,27 +206,65 @@ function AuthenticatedApp({ session }) {
   // ═══════════════════════════════════════════
 
   useEffect(() => {
+    (async () => {
+      setOrgLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('user_organizations')
+          .select('org_id, organizations(id, name, slug)')
+          .eq('user_id', session.user.id)
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        const orgs = (data || []).map((r) => ({
+          id: r.org_id,
+          name: r.organizations?.name || 'Organization',
+          slug: r.organizations?.slug || '',
+        }));
+
+        setOrganizations(orgs);
+
+        const storedOrgId = localStorage.getItem('selected_org_id');
+        const hasStored = storedOrgId && orgs.some((o) => o.id === storedOrgId);
+        const selected = hasStored ? storedOrgId : (orgs[0]?.id || null);
+        setOrgId(selected);
+      } catch (e) {
+        console.error('Failed loading organizations:', e);
+        setOrganizations([]);
+        setOrgId(null);
+      }
+      setOrgLoading(false);
+    })();
+  }, [session.user.id]);
+
+  useEffect(() => {
+    if (orgId) localStorage.setItem('selected_org_id', orgId);
+  }, [orgId]);
+
+  useEffect(() => {
+    if (!orgId) return;
     loadGlobalData();
     loadEnrichLeads();
     loadManualLeads();
     loadIcpProfile();
-  }, []);
+  }, [orgId]);
 
   const loadGlobalData = async () => {
     try {
-      const count = await getTotalLeadCount();
+      const count = await getTotalLeadCount(orgId);
       setTotalLeadCount(count);
     } catch (e) { console.error(e); }
 
     // ICP fit counts (enriched leads only)
     try {
-      const { count: enriched } = await supabase.from('leads').select('*', { count: 'exact', head: true }).in('status', ['enriched', 'contacted']);
-      const { count: unenriched } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new');
+      const { count: enriched } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).in('status', ['enriched', 'contacted']);
+      const { count: unenriched } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('status', 'new');
       setEnrichedCount(enriched || 0);
       setUnenrichedCount(unenriched || 0);
-      const { count: high } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'HIGH');
-      const { count: medium } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'MEDIUM');
-      const { count: low } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'LOW');
+      const { count: high } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'HIGH');
+      const { count: medium } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'MEDIUM');
+      const { count: low } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'LOW');
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
@@ -228,6 +272,7 @@ function AuthenticatedApp({ session }) {
     try {
       const { count } = await supabase.from('activity_log')
         .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
         .in('activity_type', ['email_sent', 'email_exported']);
       setEmailsSent(count || 0);
     } catch (e) { console.error(e); }
@@ -237,15 +282,16 @@ function AuthenticatedApp({ session }) {
       // Leads contacted — count directly from leads status (canonical source)
       const { count: contactedLeadCount } = await supabase.from('leads')
         .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
         .in('status', ['contacted', 'replied', 'qualified', 'demo']);
 
       // Unique contacts emailed — from outreach_log without followup_number filter
-      const { data: outreach } = await supabase.from('outreach_log').select('contact_email, lead_id');
+      const { data: outreach } = await supabase.from('outreach_log').select('contact_email, lead_id').eq('org_id', orgId);
       const rows = outreach || [];
       const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase()).filter(Boolean)).size;
 
       // Replied leads
-      const { data: repliedLeadRows } = await supabase.from('leads').select('id').eq('status', 'replied');
+      const { data: repliedLeadRows } = await supabase.from('leads').select('id').eq('org_id', orgId).eq('status', 'replied');
       const repliedLeadIds = new Set((repliedLeadRows || []).map(r => r.id));
       const repliedContacts = new Set(rows.filter(r => repliedLeadIds.has(r.lead_id)).map(r => r.contact_email?.toLowerCase()).filter(Boolean)).size;
 
@@ -253,18 +299,18 @@ function AuthenticatedApp({ session }) {
     } catch (e) { console.error(e); }
 
     try {
-      const { data } = await supabase.from('agent_settings').select('*').single();
+      const { data } = await supabase.from('agent_settings').select('*').eq('org_id', orgId).single();
       setAgentSettings(data);
     } catch (e) { console.error(e); }
 
     try {
       const today = new Date().toISOString().split('T')[0];
-      const { data } = await supabase.from('daily_stats').select('*').eq('date', today).maybeSingle();
+      const { data } = await supabase.from('daily_stats').select('*').eq('org_id', orgId).eq('date', today).maybeSingle();
       setStats(data || { leads_enriched: 0, contacts_found: 0, emails_drafted: 0, emails_sent: 0 });
     } catch (e) { console.error(e); }
 
     try {
-      const { data } = await supabase.from('activity_log').select('*, leads(website)').order('created_at', { ascending: false }).limit(50);
+      const { data } = await supabase.from('activity_log').select('*, leads(website)').eq('org_id', orgId).order('created_at', { ascending: false }).limit(50);
       setActivityLog(data || []);
     } catch (e) { console.error(e); }
   };
@@ -277,6 +323,7 @@ function AuthenticatedApp({ session }) {
     setIsLoadingEnrich(true);
     try {
       const { leads, totalCount } = await searchLeads({
+        orgId,
         search: search ?? enrichSearchTerm,
         country: country ?? enrichFilterCountry,
         unenrichedOnly: true,
@@ -297,7 +344,7 @@ function AuthenticatedApp({ session }) {
     }, 400);
   };
 
-  useEffect(() => { loadEnrichLeads(); }, [enrichFilterCountry, enrichPage]);
+  useEffect(() => { if (orgId) loadEnrichLeads(); }, [enrichFilterCountry, enrichPage, orgId]);
 
   // ═══════════════════════════════════════════
   // ENRICHMENT
@@ -311,7 +358,7 @@ function AuthenticatedApp({ session }) {
 
     const results = await enrichLeads(selectedLeads, enrichLeadsList, (current, total, site, status) => {
       setEnrichProgress({ current, total, currentSite: site, status });
-    });
+    }, orgId);
 
     setIsEnriching(false);
     setEnrichProgress(null);
@@ -321,9 +368,9 @@ function AuthenticatedApp({ session }) {
     // Refresh data
     loadEnrichLeads();
     loadManualLeads();
-    const count = await getTotalLeadCount();
+    const count = await getTotalLeadCount(orgId);
     setTotalLeadCount(count);
-    const { data: activity } = await supabase.from('activity_log').select('*, leads(website)').order('created_at', { ascending: false }).limit(50);
+    const { data: activity } = await supabase.from('activity_log').select('*, leads(website)').eq('org_id', orgId).order('created_at', { ascending: false }).limit(50);
     setActivityLog(activity || []);
   };
 
@@ -349,6 +396,7 @@ function AuthenticatedApp({ session }) {
       let query = supabase
         .from('leads')
         .select('*', { count: 'exact' })
+        .eq('org_id', orgId)
         .in('status', ['enriched', 'contacted', 'replied']);
 
       if (s && s.trim()) {
@@ -379,6 +427,7 @@ function AuthenticatedApp({ session }) {
         const { data: outreachData } = await supabase
           .from('outreach_log')
           .select('website, contact_email, contact_name, sent_at, replied_at')
+          .eq('org_id', orgId)
           .in('website', websites)
           .order('sent_at', { ascending: false });
 
@@ -407,7 +456,7 @@ function AuthenticatedApp({ session }) {
     }, 400);
   };
 
-  useEffect(() => { loadManualLeads(); }, [manualFilterContacted, manualPage]);
+  useEffect(() => { if (orgId) loadManualLeads(); }, [manualFilterContacted, manualPage, orgId]);
 
   const handleGenerateEmail = async (forceNew = false) => {
     if (!selectedLeadForManual) return;
@@ -422,7 +471,7 @@ function AuthenticatedApp({ session }) {
     try {
       // Check for cached email from previous outreach (saves AI compute)
       if (!forceNew) {
-        const cached = await getCachedEmail(selectedLeadForManual.website);
+        const cached = await getCachedEmail(selectedLeadForManual.website, orgId);
         if (cached) {
           const personalized = personalizeEmail(cached.text, firstName);
           setManualEmail(personalized);
@@ -446,12 +495,13 @@ function AuthenticatedApp({ session }) {
     setIsLoadingContacts(true);
     setVerificationMap({});
     try {
-      const contacts = await findContacts(selectedLeadForManual);
+      const contacts = await findContacts(selectedLeadForManual, orgId);
 
       // Check which contacts were already emailed
       const { data: sent } = await supabase
         .from('outreach_log')
         .select('contact_email, sent_at')
+        .eq('org_id', orgId)
         .eq('website', selectedLeadForManual.website);
 
       const sentEmails = new Map((sent || []).map(s => [s.contact_email, s.sent_at]));
@@ -469,7 +519,7 @@ function AuthenticatedApp({ session }) {
       if (enrichedContacts.length > 0) {
         setIsVerifying(true);
         const emails = enrichedContacts.map(c => c.email);
-        const vMap = await verifyContactEmails(emails);
+        const vMap = await verifyContactEmails(emails, orgId);
         setVerificationMap(vMap);
         setIsVerifying(false);
       }
@@ -488,7 +538,11 @@ function AuthenticatedApp({ session }) {
     setIsCheckingBounces(true);
     setBounceResult(null);
     try {
-      const res = await fetch('/.netlify/functions/check-bounces', { method: 'POST' });
+      const res = await fetch('/.netlify/functions/check-bounces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ org_id: orgId }),
+      });
       const data = await res.json();
       setBounceResult(data);
       if (data.bouncedEmails?.length > 0) {
@@ -504,7 +558,7 @@ function AuthenticatedApp({ session }) {
 
   const handleExportToGmail = async () => {
     if (!selectedLeadForManual) return;
-    await exportToGmail(selectedLeadForManual.id, manualEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
+    await exportToGmail(selectedLeadForManual.id, manualEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website, orgId);
     // Reset after short delay
     setTimeout(() => {
       setManualStep(1);
@@ -537,7 +591,7 @@ function AuthenticatedApp({ session }) {
     setIsSending(true);
     setSendResult(null);
     try {
-      const result = await sendEmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
+      const result = await sendEmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website, orgId);
       setSendResult({ success: true, recipients: result.recipients });
       
       // Reset UI after brief delay to show success
@@ -572,7 +626,7 @@ function AuthenticatedApp({ session }) {
       personalizedEmail = personalizedEmail.replace(/Hey there -/i, `Hey ${firstName} -`);
     }
 
-    await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website);
+    await exportToGmail(selectedLeadForManual.id, personalizedEmail, selectedManualContacts, manualContacts, selectedLeadForManual.website, orgId);
 
     setManualStep(1);
     setSelectedLeadForManual(null);
@@ -592,9 +646,9 @@ function AuthenticatedApp({ session }) {
   const handleAddSingle = async () => {
     if (!newWebsite.trim()) return;
     try {
-      await addLead(newWebsite);
+      await addLead(newWebsite, orgId);
       setNewWebsite('');
-      const count = await getTotalLeadCount();
+      const count = await getTotalLeadCount(orgId);
       setTotalLeadCount(count);
       loadEnrichLeads();
     } catch (e) { alert(e.message); }
@@ -604,9 +658,9 @@ function AuthenticatedApp({ session }) {
     const websites = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w);
     if (!websites.length) return;
     try {
-      const { added, skipped } = await bulkAddLeads(websites);
+      const { added, skipped } = await bulkAddLeads(websites, 'bulk_add', orgId);
       setBulkWebsites('');
-      const count = await getTotalLeadCount();
+      const count = await getTotalLeadCount(orgId);
       setTotalLeadCount(count);
       loadEnrichLeads();
       alert(`✅ Added ${added} leads. Skipped ${skipped} duplicates.`);
@@ -670,8 +724,8 @@ function AuthenticatedApp({ session }) {
 
         if (!leads.length) { alert('No valid websites found'); setIsUploading(false); return; }
 
-        const { added, skipped } = await bulkAddLeads(leads, 'csv_upload');
-        const count = await getTotalLeadCount();
+        const { added, skipped } = await bulkAddLeads(leads, 'csv_upload', orgId);
+        const count = await getTotalLeadCount(orgId);
         setTotalLeadCount(count);
         loadEnrichLeads();
         alert(`✅ Imported ${added} leads. Skipped ${skipped} duplicates.`);
@@ -687,7 +741,7 @@ function AuthenticatedApp({ session }) {
 
   const updateAgentSettings = async (updates) => {
     try {
-      const { error } = await supabase.from('agent_settings').update(updates).eq('id', '00000000-0000-0000-0000-000000000001');
+      const { error } = await supabase.from('agent_settings').update(updates).eq('id', '00000000-0000-0000-0000-000000000001').eq('org_id', orgId);
       if (!error) setAgentSettings({ ...agentSettings, ...updates });
     } catch (e) { console.error(e); }
   };
@@ -699,6 +753,7 @@ function AuthenticatedApp({ session }) {
   const loadPipeline = async () => {
     try {
       const { leads, totalCount } = await searchLeads({
+        orgId,
         search: pipelineSearch,
         status: pipelineFilter,
         page: pipelinePage,
@@ -712,6 +767,7 @@ function AuthenticatedApp({ session }) {
         const { data: outreachData } = await supabase
           .from('outreach_log')
           .select('website, contact_email, contact_name, email_subject, email_body, sent_at, replied_at')
+          .eq('org_id', orgId)
           .in('website', websites)
           .order('sent_at', { ascending: false });
 
@@ -733,14 +789,17 @@ function AuthenticatedApp({ session }) {
       const { count: totalWithContacts } = await supabase
         .from('leads')
         .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
         .eq('has_contacts', true);
       const { count: totalContacted } = await supabase
         .from('leads')
         .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
         .eq('status', 'contacted');
       const { count: totalReplied } = await supabase
         .from('leads')
         .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
         .eq('status', 'replied');
 
       const contacted = (totalContacted || 0) + (totalReplied || 0);
@@ -757,7 +816,7 @@ function AuthenticatedApp({ session }) {
     setEmailDetailData(lead.outreach_history || []);
   };
 
-  useEffect(() => { if (activeView === 'pipeline') loadPipeline(); }, [activeView, pipelineFilter, pipelinePage, pipelineSearch]);
+  useEffect(() => { if (activeView === 'pipeline' && orgId) loadPipeline(); }, [activeView, pipelineFilter, pipelinePage, pipelineSearch, orgId]);
 
   // ═══════════════════════════════════════════
   // CREATE AUDIENCE
@@ -774,11 +833,12 @@ function AuthenticatedApp({ session }) {
       const { count } = await supabase
         .from('leads')
         .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
         .in('status', ['enriched', 'contacted', 'replied'])
         .in('icp_fit', audienceFit);
       setAudiencePreviewCount(count || 0);
     })();
-  }, [audienceFit]);
+  }, [audienceFit, orgId]);
 
   const handleAudienceDownload = async () => {
     if (audienceFit.length === 0 || !audienceExportType) return;
@@ -790,6 +850,7 @@ function AuthenticatedApp({ session }) {
       const { data: leads } = await supabase
         .from('leads')
         .select('*')
+        .eq('org_id', orgId)
         .in('status', ['enriched', 'contacted', 'replied'])
         .in('icp_fit', audienceFit)
         .order('icp_fit', { ascending: true });
@@ -839,6 +900,7 @@ function AuthenticatedApp({ session }) {
           const { data: contacts, error } = await supabase
             .from('contact_database')
             .select('*')
+            .eq('org_id', orgId)
             .in('email_domain', batch)
             .limit(5000);
           if (error) console.error('Contact fetch error:', error);
@@ -907,6 +969,7 @@ function AuthenticatedApp({ session }) {
       const { data, error } = await supabase
         .from('icp_profiles')
         .select('*')
+        .eq('org_id', orgId)
         .eq('is_active', true)
         .order('updated_at', { ascending: false })
         .limit(1)
@@ -977,10 +1040,10 @@ function AuthenticatedApp({ session }) {
   const saveIcpProfile = async () => {
     setIcpSaving(true);
     try {
-      const payload = { ...icpProfile, is_active: true };
+      const payload = { ...icpProfile, is_active: true, org_id: orgId };
 
       if (icpProfileId) {
-        const { error } = await supabase.from('icp_profiles').update(payload).eq('id', icpProfileId);
+        const { error } = await supabase.from('icp_profiles').update(payload).eq('id', icpProfileId).eq('org_id', orgId);
         if (error) throw error;
       } else {
         const { data, error } = await supabase.from('icp_profiles').insert(payload).select().single();
@@ -1035,12 +1098,22 @@ function AuthenticatedApp({ session }) {
     );
   };
 
+  if (orgLoading) {
+    return <div className="app"><div style={{ padding: '32px', color: 'rgba(255,255,255,0.6)' }}>Loading organization…</div></div>;
+  }
+
+  if (!orgId) {
+    return <div className="app"><div style={{ padding: '32px', color: '#f87171' }}>No organization assigned to this account.</div></div>;
+  }
+
+  const activeOrg = organizations.find((o) => o.id === orgId);
+
   // Delete a lead and refresh the list it came from
   const deleteLead = async (leadId, e) => {
     if (e) { e.stopPropagation(); e.preventDefault(); }
     if (!confirm('Delete this lead? This will also remove its contacts, emails, and outreach history.')) return;
     try {
-      const { error } = await supabase.from('leads').delete().eq('id', leadId);
+      const { error } = await supabase.from('leads').delete().eq('id', leadId).eq('org_id', orgId);
       if (error) throw error;
       // Remove from local state immediately
       setEnrichLeadsList(prev => prev.filter(l => l.id !== leadId));
@@ -1138,6 +1211,36 @@ function AuthenticatedApp({ session }) {
         <div className="header-content">
           <h1>🤖 AI SDR Agent</h1>
           <p>Onsite Affiliate Outreach Platform</p>
+          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '11px', opacity: 0.7 }}>Organization</span>
+            <select
+              value={orgId}
+              onChange={(e) => {
+                const nextOrgId = e.target.value;
+                setOrgId(nextOrgId);
+                setSelectedLeadForManual(null);
+                setManualContacts([]);
+                setSelectedManualContacts([]);
+                setEmailDetailLead(null);
+              }}
+              style={{
+                background: 'rgba(255,255,255,0.06)',
+                color: '#fff',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: '6px',
+                fontSize: '12px',
+                padding: '4px 8px',
+                fontFamily: 'inherit'
+              }}
+            >
+              {organizations.map((org) => (
+                <option key={org.id} value={org.id} style={{ color: '#111' }}>
+                  {org.name}{org.slug ? ` (${org.slug})` : ''}
+                </option>
+              ))}
+            </select>
+            {activeOrg?.slug && <span style={{ fontSize: '11px', opacity: 0.55 }}>/{activeOrg.slug}</span>}
+          </div>
         </div>
         <div className="header-outreach-stats">
           <div className="outreach-stat-group">
@@ -1208,7 +1311,11 @@ function AuthenticatedApp({ session }) {
             )}
           </div>
           <div style={{ marginLeft: '8px' }}>
-            <button onClick={() => supabase.auth.signOut()}
+            <button onClick={() => {
+              clearCachedOrgId();
+              localStorage.removeItem('selected_org_id');
+              supabase.auth.signOut();
+            }}
               style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '11px', whiteSpace: 'nowrap', fontFamily: 'inherit', transition: 'all 0.15s' }}
               onMouseEnter={(e) => { e.target.style.backgroundColor = 'rgba(255,255,255,0.08)'; e.target.style.color = 'rgba(255,255,255,0.7)'; }}
               onMouseLeave={(e) => { e.target.style.backgroundColor = 'rgba(255,255,255,0.04)'; e.target.style.color = 'rgba(255,255,255,0.4)'; }}>
@@ -2385,12 +2492,12 @@ function AuthenticatedApp({ session }) {
                         try {
                           const res = await fetch('/.netlify/functions/storeleads-top500', { method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ categories: discoverCategories, countries: discoverCountries, minProducts: discoverMinProducts, maxResults: discoverMaxResults }),
+                            body: JSON.stringify({ org_id: orgId, categories: discoverCategories, countries: discoverCountries, minProducts: discoverMinProducts, maxResults: discoverMaxResults }),
                           });
                           const data = await res.json();
                           setDiscoverResults(data);
                           setDiscoverStatus('done');
-                          const count = await getTotalLeadCount();
+                          const count = await getTotalLeadCount(orgId);
                           setTotalLeadCount(count);
                           await loadGlobalData();
                         } catch (err) {
