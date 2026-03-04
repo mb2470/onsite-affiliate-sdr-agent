@@ -22,18 +22,19 @@ const DEFAULTS = {
  * Fetch the active ICP profile's scoring config from Supabase.
  * Returns a config object with thresholds + target categories/geography.
  */
-async function getIcpScoringConfig(supabase) {
+async function getIcpScoringConfig(supabase, orgId) {
   try {
     const { data, error } = await supabase
       .from('icp_profiles')
       .select('min_product_count, min_monthly_sales, min_annual_revenue, min_employee_count, industries, geography')
       .eq('is_active', true)
+      .eq('org_id', orgId)
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (error || !data) {
-      console.log('ICP profile not found, using default scoring thresholds');
+      console.log(`ICP profile not found for org ${orgId}, using default scoring thresholds`);
       return DEFAULTS;
     }
 

@@ -1,7 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { classifyApolloStatus, backupTitlePivot } = require('./lib/apollo-verify');
 
-const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY);
+const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY);
 const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
 
 const TITLES = [
@@ -19,10 +19,11 @@ const TITLES = [
  * Insert a contact into contact_database if it doesn't already exist.
  * Returns true if inserted, false if duplicate or error.
  */
-async function insertContact(contact) {
+async function insertContact(contact, orgId) {
   const { count } = await supabase
     .from('contact_database')
     .select('*', { count: 'exact', head: true })
+    .eq('org_id', orgId)
     .eq('email', contact.email);
 
   if (count > 0) return false;
@@ -39,6 +40,7 @@ async function insertContact(contact) {
       account_name: contact.account_name,
       apollo_email_status: contact.apollo_email_status,
       apollo_verified_at: new Date().toISOString(),
+      org_id: orgId,
     });
 
   if (error) {
@@ -56,8 +58,10 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const { domain, leadId } = JSON.parse(event.body || '{}');
+    const { domain, leadId, org_id } = JSON.parse(event.body || '{}');
+    const orgId = org_id || event.headers['x-org-id'];
     if (!domain) return { statusCode: 400, headers, body: JSON.stringify({ error: 'No domain provided' }) };
+    if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
 
     const cleanDomain = domain.toLowerCase().replace(/^www\./, '');
     console.log(`🚀 Apollo contact search for: ${cleanDomain}`);
@@ -163,7 +167,7 @@ exports.handler = async (event) => {
     // Step 5: Write usable contacts to contact_database (skip duplicates)
     let added = 0;
     for (const contact of contacts) {
-      if (await insertContact(contact)) {
+      if (await insertContact(contact, orgId)) {
         added++;
         console.log(`  + ${contact.first_name} ${contact.last_name} (${contact.email}) — ${contact.title} [${contact.apollo_email_status}]`);
       }
@@ -175,7 +179,7 @@ exports.handler = async (event) => {
         has_contacts: true,
         contact_name: `${contacts[0].first_name} ${contacts[0].last_name}`.trim(),
         contact_email: contacts[0].email,
-      }).eq('id', leadId);
+      }).eq('id', leadId).eq('org_id', orgId);
     }
 
     // Log activity with triage details
@@ -189,6 +193,7 @@ exports.handler = async (event) => {
     ].filter(Boolean).join(', ');
 
     await supabase.from('activity_log').insert({
+      org_id: orgId,
       activity_type: 'apollo_discovery',
       lead_id: leadId || null,
       summary: `Apollo found ${contacts.length} contacts for ${cleanDomain} (${triageSummary}): ${contacts.map(c => c.email).join(', ')}`,

@@ -95,12 +95,13 @@ export const findContacts = async (lead, orgId) => {
 };
 
 // Verify a list of contact emails through the waterfall (Apollo cached status → ELV)
-export const verifyContactEmails = async (emails) => {
+export const verifyContactEmails = async (emails, orgId) => {
   try {
+    const scopedOrgId = await resolveOrgId(orgId);
     const res = await fetch('/.netlify/functions/verify-emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emails }),
+      body: JSON.stringify({ emails, org_id: scopedOrgId }),
     });
 
     if (!res.ok) {

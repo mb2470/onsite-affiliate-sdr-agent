@@ -2,7 +2,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
 );
 
 // Refresh OAuth access token using refresh token
@@ -42,6 +42,10 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
+    const body = JSON.parse(event.body || '{}');
+    const orgId = body.org_id || event.headers['x-org-id'];
+    if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
+
     const accessToken = await getAccessToken();
 
     // Search for bounce notifications from mailer-daemon in last 7 days
@@ -125,6 +129,7 @@ exports.handler = async (event) => {
     const { data: alreadyLogged } = await supabase
       .from('activity_log')
       .select('summary')
+      .eq('org_id', orgId)
       .eq('activity_type', 'email_bounced')
       .order('created_at', { ascending: false })
       .limit(200);
@@ -155,6 +160,7 @@ exports.handler = async (event) => {
       const { data: deleted } = await supabase
         .from('contact_database')
         .delete()
+        .eq('org_id', orgId)
         .eq('email', email)
         .select('website');
 
@@ -170,12 +176,14 @@ exports.handler = async (event) => {
           const { count } = await supabase
             .from('contact_database')
             .select('*', { count: 'exact', head: true })
+            .eq('org_id', orgId)
             .or(`website.ilike.%${website}%,email_domain.ilike.%${website}%`);
 
           if (count === 0) {
             await supabase
               .from('leads')
               .update({ has_contacts: false, contact_name: null, contact_email: null })
+              .eq('org_id', orgId)
               .ilike('website', `%${website}%`);
           }
         }
@@ -185,6 +193,7 @@ exports.handler = async (event) => {
       const { data: outreach } = await supabase
         .from('outreach_log')
         .select('website')
+        .eq('org_id', orgId)
         .eq('contact_email', email);
 
       if (outreach) {
@@ -192,6 +201,7 @@ exports.handler = async (event) => {
           const { count } = await supabase
             .from('outreach_log')
             .select('*', { count: 'exact', head: true })
+            .eq('org_id', orgId)
             .eq('website', o.website)
             .neq('contact_email', email);
 
@@ -199,6 +209,7 @@ exports.handler = async (event) => {
             await supabase
               .from('leads')
               .update({ status: 'enriched' })
+              .eq('org_id', orgId)
               .eq('website', o.website);
             leadsReset.push(o.website);
             console.log(`↩️ Reset ${o.website} to enriched`);
@@ -208,6 +219,7 @@ exports.handler = async (event) => {
 
       // Log activity with the actual bounce date (not today)
       await supabase.from('activity_log').insert({
+        org_id: orgId,
         activity_type: 'email_bounced',
         summary: `Bounced: ${email} — removed from contacts`,
         status: 'failed',

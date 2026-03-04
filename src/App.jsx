@@ -519,7 +519,7 @@ function AuthenticatedApp({ session }) {
       if (enrichedContacts.length > 0) {
         setIsVerifying(true);
         const emails = enrichedContacts.map(c => c.email);
-        const vMap = await verifyContactEmails(emails);
+        const vMap = await verifyContactEmails(emails, orgId);
         setVerificationMap(vMap);
         setIsVerifying(false);
       }
@@ -538,7 +538,11 @@ function AuthenticatedApp({ session }) {
     setIsCheckingBounces(true);
     setBounceResult(null);
     try {
-      const res = await fetch('/.netlify/functions/check-bounces', { method: 'POST' });
+      const res = await fetch('/.netlify/functions/check-bounces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ org_id: orgId }),
+      });
       const data = await res.json();
       setBounceResult(data);
       if (data.bouncedEmails?.length > 0) {
