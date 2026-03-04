@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { logActivity } from './leadService';
+import { resolveOrgId } from './orgService';
 
 // ═══ BUILD ENRICHMENT SYSTEM PROMPT DYNAMICALLY FROM ICP PROFILE ═══
 
@@ -310,7 +311,7 @@ function checkFastTrackFrontend(storeLeadsResult) {
 }
 
 // ═══ WATERFALL ENRICH: StoreLeads → Fast-Track? → Apollo → Claude ═══
-export const enrichLead = async (lead) => {
+export const enrichLead = async (lead, orgId) => {
   const domain = lead.website.replace(/^www\./, '');
   let result = null;
   let source = '';
@@ -347,6 +348,8 @@ export const enrichLead = async (lead) => {
     console.log(`✅ ${domain} enriched via Claude AI → ${result.icp_fit}`);
   }
 
+  const scopedOrgId = await resolveOrgId(orgId);
+
   // Save to Supabase
   const update = {
     research_notes: result.research_notes,
@@ -369,21 +372,22 @@ export const enrichLead = async (lead) => {
     status: 'enriched',
   };
 
-  const { error } = await supabase.from('leads').update(update).eq('id', lead.id);
+  const { error } = await supabase.from('leads').update(update).eq('id', lead.id).eq('org_id', scopedOrgId);
   if (error) throw error;
 
   await logActivity(
     'lead_enriched',
     lead.id,
     `Enriched ${lead.website} via ${source} — ICP: ${result.icp_fit || 'Unknown'} | ${result.industry || ''}`,
-    'success'
+    'success',
+    scopedOrgId
   );
 
   return { ...lead, ...update };
 };
 
 // Enrich multiple leads with progress callback
-export const enrichLeads = async (leadIds, allLeads, onProgress) => {
+export const enrichLeads = async (leadIds, allLeads, onProgress, orgId) => {
   const results = { success: [], failed: [] };
 
   for (let i = 0; i < leadIds.length; i++) {
@@ -392,7 +396,7 @@ export const enrichLeads = async (leadIds, allLeads, onProgress) => {
     if (!lead) continue;
 
     try {
-      const enriched = await enrichLead(lead);
+      const enriched = await enrichLead(lead, orgId);
       results.success.push(enriched);
       if (onProgress) onProgress(i + 1, leadIds.length, lead.website, 'success', enriched);
     } catch (error) {
@@ -403,7 +407,8 @@ export const enrichLeads = async (leadIds, allLeads, onProgress) => {
         'lead_enriched',
         leadId,
         `Failed to enrich ${lead.website}: ${error.message}`,
-        'failed'
+        'failed',
+        await resolveOrgId(orgId)
       );
       
       if (onProgress) onProgress(i + 1, leadIds.length, lead.website, 'failed', null);

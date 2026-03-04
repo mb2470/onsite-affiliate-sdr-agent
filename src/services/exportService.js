@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { logActivity } from './leadService';
+import { resolveOrgId } from './orgService';
 
 // Parse email into subject and body
 export const parseEmail = (emailText) => {
@@ -13,7 +14,7 @@ export const parseEmail = (emailText) => {
 };
 
 // Send email directly via Gmail API
-export const sendEmail = async (leadId, emailText, contactEmails, contactDetails, website) => {
+export const sendEmail = async (leadId, emailText, contactEmails, contactDetails, website, orgId) => {
   if (!contactEmails.length || !emailText) return false;
 
   const { subject, body } = parseEmail(emailText);
@@ -29,6 +30,7 @@ export const sendEmail = async (leadId, emailText, contactEmails, contactDetails
       leadId,
       website,
       contactDetails,
+      org_id: await resolveOrgId(orgId),
     }),
   });
 
@@ -42,7 +44,7 @@ export const sendEmail = async (leadId, emailText, contactEmails, contactDetails
 };
 
 // Legacy: Open Gmail compose (fallback)
-export const exportToGmail = async (leadId, emailText, contactEmails, contactDetails, website) => {
+export const exportToGmail = async (leadId, emailText, contactEmails, contactDetails, website, orgId) => {
   if (!contactEmails.length || !emailText) return false;
 
   const { subject, body } = parseEmail(emailText);
@@ -52,13 +54,14 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
   window.open(gmailUrl, '_blank');
 
   try {
+    const scopedOrgId = await resolveOrgId(orgId);
     const { error } = await supabase.from('leads').update({
       status: 'contacted',
       has_contacts: true,
       contact_name: contactDetails?.[0]?.name || null,
       contact_email: contactEmails[0] || null,
       updated_at: new Date().toISOString(),
-    }).eq('id', leadId);
+    }).eq('id', leadId).eq('org_id', scopedOrgId);
 
     const outreachRows = contactEmails.map(email => {
       const contact = (contactDetails || []).find(c => c.email === email);
@@ -70,12 +73,13 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
         email_subject: subject,
         email_body: body,
         sent_at: new Date().toISOString(),
+        org_id: scopedOrgId,
       };
     });
 
     await supabase.from('outreach_log').insert(outreachRows);
 
-    await logActivity('email_exported', leadId, `Exported to Gmail — ${contactEmails.join(', ')}`, 'success');
+    await logActivity('email_exported', leadId, `Exported to Gmail — ${contactEmails.join(', ')}`, 'success', scopedOrgId);
   } catch (error) {
     console.error('Error logging outreach:', error);
   }
