@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient';
+import { resolveOrgId } from './orgService';
 
 // Score and format contacts from raw database rows
 const scoreContacts = (data) => {
@@ -40,13 +41,15 @@ const scoreContacts = (data) => {
 };
 
 // Find contacts for a lead — checks contact_database first, falls back to Apollo
-export const findContacts = async (lead) => {
+export const findContacts = async (lead, orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   const cleanDomain = lead.website.toLowerCase().replace(/^www\./, '');
 
   // Step 1: Check contact_database
   const { data, error } = await supabase
     .from('contact_database')
     .select('*')
+    .eq('org_id', scopedOrgId)
     .or(`website.ilike.%${cleanDomain}%,email_domain.ilike.%${cleanDomain}%`)
     .order('title', { ascending: true })
     .limit(50);
@@ -64,7 +67,7 @@ export const findContacts = async (lead) => {
     const res = await fetch('/.netlify/functions/apollo-find-contacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: cleanDomain, leadId: lead.id }),
+      body: JSON.stringify({ domain: cleanDomain, leadId: lead.id, org_id: scopedOrgId }),
     });
 
     const apolloData = await res.json();
@@ -80,6 +83,7 @@ export const findContacts = async (lead) => {
     const { data: newData } = await supabase
       .from('contact_database')
       .select('*')
+      .eq('org_id', scopedOrgId)
       .or(`website.ilike.%${cleanDomain}%,email_domain.ilike.%${cleanDomain}%`)
       .limit(50);
 
