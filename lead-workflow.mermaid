@@ -1,207 +1,108 @@
-graph TD
-    %% LEAD SOURCES
-    A[🌐 Single Website] -->|Manual add| B[leads table<br/>status: new]
-    A2[📋 Bulk Add] -->|Multiple websites| B
-    A3[📄 CSV Import] -->|Bulk import| B
-    A4[🔍 StoreLeads Discovery] -->|Top stores by category| B2[leads table<br/>status: enriched]
+flowchart TD
+  %% =========================================
+  %% AI SDR AGENT — CURRENT PIPELINE
+  %% =========================================
 
-    %% ═══════════════════════════════════════
-    %% OPT 2: INTENT-BASED FAST-TRACK LANE
-    %% Technographic signals skip expensive
-    %% Claude research and jump to HIGH
-    %% ═══════════════════════════════════════
+  %% Intake
+  A1[Single website add]
+  A2[Bulk website add]
+  A3[CSV import]
+  A4[StoreLeads discovery]
 
-    %% ENRICHMENT WATERFALL: StoreLeads → Apollo → Claude
-    B -->|Batch 50 domains| C{Step 1:<br/>StoreLeads Bulk API<br/>free, fast}
-    C -->|Found| TC{🚀 Techno Check<br/>App install / platform<br/>upgrade detected?}
-    TC -->|Yes: Shopify Plus,<br/>new affiliate app, etc.| FT[⚡ Fast-Track<br/>Skip Claude research]
-    TC -->|No signal| D[Store Data<br/>products, sales, category<br/>country, platform, rank]
-    FT --> I
-    C -->|Not Found| C2{Step 2:<br/>Apollo Org Enrichment<br/>cheap fallback}
-    C2 -->|Found| D2[Company Data<br/>revenue, employees<br/>industry, keywords]
-    C2 -->|Not Found| C3{Step 3:<br/>Claude AI + Web Search<br/>expensive, thorough}
-    C3 -->|Found| D3[AI Research<br/>ICP fit, industry<br/>catalog, HQ, pain points]
-    C3 -->|Not Found| E[status: new<br/>unenriched]
+  A1 --> L0[(leads.status = new)]
+  A2 --> L0
+  A3 --> L0
+  A4 --> L1[(leads.status = enriched)]
 
-    %% ICP SCORING — Two models by source
-    D --> F{StoreLeads<br/>ICP Scoring}
-    F --> G1[✅ Products ≥ 250]
-    F --> G2[✅ Sales ≥ $50K/mo]
-    F --> G3[✅ Target Category]
-    G1 & G2 & G3 --> H{US/CA + 3/3?}
+  %% Enrichment waterfall
+  L0 --> E1{StoreLeads lookup}
+  E1 -->|hit| E1D[Store data + ICP score]
+  E1 -->|miss| E2{Apollo org enrichment}
+  E2 -->|hit| E2D[Company firmographics + ICP score]
+  E2 -->|miss| E3{Claude web research}
+  E3 -->|hit| E3D[Research notes + ICP fit]
+  E3 -->|miss| EN[Remain new / pending]
 
-    D2 --> F2{Apollo<br/>ICP Scoring}
-    F2 --> G4[✅ Revenue ≥ $12M/yr]
-    F2 --> G5[✅ Target Category]
-    F2 --> G6[✅ Employees ≥ 50]
-    G4 & G5 & G6 --> H
+  E1D --> FIT{ICP fit}
+  E2D --> FIT
+  E3D --> FIT
 
-    D3 --> H2[Claude assigns<br/>ICP fit directly]
-    H2 --> I
-    H2 --> J
-    H2 --> K
+  FIT -->|HIGH| H[(leads.icp_fit = HIGH)]
+  FIT -->|MEDIUM| M[(leads.icp_fit = MEDIUM)]
+  FIT -->|LOW| LO[(leads.icp_fit = LOW)]
 
-    H -->|Yes| I[🟢 HIGH]
-    H -->|US/CA + 2/3<br/>or non-US 2-3/3| J[🟡 MEDIUM]
-    H -->|0-1/3| K[🔴 LOW]
+  H --> LE[(leads.status = enriched)]
+  M --> LE
+  LO --> LE
 
-    %% ═══════════════════════════════════════
-    %% OPT 3: PARALLEL ENRICHMENT + DISCOVERY
-    %% High-probability sources trigger contact
-    %% discovery in parallel with enrichment
-    %% ═══════════════════════════════════════
+  %% Contact discovery
+  LE --> C0{Need contacts?}
+  C0 -->|yes| C1{contact_database match by domain}
+  C1 -->|found| C1D[Rank contacts by title relevance]
+  C1 -->|none| C2{Apollo contact discovery}
 
-    %% CONTACT MATCHING
-    I --> L{Contact Database<br/>509k contacts}
-    J --> L
-    L -->|Match on domain| M[has_contacts: true]
-    L -->|No match| N[has_contacts: false]
+  C2 -->|verified| C2V[Insert contact + apollo_email_status=verified]
+  C2 -->|risky: extrapolated/catch_all/unavailable| C2R[Insert contact + requires ELV]
+  C2 -->|invalid| C2X[Discard invalid]
 
-    %% PARALLEL: StoreLeads Discovery pre-fetches contacts
-    B2 -->|⚡ Parallel fork| PAR{🔀 Parallel Pipeline}
-    PAR -->|Fork 1: Enrich| F
-    PAR -->|Fork 2: Contacts| AP
+  C2V --> C1D
+  C2R --> C1D
 
-    %% ═══════════════════════════════════════
-    %% OPT 1: FLIPPED VERIFICATION WATERFALL
-    %% Apollo verify happens during discovery,
-    %% not at send time. ELV only for risky.
-    %% ═══════════════════════════════════════
+  %% Verification + send
+  C1D --> S0{Send workflow}
+  S0 --> V1{Cached Apollo status}
+  V1 -->|verified| SEND[Send via Gmail API]
+  V1 -->|risky or missing| V2{EmailListVerify}
+  V2 -->|safe| SEND
+  V2 -->|bad| BLK[Block + remove bad contact]
 
-    %% APOLLO CONTACT DISCOVERY + INLINE VERIFICATION
-    N --> AP{🚀 Apollo API<br/>Contact Discovery<br/>+ Inline Verification}
-    AP -->|Step 1: Search| AP1[Search by domain +<br/>senior titles<br/>1 credit]
-    AP1 -->|Step 2: Enrich| AP2[bulk_match top 3<br/>3 credits<br/>Returns email_status]
+  SEND --> O1[(outreach_log insert)]
+  O1 --> O2[(leads.status = contacted)]
+  O1 --> O3[(activity_log: email_sent)]
 
-    %% Apollo email_status triage (during discovery)
-    AP2 --> APT{🔶 Apollo email_status<br/>Triage}
-    APT -->|verified| AP3V[✅ Verified contact<br/>Add to contact_database<br/>apollo_email_status: verified]
-    APT -->|extrapolated,<br/>catch_all| AP3R[⚠️ Risky contact<br/>Add to contact_database<br/>Needs ELV check]
-    APT -->|invalid| AP3I[🗑️ Discard email<br/>Do not add]
+  %% Post-send lifecycle
+  O2 --> R0{Reply check}
+  O2 --> B0{Bounce check}
 
-    %% ═══════════════════════════════════════
-    %% OPT 4: BACKUP TITLE PIVOT
-    %% Instead of re-searching same contact,
-    %% pivot to next-best title automatically
-    %% ═══════════════════════════════════════
+  R0 -->|real reply| R1[(leads.status = replied)]
+  R0 -->|no reply| F0{Follow-up engine}
+  F0 -->|+3 days| F1[Follow-up #1]
+  F1 -->|+5 days no reply| F2[Follow-up #2]
+  F2 -->|still no reply| F3[Sequence complete]
 
-    AP3I --> BTP{🔄 Backup Title Pivot<br/>Auto-search next title}
-    BTP -->|Try next title:<br/>Founder → Ecom Mgr<br/>→ Growth Lead| AP1
-    BTP -->|All titles exhausted| AP4[❌ No contacts<br/>status: no_contacts]
+  B0 -->|bounced| B1[Suppress address + reset lead for retry]
+  B0 -->|delivered| R0
 
-    AP2 -->|No results| AP4
+  %% Automation lane
+  AG[Autonomous agent / scheduled batch jobs]
+  AG --> LE
+  AG --> S0
+  AG --> R0
+  AG --> B0
 
-    AP3V --> M
-    AP3R --> M
+  %% Data plane
+  subgraph Supabase
+    D1[(organizations / user_organizations)]
+    D2[(leads)]
+    D3[(contact_database)]
+    D4[(contacts)]
+    D5[(outreach_log / emails)]
+    D6[(activity_log / agent_jobs / agent_settings)]
+  end
 
-    %% ELV BATCH VERIFY — Only risky contacts
-    M --> BV{📧 Batch Verify<br/>EmailListVerify<br/>⚠️ Risky contacts only}
-    BV -->|apollo_email_status:<br/>verified| BV0[⚡ Skip ELV<br/>Already verified by Apollo]
-    BV -->|apollo_email_status:<br/>extrapolated, catch_all| BV1[Query unverified<br/>contacts per lead]
-    BV1 --> BV2{ELV API<br/>per email}
-    BV2 -->|ok, ok_for_all,<br/>accept_all| BV3[✅ Cache elv_status<br/>+ elv_verified_at<br/>on contact row]
-    BV2 -->|invalid, dead_server,<br/>email_disabled, syntax_error| BV4[🗑️ Delete from<br/>contact_database]
-    BV0 --> O
-    BV3 --> O
+  L0 -.org scoped.-> D2
+  LE -.org scoped.-> D2
+  C1D -.read/write.-> D3
+  C1D -.session contacts.-> D4
+  O1 -.write.-> D5
+  SEND -.audit trail.-> D6
 
-    %% OUTREACH FLOW
-    O[📋 Step 1: Select Lead<br/>Filter: HIGH + Has Contacts]
-    O --> P[✨ Step 2: Generate Email<br/>Claude AI + lead context]
-    P --> Q[👥 Step 3: Find Contacts<br/>Scored by title relevance]
-
-    Q --> R2[🎯 Marketing Leader — 100]
-    Q --> R1[🔥 Creator/Social — 95]
-    Q --> R3[🎯 Digital/Ecommerce — 90]
-    Q --> R4[🟢 Brand/Content — 70]
-    Q --> R5[👔 Executive — 60]
-    Q --> R6[🔵 Mid-Level — 30]
-
-    %% SEND — No live verification needed!
-    %% All contacts pre-verified during discovery
-    R1 & R2 & R3 & R4 & R5 & R6 --> S{Send Method<br/>✅ Pre-verified contacts}
-
-    S -->|Direct| T[📧 Gmail API Send<br/>Instant, no tab switch]
-    S -->|Fallback| U[📧 Open in Gmail<br/>Compose window]
-
-    T --> V[✅ Lead: contacted<br/>outreach_log entry<br/>followup_number: 0]
-    U --> V
-
-    %% FOLLOW-UP SEQUENCE
-    V --> FU{📩 Follow-up Engine<br/>Threaded replies}
-    FU -->|3 days, no reply| FU1[Follow-up #1<br/>Gentle nudge + micro-value<br/>Low-friction CTA]
-    FU -->|Replied| RD2
-    FU1 -->|5 more days, no reply| FU2[Follow-up #2<br/>New angle + social proof<br/>Opinion ask]
-    FU1 -->|Replied| RD2
-    FU2 -->|No reply| FUEND[📭 Sequence complete<br/>No further follow-ups]
-    FU2 -->|Replied| RD2
-
-    %% BOUNCE HANDLING
-    V --> W{Bounce Check<br/>Gmail mailer-daemon}
-    W -->|Bounced| X[🗑️ Remove bad contact<br/>↩️ Reset lead to enriched]
-    W -->|Delivered| RD
-
-    %% REPLY DETECTION
-    RD{📬 Reply Check<br/>Gmail inbox scan}
-    RD -->|Auto-responder<br/>OOO, auto-reply headers| RD1[🤖 Filtered out<br/>Ignored]
-    RD -->|Real reply| RD2[📩 Lead: replied<br/>outreach_log.replied_at set]
-    RD -->|No reply yet| MC
-
-    %% AGENT AUTOMATION
-    MC{🤖 Agent Automation<br/>Mon-Fri, 9am-5pm EST}
-    MC -->|1 contact/company/day<br/>2+ min delay between sends<br/>Daily email budget| O
-    MC -->|All contacts emailed| NXT[➡️ Move to next lead]
-    MC -.->|auto_send: false| DR[📝 Save as Draft<br/>for manual review]
-
-    %% LEAD STATUS LIFECYCLE
-    subgraph Status Lifecycle
-        LS1[new] --> LS2[enriched]
-        LS2 --> LS3[contacted]
-        LS3 --> LS4[replied]
-        LS2 -.-> LS5[no_contacts]
-    end
-
-    %% STYLING
-    style I fill:#166534,color:#fff
-    style J fill:#854d0e,color:#fff
-    style K fill:#991b1b,color:#fff
-    style T fill:#6d28d9,color:#fff
-    style V fill:#166534,color:#fff
-    style X fill:#991b1b,color:#fff
-    style RD2 fill:#166534,color:#fff
-    style NXT fill:#166534,color:#fff
-    style B fill:#1e293b,color:#fff
-    style B2 fill:#1e293b,color:#fff
-    style AP fill:#1e40af,color:#fff
-    style AP3V fill:#166534,color:#fff
-    style AP3R fill:#854d0e,color:#fff
-    style AP3I fill:#991b1b,color:#fff
-    style AP4 fill:#991b1b,color:#fff
-    style MC fill:#6d28d9,color:#fff
-    style C2 fill:#1e40af,color:#fff
-    style C3 fill:#7c3aed,color:#fff
-    style D2 fill:#1e40af,color:#fff
-    style D3 fill:#7c3aed,color:#fff
-    style RD fill:#6d28d9,color:#fff
-    style RD1 fill:#854d0e,color:#fff
-    style DR fill:#854d0e,color:#fff
-    style BV fill:#7c3aed,color:#fff
-    style BV0 fill:#166534,color:#fff
-    style BV3 fill:#166534,color:#fff
-    style BV4 fill:#991b1b,color:#fff
-    style FU fill:#6d28d9,color:#fff
-    style FU1 fill:#854d0e,color:#fff
-    style FU2 fill:#854d0e,color:#fff
-    style FUEND fill:#991b1b,color:#fff
-    style LS1 fill:#1e293b,color:#fff
-    style LS2 fill:#1e40af,color:#fff
-    style LS3 fill:#6d28d9,color:#fff
-    style LS4 fill:#166534,color:#fff
-    style LS5 fill:#991b1b,color:#fff
-    style F2 fill:#1e40af,color:#fff
-    style H2 fill:#7c3aed,color:#fff
-    style APT fill:#d97706,color:#fff
-    style TC fill:#d97706,color:#fff
-    style FT fill:#166534,color:#fff
-    style PAR fill:#6d28d9,color:#fff
-    style BTP fill:#d97706,color:#fff
-    style S fill:#166534,color:#fff
+  %% Styling
+  style H fill:#166534,color:#fff
+  style M fill:#854d0e,color:#fff
+  style LO fill:#991b1b,color:#fff
+  style SEND fill:#6d28d9,color:#fff
+  style BLK fill:#991b1b,color:#fff
+  style R1 fill:#166534,color:#fff
+  style B1 fill:#991b1b,color:#fff
+  style AG fill:#1e40af,color:#fff
