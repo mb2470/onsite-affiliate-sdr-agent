@@ -1,16 +1,20 @@
 import { supabase } from '../supabaseClient';
+import { resolveOrgId } from './orgService';
 
 // Get total lead count
-export const getTotalLeadCount = async () => {
+export const getTotalLeadCount = async (orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   const { count, error } = await supabase
     .from('leads')
-    .select('*', { count: 'exact', head: true });
+    .select('*', { count: 'exact', head: true })
+    .eq('org_id', scopedOrgId);
   if (error) throw error;
   return count || 0;
 };
 
 // Search leads with server-side filtering and pagination
 export const searchLeads = async ({
+  orgId,
   search = '',
   status = 'all',
   icp = 'all',
@@ -20,9 +24,11 @@ export const searchLeads = async ({
   page = 0,
   pageSize = 100
 }) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   let query = supabase
     .from('leads')
-    .select('*', { count: 'exact' });
+    .select('*', { count: 'exact' })
+    .eq('org_id', scopedOrgId);
 
   // Text search
   if (search && search.trim()) {
@@ -74,10 +80,12 @@ export const searchLeads = async ({
 };
 
 // Load enriched leads for manual outreach (with ICP sort)
-export const searchEnrichedLeads = async ({ search = '', page = 0, pageSize = 50 }) => {
+export const searchEnrichedLeads = async ({ orgId, search = '', page = 0, pageSize = 50 }) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   let query = supabase
     .from('leads')
     .select('*', { count: 'exact' })
+    .eq('org_id', scopedOrgId)
     .in('status', ['enriched', 'contacted']);
 
   if (search && search.trim()) {
@@ -101,23 +109,26 @@ export const searchEnrichedLeads = async ({ search = '', page = 0, pageSize = 50
 };
 
 // Update lead status to contacted and record date
-export const markLeadContacted = async (leadId) => {
+export const markLeadContacted = async (leadId, orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   const { error } = await supabase
     .from('leads')
     .update({
       status: 'contacted',
       updated_at: new Date().toISOString()
     })
-    .eq('id', leadId);
+    .eq('id', leadId)
+    .eq('org_id', scopedOrgId);
 
   if (error) throw error;
 };
 
 // Add single lead
-export const addLead = async (website) => {
+export const addLead = async (website, orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   const { data, error } = await supabase
     .from('leads')
-    .insert([{ website: website.trim(), source: 'manual', status: 'new' }])
+    .insert([{ website: website.trim(), source: 'manual', status: 'new', org_id: scopedOrgId }])
     .select();
   
   if (error) {
@@ -128,7 +139,8 @@ export const addLead = async (website) => {
 };
 
 // Bulk add leads (deduplicating)
-export const bulkAddLeads = async (leads, source = 'bulk_add') => {
+export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   // Support both array of strings (legacy) and array of objects (new)
   const rows = leads.map(l => typeof l === 'string' ? { website: l } : l);
   const websites = rows.map(r => r.website).filter(Boolean);
@@ -139,7 +151,7 @@ export const bulkAddLeads = async (leads, source = 'bulk_add') => {
   const existingSet = new Set();
   for (let i = 0; i < websites.length; i += 200) {
     const batch = websites.slice(i, i + 200);
-    const { data } = await supabase.from('leads').select('website').in('website', batch);
+    const { data } = await supabase.from('leads').select('website').eq('org_id', scopedOrgId).in('website', batch);
     (data || []).forEach(l => existingSet.add(l.website));
   }
 
@@ -158,6 +170,7 @@ export const bulkAddLeads = async (leads, source = 'bulk_add') => {
       catalog_size: r.catalog_size || null,
       city: r.city || null,
       state: r.state || null,
+      org_id: scopedOrgId,
     }));
 
   if (newRows.length === 0) return { added: 0, skipped: websites.length };
@@ -178,8 +191,10 @@ export const bulkAddLeads = async (leads, source = 'bulk_add') => {
 };
 
 // Log activity
-export const logActivity = async (type, leadId, summary, status = 'success') => {
+export const logActivity = async (type, leadId, summary, status = 'success', orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
   await supabase.from('activity_log').insert({
+    org_id: scopedOrgId,
     activity_type: type,
     lead_id: leadId,
     summary,
