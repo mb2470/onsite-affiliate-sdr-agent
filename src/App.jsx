@@ -10,6 +10,7 @@ import { findContacts, verifyContactEmails } from './services/contactService';
 import { sendEmail, exportToGmail } from './services/exportService';
 import { clearCachedOrgId } from './services/orgService';
 import ChatPanel from './ChatPanel';
+import SuperAdminDashboard from './SuperAdminDashboard';
 
 function App() {
   // Auth state
@@ -60,6 +61,7 @@ function App() {
 }
 
 function AuthenticatedApp({ session }) {
+  const isSuperAdmin = (session?.user?.email || '').toLowerCase() === 'mike@onsiteaffiliates.com';
   const [orgLoading, setOrgLoading] = useState(true);
   const [organizations, setOrganizations] = useState([]);
   const [orgId, setOrgId] = useState(null);
@@ -241,6 +243,12 @@ function AuthenticatedApp({ session }) {
   useEffect(() => {
     if (orgId) localStorage.setItem('selected_org_id', orgId);
   }, [orgId]);
+
+  useEffect(() => {
+    if (isSuperAdmin && !orgId) {
+      setActiveView('super_admin');
+    }
+  }, [isSuperAdmin, orgId]);
 
   useEffect(() => {
     if (!orgId) return;
@@ -1149,7 +1157,7 @@ function AuthenticatedApp({ session }) {
     return <div className="app"><div style={{ padding: '32px', color: 'rgba(255,255,255,0.6)' }}>Loading organization…</div></div>;
   }
 
-  if (!orgId) {
+  if (!orgId && !isSuperAdmin) {
     return <div className="app"><div style={{ padding: '32px', color: '#f87171' }}>No organization assigned to this account.</div></div>;
   }
 
@@ -1261,7 +1269,8 @@ function AuthenticatedApp({ session }) {
           <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '11px', opacity: 0.7 }}>Organization</span>
             <select
-              value={orgId}
+              value={orgId || ""}
+              disabled={!orgId}
               onChange={(e) => {
                 const nextOrgId = e.target.value;
                 setOrgId(nextOrgId);
@@ -1400,6 +1409,7 @@ function AuthenticatedApp({ session }) {
               { key: 'agent', label: 'Manage Agent', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> },
               { key: 'manual', label: 'Manual Outreach', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> },
               { key: 'audience', label: 'Create Audiences', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
+            ...(isSuperAdmin ? [{ key: 'super_admin', label: 'Super Admin', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.56 5.82 22 7 14.14l-5-4.87 6.91-1.01L12 2z"/></svg> }] : []),
             ].map(item => (
               <button key={item.key} className={`sidebar-btn ${activeView === item.key ? 'active' : ''}`} onClick={() => setActiveView(item.key)}>
                 <span className="btn-icon">{item.icon}</span>
@@ -3371,6 +3381,12 @@ function AuthenticatedApp({ session }) {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeView === 'super_admin' && isSuperAdmin && (
+            <div className="view-container">
+              <SuperAdminDashboard />
             </div>
           )}
 
