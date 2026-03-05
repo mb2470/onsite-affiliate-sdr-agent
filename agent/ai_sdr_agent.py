@@ -1196,6 +1196,15 @@ class AISDRAgent:
                 email = c.get('email', '')
                 if not email or email.lower() in already_emailed:
                     continue
+
+                apollo_status = (c.get('apollo_email_status') or '').lower()
+                # Opt 1: Skip ELV batch verification for Apollo-verified contacts.
+                if apollo_status == 'verified':
+                    continue
+                # Only run ELV batch verification for risky Apollo statuses.
+                if apollo_status and apollo_status not in {'extrapolated', 'catch_all', 'unavailable'}:
+                    continue
+
                 score = score_contact(c.get('title', ''))
                 if score >= min_score:
                     candidates.append({**c, '_score': score})
