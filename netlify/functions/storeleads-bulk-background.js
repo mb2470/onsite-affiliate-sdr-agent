@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -18,6 +19,8 @@ exports.handler = async (event) => {
     console.error('STORELEADS_API_KEY not configured');
     return;
   }
+
+  const orgId = await resolveOrgId(supabase);
 
   try {
     // Load scoring config from ICP profile
@@ -54,7 +57,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'bulk_enrichment',
       summary: `Started StoreLeads bulk enrichment of ${allLeads.length} leads`,
-      status: 'success'
+      status: 'success',
+      org_id: orgId,
     });
 
     let enriched = 0;
@@ -186,7 +190,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'bulk_enrichment',
       summary,
-      status: 'success'
+      status: 'success',
+      org_id: orgId,
     });
 
   } catch (error) {
@@ -194,7 +199,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'bulk_enrichment',
       summary: `Bulk enrichment failed: ${error.message}`,
-      status: 'failed'
+      status: 'failed',
+      org_id: orgId,
     });
   }
 };

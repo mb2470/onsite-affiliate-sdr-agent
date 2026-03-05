@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -13,7 +14,9 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const { leads } = JSON.parse(event.body);
+    const body = JSON.parse(event.body);
+    const { leads } = body;
+    const orgId = await resolveOrgId(supabase, body.org_id);
 
     // Get all existing websites
     let existing = new Set();
@@ -49,6 +52,7 @@ exports.handler = async (event) => {
         industry: lead.industry || null,
         country: lead.country || null,
         sells_d2c: lead.sells_d2c || null,
+        org_id: orgId,
       });
 
       if (error) {

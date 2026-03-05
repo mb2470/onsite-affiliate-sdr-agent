@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { classifyApolloStatus, backupTitlePivot } = require('./lib/apollo-verify');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -97,6 +98,8 @@ exports.handler = async (event, context) => {
     console.error('❌ APOLLO_API_KEY not set');
     return;
   }
+
+  const orgId = await resolveOrgId(supabase);
 
   try {
     // Get HIGH leads with no contacts
@@ -213,6 +216,7 @@ exports.handler = async (event, context) => {
             linkedin_url: match.linkedin_url || null,
             apollo_email_status: apolloStatus,
             apollo_verified_at: new Date().toISOString(),
+            org_id: orgId,
           });
 
           if (insertErr) {
@@ -246,6 +250,7 @@ exports.handler = async (event, context) => {
                 linkedin_url: pivoted.linkedin_url || null,
                 apollo_email_status: pivoted.email_status,
                 apollo_verified_at: new Date().toISOString(),
+                org_id: orgId,
               });
 
               if (!pivotErr) {
@@ -289,6 +294,7 @@ exports.handler = async (event, context) => {
       activity_type: 'apollo_discovery',
       summary,
       status: 'success',
+      org_id: orgId,
     });
 
   } catch (error) {
@@ -297,6 +303,7 @@ exports.handler = async (event, context) => {
       activity_type: 'apollo_discovery',
       summary: `Apollo discovery failed: ${error.message}`,
       status: 'failed',
+      org_id: orgId,
     });
   }
 };

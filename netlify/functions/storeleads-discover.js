@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -135,6 +136,7 @@ async function discoverContactsForLead(leadId, domain) {
         linkedin_url: m.linkedin_url || null,
         apollo_email_status: emailStatus,
         apollo_verified_at: new Date().toISOString(),
+        org_id: orgId,
       });
 
       // Update lead with first contact found
@@ -160,6 +162,8 @@ exports.handler = async (event) => {
   if (!STORELEADS_API_KEY) {
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'STORELEADS_API_KEY not configured' }) };
   }
+
+  const orgId = await resolveOrgId(supabase);
 
   try {
     // Load scoring config from ICP profile
@@ -230,6 +234,7 @@ exports.handler = async (event) => {
               website: cleanName,
               status: 'enriched',
               source: 'storeleads_discovery',
+              org_id: orgId,
               icp_fit: icpFit,
               industry: (d.categories || []).join('; ') || null,
               catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
@@ -291,7 +296,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'lead_discovery',
       summary: `StoreLeads discovery: found ${allDiscovered.length} top stores, added ${newLeadsAdded} new leads (${alreadyExisted} already existed, ${contactDiscoveryPromises.length} parallel contact searches)`,
-      status: 'success'
+      status: 'success',
+      org_id: orgId,
     });
 
     return {

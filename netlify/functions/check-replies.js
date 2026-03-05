@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -125,15 +126,19 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
+    const body = event.body ? JSON.parse(event.body) : {};
+    const orgId = await resolveOrgId(supabase, body.org_id);
     const accessToken = await getAccessToken();
     const fromEmail = process.env.GMAIL_FROM_EMAIL || '';
 
     // Get all emails we've sent from outreach_log
-    const { data: outreachLog } = await supabase
+    let outreachQuery = supabase
       .from('outreach_log')
       .select('contact_email, website, email_subject, sent_at')
       .order('sent_at', { ascending: false })
       .limit(500);
+    if (orgId) outreachQuery = outreachQuery.eq('org_id', orgId);
+    const { data: outreachLog } = await outreachQuery;
 
     if (!outreachLog || outreachLog.length === 0) {
       return { statusCode: 200, headers, body: JSON.stringify({ replies: [], newReplies: 0, autoResponders: 0 }) };
@@ -241,6 +246,7 @@ exports.handler = async (event) => {
         activity_type: 'email_reply',
         summary: `Reply from ${reply.from} at ${reply.website}: "${reply.subject.substring(0, 60)}"`,
         status: 'success',
+        org_id: orgId,
       });
 
       // Mark in outreach_log

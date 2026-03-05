@@ -306,11 +306,26 @@ function AuthenticatedApp({ session }) {
     } catch (e) { console.error(e); }
 
     // Outreach stats: contacted/replied leads & contacts from outreach_log
+    // Paginate to avoid Supabase's 1000-row default limit
     try {
-      const { data: outreach } = await supabase
-        .from('outreach_log')
-        .select('lead_id, website, contact_email, replied_at')
-        .eq('org_id', orgId);
+      let outreach = [];
+      let outreachFrom = 0;
+      const outreachPageSize = 1000;
+      let hasMoreOutreach = true;
+      while (hasMoreOutreach) {
+        const { data } = await supabase
+          .from('outreach_log')
+          .select('lead_id, website, contact_email, replied_at')
+          .eq('org_id', orgId)
+          .range(outreachFrom, outreachFrom + outreachPageSize - 1);
+        if (data && data.length > 0) {
+          outreach = outreach.concat(data);
+          outreachFrom += outreachPageSize;
+          if (data.length < outreachPageSize) hasMoreOutreach = false;
+        } else {
+          hasMoreOutreach = false;
+        }
+      }
 
       const { data: bounceActivity } = await supabase
         .from('activity_log')
@@ -327,7 +342,7 @@ function AuthenticatedApp({ session }) {
           .filter(Boolean)
       );
 
-      const rows = (outreach || []).filter(r => {
+      const rows = outreach.filter(r => {
         const email = r.contact_email?.toLowerCase();
         return email && !bouncedEmails.has(email);
       });
