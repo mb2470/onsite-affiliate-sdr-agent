@@ -268,11 +268,11 @@ function AuthenticatedApp({ session }) {
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
-    // Emails sent (lifetime): successful sends excluding bounced contacts
+    // Emails sent (lifetime): total outreach minus bounced
     try {
-      const { data: outreachRows } = await supabase
+      const { count: totalOutreach } = await supabase
         .from('outreach_log')
-        .select('contact_email')
+        .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId);
 
       const { data: bounceActivity } = await supabase
@@ -290,12 +290,19 @@ function AuthenticatedApp({ session }) {
           .filter(Boolean)
       );
 
-      const nonBouncedSentCount = (outreachRows || []).filter(r => {
-        const email = r.contact_email?.toLowerCase();
-        return email && !bouncedEmails.has(email);
-      }).length;
+      // Count bounced outreach rows using the bounced emails set
+      let bouncedOutreachCount = 0;
+      if (bouncedEmails.size > 0) {
+        const bouncedArr = [...bouncedEmails];
+        const { count: bouncedCount } = await supabase
+          .from('outreach_log')
+          .select('*', { count: 'exact', head: true })
+          .eq('org_id', orgId)
+          .in('contact_email', bouncedArr);
+        bouncedOutreachCount = bouncedCount || 0;
+      }
 
-      setEmailsSent(nonBouncedSentCount);
+      setEmailsSent((totalOutreach || 0) - bouncedOutreachCount);
     } catch (e) { console.error(e); }
 
     // Outreach stats: contacted/replied leads & contacts from outreach_log
@@ -3545,7 +3552,7 @@ function AuthenticatedApp({ session }) {
 
           {/* ═══ CHAT ═══ */}
           {activeView === 'chat' && (
-            <ChatPanel />
+            <ChatPanel orgId={orgId} />
           )}
 
 

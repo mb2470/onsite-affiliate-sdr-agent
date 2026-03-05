@@ -320,11 +320,12 @@ const TOOLS = [
 
 // ── Tool execution ───────────────────────────────────────────────────────────
 
-async function executeTool(name, input) {
+async function executeTool(name, input, orgId) {
   switch (name) {
     case 'query_leads': {
       const limit = Math.min(input.limit || 20, 100);
       let query = supabase.from('leads').select('*', { count: 'exact' });
+      if (orgId) query = query.eq('org_id', orgId);
 
       if (input.search) {
         query = query.or(
@@ -352,6 +353,7 @@ async function executeTool(name, input) {
         .from('leads')
         .select('*', { count: 'exact' })
         .in('status', input.status === 'replied' ? ['replied'] : ['contacted', 'replied']);
+      if (orgId) query = query.eq('org_id', orgId);
 
       query = query.order('updated_at', { ascending: false }).limit(limit);
       const { data, error, count } = await query;
@@ -362,6 +364,7 @@ async function executeTool(name, input) {
     case 'query_outreach_log': {
       const limit = Math.min(input.limit || 20, 100);
       let query = supabase.from('outreach_log').select('*');
+      if (orgId) query = query.eq('org_id', orgId);
 
       if (input.website) query = query.ilike('website', `%${input.website}%`);
       if (input.contact_email) query = query.ilike('contact_email', `%${input.contact_email}%`);
@@ -376,6 +379,7 @@ async function executeTool(name, input) {
     case 'query_contacts': {
       const limit = Math.min(input.limit || 20, 100);
       let query = supabase.from('contact_database').select('*');
+      if (orgId) query = query.eq('org_id', orgId);
       const filters = [];
 
       if (input.domain) {
@@ -399,6 +403,18 @@ async function executeTool(name, input) {
 
     case 'get_stats': {
       // Use individual count queries to avoid Supabase's default 1000-row limit
+      // All queries are scoped to org_id for multi-tenant correctness
+      const leadsQuery = (extra) => {
+        let q = supabase.from('leads').select('*', { count: 'exact', head: true });
+        if (orgId) q = q.eq('org_id', orgId);
+        return extra ? extra(q) : q;
+      };
+      const outreachQuery = (extra) => {
+        let q = supabase.from('outreach_log').select('*', { count: 'exact', head: true });
+        if (orgId) q = q.eq('org_id', orgId);
+        return extra ? extra(q) : q;
+      };
+
       const [
         total,
         statusNew,
@@ -413,28 +429,23 @@ async function executeTool(name, input) {
         outreachRecent,
         outreachReplies,
       ] = await Promise.all([
-        supabase.from('leads').select('*', { count: 'exact', head: true }),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'enriched'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'contacted'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'replied'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'no_contacts'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'HIGH'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'MEDIUM'),
-        supabase.from('leads').select('*', { count: 'exact', head: true }).eq('icp_fit', 'LOW'),
+        leadsQuery(),
+        leadsQuery((q) => q.eq('status', 'new')),
+        leadsQuery((q) => q.eq('status', 'enriched')),
+        leadsQuery((q) => q.eq('status', 'contacted')),
+        leadsQuery((q) => q.eq('status', 'replied')),
+        leadsQuery((q) => q.eq('status', 'no_contacts')),
+        leadsQuery((q) => q.eq('icp_fit', 'HIGH')),
+        leadsQuery((q) => q.eq('icp_fit', 'MEDIUM')),
+        leadsQuery((q) => q.eq('icp_fit', 'LOW')),
         // outreach_log is the primary source — send-email.js writes here
-        supabase
-          .from('outreach_log')
-          .select('*', { count: 'exact', head: true }),
-        supabase
-          .from('outreach_log')
-          .select('*', { count: 'exact', head: true })
-          .gte('sent_at', new Date(Date.now() - 7 * 86400000).toISOString()),
-        supabase
-          .from('outreach_log')
-          .select('*', { count: 'exact', head: true })
-          .not('replied_at', 'is', null),
+        outreachQuery(),
+        outreachQuery((q) => q.gte('sent_at', new Date(Date.now() - 7 * 86400000).toISOString())),
+        outreachQuery((q) => q.not('replied_at', 'is', null)),
       ]);
+
+      // "Contacted leads" = leads with status contacted OR replied (matches dashboard header)
+      const contactedLeads = (statusContacted.count || 0) + (statusReplied.count || 0);
 
       const statusCounts = {};
       if (statusNew.count) statusCounts.new = statusNew.count;
@@ -451,6 +462,7 @@ async function executeTool(name, input) {
       return {
         total_leads: total.count || 0,
         by_status: statusCounts,
+        contacted_leads: contactedLeads,
         by_icp_fit: icpCounts,
         emails_sent_all_time: outreachAll.count || 0,
         emails_sent_last_7_days: outreachRecent.count || 0,
@@ -459,9 +471,11 @@ async function executeTool(name, input) {
     }
 
     case 'add_lead': {
+      const row = { website: input.website.trim(), source: 'chat', status: 'new' };
+      if (orgId) row.org_id = orgId;
       const { data, error } = await supabase
         .from('leads')
-        .insert([{ website: input.website.trim(), source: 'chat', status: 'new' }])
+        .insert([row])
         .select();
       if (error) {
         if (error.code === '23505') return { error: 'This website already exists.' };
@@ -478,13 +492,19 @@ async function executeTool(name, input) {
       const existingSet = new Set();
       for (let i = 0; i < websites.length; i += 200) {
         const batch = websites.slice(i, i + 200);
-        const { data } = await supabase.from('leads').select('website').in('website', batch);
+        let q = supabase.from('leads').select('website').in('website', batch);
+        if (orgId) q = q.eq('org_id', orgId);
+        const { data } = await q;
         (data || []).forEach((l) => existingSet.add(l.website));
       }
 
       const newRows = websites
         .filter((w) => !existingSet.has(w))
-        .map((w) => ({ website: w, source: 'chat', status: 'new' }));
+        .map((w) => {
+          const row = { website: w, source: 'chat', status: 'new' };
+          if (orgId) row.org_id = orgId;
+          return row;
+        });
 
       if (!newRows.length) return { added: 0, skipped: websites.length, message: 'All already exist' };
 
@@ -554,11 +574,12 @@ async function executeTool(name, input) {
 
     case 'find_contacts': {
       const domain = input.website.toLowerCase().replace(/^www\./, '');
-      const { data, error } = await supabase
+      let fcQuery = supabase
         .from('contact_database')
         .select('*')
-        .or(`website.ilike.%${domain}%,email_domain.ilike.%${domain}%`)
-        .limit(20);
+        .or(`website.ilike.%${domain}%,email_domain.ilike.%${domain}%`);
+      if (orgId) fcQuery = fcQuery.eq('org_id', orgId);
+      const { data, error } = await fcQuery.limit(20);
 
       if (error) return { error: error.message };
 
@@ -598,22 +619,16 @@ async function executeTool(name, input) {
     }
 
     case 'generate_email': {
-      const { data: leadData } = await supabase
-        .from('leads')
-        .select('*')
-        .ilike('website', `%${input.website}%`)
-        .limit(1)
-        .single();
+      let genLeadQ = supabase.from('leads').select('*').ilike('website', `%${input.website}%`);
+      if (orgId) genLeadQ = genLeadQ.eq('org_id', orgId);
+      const { data: leadData } = await genLeadQ.limit(1).single();
 
       if (!leadData) return { error: `Lead not found for ${input.website}` };
 
       // Load ICP profile for email context
-      const { data: icpData } = await supabase
-        .from('icp_profiles')
-        .select('*')
-        .eq('is_active', true)
-        .limit(1)
-        .single();
+      let icpQ = supabase.from('icp_profiles').select('*').eq('is_active', true);
+      if (orgId) icpQ = icpQ.eq('org_id', orgId);
+      const { data: icpData } = await icpQ.limit(1).single();
 
       const ctx = icpData || {};
       const firstName = input.contact_name?.split(' ')[0] || 'there';
@@ -661,12 +676,9 @@ Subject: [subject]
 
     case 'send_email': {
       // Find or create lead ID
-      const { data: leadRow } = await supabase
-        .from('leads')
-        .select('id')
-        .ilike('website', `%${input.website}%`)
-        .limit(1)
-        .single();
+      let sendLeadQ = supabase.from('leads').select('id').ilike('website', `%${input.website}%`);
+      if (orgId) sendLeadQ = sendLeadQ.eq('org_id', orgId);
+      const { data: leadRow } = await sendLeadQ.limit(1).single();
 
       const payload = {
         to: input.to,
@@ -695,11 +707,9 @@ Subject: [subject]
     }
 
     case 'get_agent_status': {
-      const { data, error } = await supabase
-        .from('agent_settings')
-        .select('*')
-        .limit(1)
-        .single();
+      let agentQ = supabase.from('agent_settings').select('*');
+      if (orgId) agentQ = agentQ.eq('org_id', orgId);
+      const { data, error } = await agentQ.limit(1).single();
       if (error) return { error: error.message };
       return { settings: data };
     }
@@ -716,11 +726,9 @@ Subject: [subject]
 
       updates.updated_at = new Date().toISOString();
 
-      const { data: existing } = await supabase
-        .from('agent_settings')
-        .select('id')
-        .limit(1)
-        .single();
+      let existQ = supabase.from('agent_settings').select('id');
+      if (orgId) existQ = existQ.eq('org_id', orgId);
+      const { data: existing } = await existQ.limit(1).single();
 
       if (!existing) return { error: 'No agent_settings row found' };
 
@@ -736,6 +744,7 @@ Subject: [subject]
     case 'get_activity_log': {
       const limit = Math.min(input.limit || 20, 100);
       let query = supabase.from('activity_log').select('*');
+      if (orgId) query = query.eq('org_id', orgId);
       if (input.activity_type) query = query.eq('activity_type', input.activity_type);
       query = query.order('created_at', { ascending: false }).limit(limit);
 
@@ -746,12 +755,9 @@ Subject: [subject]
 
     case 'delete_lead': {
       const website = input.website.trim();
-      const { data: lead } = await supabase
-        .from('leads')
-        .select('id, website, status')
-        .ilike('website', `%${website}%`)
-        .limit(1)
-        .single();
+      let delQ = supabase.from('leads').select('id, website, status').ilike('website', `%${website}%`);
+      if (orgId) delQ = delQ.eq('org_id', orgId);
+      const { data: lead } = await delQ.limit(1).single();
 
       if (!lead) return { error: `No lead found matching "${website}"` };
 
@@ -806,12 +812,14 @@ exports.handler = async (event) => {
   try {
     const body = JSON.parse(event.body);
 
+    const orgId = body.org_id || null;
+
     // ── Mode: Execute tool calls ──────────────────────────────────────────
     if (body.tool_calls) {
       const results = [];
       for (const call of body.tool_calls) {
         console.log(`Tool call: ${call.name}`, JSON.stringify(call.input));
-        const result = await executeTool(call.name, call.input);
+        const result = await executeTool(call.name, call.input, orgId);
         results.push({
           type: 'tool_result',
           tool_use_id: call.id,

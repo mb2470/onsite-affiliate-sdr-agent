@@ -29,7 +29,7 @@ export default function AgentMonitor() {
 
   useEffect(() => {
     loadRangeStats();
-  }, [dateRange, customStart, customEnd]);
+  }, [dateRange, customStart, customEnd, activeOrgId]);
 
   const loadData = async () => {
     // Load agent settings
@@ -40,6 +40,7 @@ export default function AgentMonitor() {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
+    // Note: org_id not yet available on first load — scoped after settings resolve
     const { count: emailsToday } = await supabase
       .from('activity_log')
       .select('*', { count: 'exact', head: true })
@@ -236,26 +237,24 @@ export default function AgentMonitor() {
   const loadRangeStats = async () => {
     const { start, end } = getDateRange();
 
-    const { count: sent } = await supabase
-      .from('activity_log')
-      .select('*', { count: 'exact', head: true })
-      .in('activity_type', ['email_sent', 'email_exported'])
-      .gte('created_at', start)
-      .lte('created_at', end);
+    const rangeQuery = (activityType) => {
+      let q = supabase
+        .from('activity_log')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', start)
+        .lte('created_at', end);
+      if (activeOrgId) q = q.eq('org_id', activeOrgId);
+      if (Array.isArray(activityType)) {
+        q = q.in('activity_type', activityType);
+      } else {
+        q = q.eq('activity_type', activityType);
+      }
+      return q;
+    };
 
-    const { count: replies } = await supabase
-      .from('activity_log')
-      .select('*', { count: 'exact', head: true })
-      .eq('activity_type', 'email_reply')
-      .gte('created_at', start)
-      .lte('created_at', end);
-
-    const { count: bounces } = await supabase
-      .from('activity_log')
-      .select('*', { count: 'exact', head: true })
-      .eq('activity_type', 'email_bounced')
-      .gte('created_at', start)
-      .lte('created_at', end);
+    const { count: sent } = await rangeQuery(['email_sent', 'email_exported']);
+    const { count: replies } = await rangeQuery('email_reply');
+    const { count: bounces } = await rangeQuery('email_bounced');
 
     const replyRate = sent > 0 ? ((replies || 0) / sent * 100).toFixed(1) : 0;
 
