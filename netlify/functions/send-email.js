@@ -150,6 +150,64 @@ async function getAccessToken() {
   return data.access_token;
 }
 
+
+async function getEmailSettings(orgId) {
+  const { data } = await supabase
+    .from('email_settings')
+    .select('gmail_from_email, gmail_from_name')
+    .eq('org_id', orgId)
+    .maybeSingle();
+  return data || {};
+}
+
+async function selectSenderAccount(orgId, preferredAccountId = null) {
+  const query = () => supabase
+    .from('email_accounts')
+    .select('id, email_address, display_name, daily_send_limit, current_daily_sent, status')
+    .eq('org_id', orgId)
+    .in('status', ['active', 'ready'])
+    .order('current_daily_sent', { ascending: true })
+    .order('created_at', { ascending: true });
+
+  const hasCapacity = (account) => {
+    const sent = account?.current_daily_sent || 0;
+    const limit = Number.isFinite(account?.daily_send_limit)
+      ? account.daily_send_limit
+      : parseInt(account?.daily_send_limit, 10);
+    return Number.isFinite(limit) && limit > 0 && sent < limit;
+  };
+
+  if (preferredAccountId) {
+    const { data: preferred } = await query().eq('id', preferredAccountId).limit(1);
+    const account = (preferred || [])[0] || null;
+    if (account && hasCapacity(account)) {
+      return { account, hasConfiguredAccounts: true };
+    }
+  }
+
+  const { data: accounts } = await query();
+  const list = accounts || [];
+  const available = list.find(hasCapacity) || null;
+  return { account: available, hasConfiguredAccounts: list.length > 0 };
+}
+
+async function incrementSenderDailySent(accountId, amount = 1) {
+  if (!accountId || amount < 1) return;
+
+  const { data: account } = await supabase
+    .from('email_accounts')
+    .select('id, current_daily_sent')
+    .eq('id', accountId)
+    .limit(1)
+    .maybeSingle();
+
+  if (!account) return;
+
+  await supabase
+    .from('email_accounts')
+    .update({ current_daily_sent: (account.current_daily_sent || 0) + amount })
+    .eq('id', accountId);
+}
 function buildRawEmail({ to, bcc, subject, body, fromEmail, fromName }) {
   const lines = [
     `From: ${fromName} <${fromEmail}>`,
@@ -180,7 +238,7 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const { to, bcc, subject, body, leadId, website, contactDetails, org_id } = JSON.parse(event.body || '{}');
+    const { to, bcc, subject, body, leadId, website, contactDetails, org_id, from_account_id } = JSON.parse(event.body || '{}');
     const orgId = org_id || event.headers['x-org-id'];
 
     if (!orgId) {
@@ -280,8 +338,24 @@ exports.handler = async (event) => {
       };
     }
 
-    const fromEmail = process.env.GMAIL_FROM_EMAIL || 'sam@onsiteaffiliate.com';
-    const fromName = 'Sam Reid';
+    const settings = await getEmailSettings(orgId);
+    const { account: selectedSender, hasConfiguredAccounts } = await selectSenderAccount(orgId, from_account_id);
+
+    if (!selectedSender && hasConfiguredAccounts) {
+      return {
+        statusCode: 429,
+        headers,
+        body: JSON.stringify({ error: 'All sender accounts are at their daily limit. Increase limits or wait for reset.' }),
+      };
+    }
+
+    const fromEmail = selectedSender?.email_address
+      || settings.gmail_from_email
+      || process.env.GMAIL_FROM_EMAIL
+      || 'sam@onsiteaffiliate.com';
+    const fromName = selectedSender?.display_name
+      || settings.gmail_from_name
+      || 'Sam Reid';
 
     const accessToken = await getAccessToken();
 
@@ -328,6 +402,10 @@ exports.handler = async (event) => {
 
     await supabase.from('outreach_log').insert(outreachRows);
 
+    if (selectedSender?.id) {
+      await incrementSenderDailySent(selectedSender.id, 1);
+    }
+
     if (leadId) {
       const firstContact = outreachRows[0] || {};
 
@@ -343,7 +421,7 @@ exports.handler = async (event) => {
         org_id: orgId,
         activity_type: 'email_sent',
         lead_id: leadId,
-        summary: `Email sent to ${safeEmails.join(', ')}${blockedEmails.length ? ` (${blockedEmails.length} blocked)` : ''}`,
+        summary: `Email sent from ${fromEmail} to ${safeEmails.join(', ')}${blockedEmails.length ? ` (${blockedEmails.length} blocked)` : ''}`,
         status: 'success',
       });
     }
@@ -356,6 +434,13 @@ exports.handler = async (event) => {
         messageId: sendData.id,
         recipients: safeEmails,
         blocked: blockedEmails,
+        sender: {
+          email: fromEmail,
+          name: fromName,
+          account_id: selectedSender?.id || null,
+          daily_limit: selectedSender?.daily_send_limit || null,
+          current_daily_sent: selectedSender?.current_daily_sent || null,
+        },
       }),
     };
 
