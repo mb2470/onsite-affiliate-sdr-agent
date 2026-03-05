@@ -16,6 +16,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { verifyContactsBatch } = require('./lib/apollo-verify');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -30,7 +31,9 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const { contacts, leadId } = JSON.parse(event.body || '{}');
+    const body = JSON.parse(event.body || '{}');
+    const { contacts, leadId } = body;
+    const orgId = await resolveOrgId(supabase, body.org_id);
 
     if (!contacts || contacts.length === 0) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No contacts provided' }) };
@@ -66,6 +69,7 @@ exports.handler = async (event) => {
           linkedin_url: pivoted.linkedin_url || null,
           apollo_email_status: pivoted.email_status || null,
           apollo_verified_at: new Date().toISOString(),
+          org_id: orgId,
         });
         console.log(`✅ Added pivoted contact: ${pivoted.email} (${pivoted.title} at ${pivoted.organization})`);
       }
@@ -86,6 +90,7 @@ exports.handler = async (event) => {
         lead_id: leadId,
         summary: `Apollo verification: ${summary}`,
         status: 'success',
+        org_id: orgId,
       });
     }
 

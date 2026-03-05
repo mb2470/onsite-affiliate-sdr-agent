@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -15,6 +16,8 @@ exports.handler = async (event) => {
     console.error('STORELEADS_API_KEY not configured');
     return;
   }
+
+  const orgId = await resolveOrgId(supabase);
 
   try {
     // Get websites that already have socials
@@ -53,7 +56,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'bulk_socials',
       summary: `Started social fetch for ${allLeads.length} leads (single domain mode)`,
-      status: 'success'
+      status: 'success',
+      org_id: orgId,
     });
 
     let totalContacts = 0;
@@ -144,7 +148,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'bulk_socials',
       summary,
-      status: 'success'
+      status: 'success',
+      org_id: orgId,
     });
 
   } catch (error) {
@@ -152,7 +157,8 @@ exports.handler = async (event) => {
     await supabase.from('activity_log').insert({
       activity_type: 'bulk_socials',
       summary: `Social fetch failed: ${error.message}`,
-      status: 'failed'
+      status: 'failed',
+      org_id: orgId,
     });
   }
 };

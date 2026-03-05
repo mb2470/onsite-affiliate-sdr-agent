@@ -102,12 +102,7 @@ async function verifyEmail(email, orgId) {
   const cached = await getCachedVerification(email, orgId);
   if (cached) return cached;
 
-  // 2. No valid cache — do a live verification
-  if (!ELV_API_KEY) {
-    console.log(`⚠️ No EMAILLISTVERIFY_API_KEY set, skipping verification for ${email}`);
-    return { email, status: 'skipped', safe: true };
-  }
-
+  // 2. No valid cache — do a live verification (ELV_API_KEY is checked before calling)
   try {
     const url = `https://apps.emaillistverify.com/api/verifyEmail?secret=${encodeURIComponent(ELV_API_KEY)}&email=${encodeURIComponent(email)}&timeout=15`;
     const res = await fetch(url);
@@ -126,8 +121,9 @@ async function verifyEmail(email, orgId) {
 
     return { email, status, safe, cached: false, verifiedAt: new Date().toISOString() };
   } catch (e) {
-    console.error(`⚠️ Verify error for ${email}: ${e.message}`);
-    return { email, status: 'error', safe: true };
+    // Fail CLOSED: if we can't verify, don't send — prevents bounces
+    console.error(`🚫 Verify error for ${email}: ${e.message} — blocking send`);
+    return { email, status: 'verification_error', safe: false };
   }
 }
 
@@ -249,14 +245,13 @@ exports.handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No recipients' }) };
     }
 
-    // ── Step 1: Read cached Apollo status from DB (no live API calls) ──
-    // Contacts are pre-verified during discovery (Opt 1).
-    // We just read the stored apollo_email_status to decide routing.
+    // ── Step 1: Read cached Apollo status — discard known invalids ──
+    // Apollo is the first gate: discard confirmed-bad emails.
+    // All other emails (including Apollo "verified") MUST pass ELV too.
     const allEmails = [...(to ? [to] : []), ...(bcc || [])];
 
-    let emailsForElv = [];
     const blocked = [];
-    const preVerified = [];
+    const emailsForElv = [];
 
     for (const email of allEmails) {
       if (await isPermanentlySuppressed(email, orgId)) {
@@ -273,44 +268,48 @@ exports.handler = async (event) => {
       if (cachedApollo) {
         const action = classifyApolloStatus(cachedApollo.apollo_email_status);
 
-        if (action === 'send') {
-          // Apollo verified during discovery — skip ELV, send directly
-          preVerified.push(email);
-          console.log(`✅ Pre-verified (Apollo): ${email} [${cachedApollo.apollo_email_status}]`);
-        } else if (action === 'discard') {
-          // Should have been caught during discovery, but safety net
+        if (action === 'discard') {
+          // Apollo says invalid — block immediately, no need for ELV
           blocked.push({ email, status: `apollo_${cachedApollo.apollo_email_status}` });
           console.log(`🚫 Blocked (Apollo): ${email} [${cachedApollo.apollo_email_status}]`);
           await supabase.from('contact_database').delete().eq('org_id', orgId).eq('email', email);
-        } else {
-          // extrapolated, catch_all, unavailable — route to ELV
-          emailsForElv.push(email);
+          continue;
         }
-      } else {
-        // No cached Apollo status — route to ELV as fallback
-        emailsForElv.push(email);
+
+        // All other Apollo statuses (verified, extrapolated, catch_all, unavailable)
+        // still need ELV confirmation before sending
+        console.log(`📋 Apollo status for ${email}: ${cachedApollo.apollo_email_status} — routing to ELV`);
       }
+
+      // Route ALL non-blocked emails through ELV
+      emailsForElv.push(email);
     }
 
-    if (preVerified.length > 0) {
-      console.log(`✅ ${preVerified.length} pre-verified via Apollo: ${preVerified.join(', ')}`);
+    // ── Step 2: ELV verification — REQUIRED for all emails ────
+    if (!ELV_API_KEY) {
+      console.error('❌ EMAILLISTVERIFY_API_KEY not configured — cannot verify emails');
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ error: 'Email verification service not configured. Cannot send unverified emails.' }),
+      };
     }
 
-    // ── Step 2: ELV verification for non-Apollo-verified emails ────
     const elvResults = await Promise.all(emailsForElv.map(e => verifyEmail(e, orgId)));
     const elvSafe = elvResults.filter(r => r.safe).map(r => r.email);
     const elvBlocked = elvResults.filter(r => !r.safe);
 
     // Combine results
-    const safeEmails = [...preVerified, ...elvSafe];
+    const safeEmails = elvSafe;
     const blockedEmails = [...blocked, ...elvBlocked.map(r => ({ email: r.email, status: r.status }))];
 
     // Log verification results to activity log
     const freshlyVerified = elvResults.filter(r => r.safe && !r.cached && r.status !== 'skipped' && r.status !== 'error');
     const verificationSummary = [
-      preVerified.length > 0 ? `Pre-verified (Apollo): ${preVerified.join(', ')}` : null,
       freshlyVerified.length > 0 ? `ELV verified: ${freshlyVerified.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
+      elvSafe.length > 0 && freshlyVerified.length === 0 ? `ELV cached: ${elvSafe.join(', ')}` : null,
       blocked.length > 0 ? `Blocked: ${blocked.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
+      elvBlocked.length > 0 ? `ELV blocked: ${elvBlocked.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
     ].filter(Boolean).join(' | ');
 
     if (verificationSummary && leadId) {

@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel } = require('./lib/icp-scoring');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -32,6 +33,8 @@ async function enrichBatch(domains) {
 
 exports.handler = async (event, context) => {
   console.log('🎯 Starting prioritized enrichment (leads with contacts, no ICP)...');
+
+  const orgId = await resolveOrgId(supabase);
 
   try {
     // Load scoring config from ICP profile
@@ -144,6 +147,7 @@ exports.handler = async (event, context) => {
       activity_type: 'prioritized_enrichment',
       summary,
       status: 'success',
+      org_id: orgId,
     });
 
   } catch (error) {
@@ -152,6 +156,7 @@ exports.handler = async (event, context) => {
       activity_type: 'prioritized_enrichment',
       summary: `Failed: ${error.message}`,
       status: 'failed',
+      org_id: orgId,
     });
   }
 };
