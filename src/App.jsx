@@ -268,34 +268,78 @@ function AuthenticatedApp({ session }) {
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
-    // Emails sent (all-time from activity_log — reliable source with created_at)
+    // Emails sent (lifetime): successful sends excluding bounced contacts
     try {
-      const { count } = await supabase.from('activity_log')
-        .select('*', { count: 'exact', head: true })
+      const { data: outreachRows } = await supabase
+        .from('outreach_log')
+        .select('contact_email')
+        .eq('org_id', orgId);
+
+      const { data: bounceActivity } = await supabase
+        .from('activity_log')
+        .select('summary')
         .eq('org_id', orgId)
-        .in('activity_type', ['email_sent', 'email_exported']);
-      setEmailsSent(count || 0);
+        .eq('activity_type', 'email_bounced');
+
+      const bouncedEmails = new Set(
+        (bounceActivity || [])
+          .map(a => {
+            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
+            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
+          })
+          .filter(Boolean)
+      );
+
+      const nonBouncedSentCount = (outreachRows || []).filter(r => {
+        const email = r.contact_email?.toLowerCase();
+        return email && !bouncedEmails.has(email);
+      }).length;
+
+      setEmailsSent(nonBouncedSentCount);
     } catch (e) { console.error(e); }
 
-    // Outreach stats: contacted leads from leads table, unique contacts from outreach_log
+    // Outreach stats: contacted/replied leads & contacts from outreach_log
     try {
-      // Leads contacted — count directly from leads status (canonical source)
-      const { count: contactedLeadCount } = await supabase.from('leads')
-        .select('*', { count: 'exact', head: true })
+      const { data: outreach } = await supabase
+        .from('outreach_log')
+        .select('lead_id, website, contact_email, replied_at')
+        .eq('org_id', orgId);
+
+      const { data: bounceActivity } = await supabase
+        .from('activity_log')
+        .select('summary')
         .eq('org_id', orgId)
-        .in('status', ['contacted', 'replied', 'qualified', 'demo']);
+        .eq('activity_type', 'email_bounced');
 
-      // Unique contacts emailed — from outreach_log without followup_number filter
-      const { data: outreach } = await supabase.from('outreach_log').select('contact_email, lead_id').eq('org_id', orgId);
-      const rows = outreach || [];
-      const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase()).filter(Boolean)).size;
+      const bouncedEmails = new Set(
+        (bounceActivity || [])
+          .map(a => {
+            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
+            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
+          })
+          .filter(Boolean)
+      );
 
-      // Replied leads
-      const { data: repliedLeadRows } = await supabase.from('leads').select('id').eq('org_id', orgId).eq('status', 'replied');
-      const repliedLeadIds = new Set((repliedLeadRows || []).map(r => r.id));
-      const repliedContacts = new Set(rows.filter(r => repliedLeadIds.has(r.lead_id)).map(r => r.contact_email?.toLowerCase()).filter(Boolean)).size;
+      const rows = (outreach || []).filter(r => {
+        const email = r.contact_email?.toLowerCase();
+        return email && !bouncedEmails.has(email);
+      });
 
-      setOutreachStats({ uniqueLeads: contactedLeadCount || 0, uniqueContacts, repliedLeads: repliedLeadIds.size, repliedContacts });
+      const toLeadKey = (row) => row.lead_id || (row.website ? `website:${row.website}` : null);
+
+      const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase()).filter(Boolean));
+      const uniqueLeads = new Set(rows.map(toLeadKey).filter(Boolean));
+
+      const repliedRows = rows.filter(r => !!r.replied_at);
+      const repliedContacts = new Set(repliedRows.map(r => r.contact_email?.toLowerCase()).filter(Boolean));
+      const repliedLeads = new Set(repliedRows.map(toLeadKey).filter(Boolean));
+
+      setOutreachStats({
+        uniqueLeads: uniqueLeads.size,
+        uniqueContacts: uniqueContacts.size,
+        repliedLeads: repliedLeads.size,
+        repliedContacts: repliedContacts.size,
+      });
     } catch (e) { console.error(e); }
 
     try {
@@ -544,11 +588,14 @@ function AuthenticatedApp({ session }) {
         body: JSON.stringify({ org_id: orgId }),
       });
       const data = await res.json();
-      setBounceResult(data);
-      if (data.bouncedEmails?.length > 0) {
-        await loadGlobalData();
-        await loadManualLeads();
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Bounce check failed');
       }
+
+      setBounceResult(data);
+      await loadGlobalData();
+      await loadManualLeads();
     } catch (e) {
       console.error(e);
       setBounceResult({ error: e.message });
@@ -1299,12 +1346,17 @@ function AuthenticatedApp({ session }) {
               style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.4)', backgroundColor: isCheckingBounces ? 'rgba(239,68,68,0.1)' : 'rgba(239,68,68,0.15)', color: '#f87171', cursor: 'pointer', fontSize: '11px', whiteSpace: 'nowrap' }}>
               {isCheckingBounces ? '⏳ Checking...' : '🔄 Check Bounces'}
             </button>
-            {bounceResult && bounceResult.bouncedEmails?.length > 0 && (
+            {bounceResult?.error && (
+              <span style={{ fontSize: '10px', color: '#f87171', marginTop: '4px', display: 'block' }}>
+                ⚠ {bounceResult.error}
+              </span>
+            )}
+            {!bounceResult?.error && bounceResult && bounceResult.bouncedEmails?.length > 0 && (
               <span style={{ fontSize: '10px', color: '#f87171', marginTop: '4px', display: 'block' }}>
                 {bounceResult.bouncedEmails.length} bounced
               </span>
             )}
-            {bounceResult && bounceResult.bouncedEmails?.length === 0 && (
+            {!bounceResult?.error && bounceResult && bounceResult.bouncedEmails?.length === 0 && (
               <span style={{ fontSize: '10px', color: '#4ade80', marginTop: '4px', display: 'block' }}>
                 ✓ No bounces
               </span>
