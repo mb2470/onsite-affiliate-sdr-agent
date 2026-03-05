@@ -146,6 +146,46 @@ async function getAccessToken() {
   return data.access_token;
 }
 
+async function getSendAsAliases(accessToken) {
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to fetch Gmail aliases: ${errText}`);
+  }
+
+  const data = await res.json();
+  return Array.isArray(data.sendAs) ? data.sendAs : [];
+}
+
+function resolveFromAlias(requestedFromEmail, aliases) {
+  const normalized = (requestedFromEmail || '').trim().toLowerCase();
+  const byEmail = aliases.find((a) => (a.sendAsEmail || '').trim().toLowerCase() === normalized) || null;
+  const primaryAccepted = aliases.find((a) => a.isPrimary && a.verificationStatus === 'accepted')
+    || aliases.find((a) => a.verificationStatus === 'accepted')
+    || null;
+
+  if (byEmail && byEmail.verificationStatus === 'accepted') {
+    return { fromEmail: byEmail.sendAsEmail, warning: null };
+  }
+
+  if (byEmail && byEmail.verificationStatus !== 'accepted') {
+    return {
+      fromEmail: primaryAccepted?.sendAsEmail || requestedFromEmail,
+      warning: `Configured sender ${requestedFromEmail} is not accepted in Gmail sendAs (status: ${byEmail.verificationStatus}). Falling back to ${primaryAccepted?.sendAsEmail || requestedFromEmail}.`,
+    };
+  }
+
+  return {
+    fromEmail: primaryAccepted?.sendAsEmail || requestedFromEmail,
+    warning: `Configured sender ${requestedFromEmail} was not found in Gmail sendAs aliases. Falling back to ${primaryAccepted?.sendAsEmail || requestedFromEmail}.`,
+  };
+}
+
 
 async function getEmailSettings(orgId) {
   const { data } = await supabase
@@ -365,13 +405,19 @@ exports.handler = async (event) => {
       || 'Sam Reid';
 
     const accessToken = await getAccessToken();
+    const aliases = await getSendAsAliases(accessToken);
+    const { fromEmail: resolvedFromEmail, warning: aliasWarning } = resolveFromAlias(fromEmail, aliases);
+
+    if (aliasWarning) {
+      console.warn(`⚠️ ${aliasWarning}`);
+    }
 
     const raw = buildRawEmail({
       to: safeEmails[0],
       bcc: safeEmails.slice(1),
       subject,
       body,
-      fromEmail,
+      fromEmail: resolvedFromEmail,
       fromName,
     });
 
@@ -428,7 +474,7 @@ exports.handler = async (event) => {
         org_id: orgId,
         activity_type: 'email_sent',
         lead_id: leadId,
-        summary: `Email sent from ${fromEmail} to ${safeEmails.join(', ')}${blockedEmails.length ? ` (${blockedEmails.length} blocked)` : ''}`,
+        summary: `Email sent from ${resolvedFromEmail} to ${safeEmails.join(', ')}${blockedEmails.length ? ` (${blockedEmails.length} blocked)` : ''}${aliasWarning ? ` | ${aliasWarning}` : ''}`,
         status: 'success',
       });
     }
@@ -442,11 +488,13 @@ exports.handler = async (event) => {
         recipients: safeEmails,
         blocked: blockedEmails,
         sender: {
-          email: fromEmail,
+          email: resolvedFromEmail,
+          resolved_email: resolvedFromEmail,
           name: fromName,
           account_id: selectedSender?.id || null,
           daily_limit: selectedSender?.daily_send_limit || null,
           current_daily_sent: selectedSender?.current_daily_sent || null,
+          alias_warning: aliasWarning,
         },
       }),
     };
