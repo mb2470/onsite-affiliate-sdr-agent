@@ -52,10 +52,11 @@ async function searchApollo(domain) {
 }
 
 
-async function isPermanentlySuppressed(email) {
+async function isPermanentlySuppressed(email, orgId) {
   const { data } = await supabase
     .from('activity_log')
     .select('id')
+    .eq('org_id', orgId)
     .eq('activity_type', 'email_bounced')
     .ilike('summary', `Bounced: ${email} %`)
     .limit(1);
@@ -187,7 +188,7 @@ exports.handler = async (event, context) => {
           const normalizedEmail = match.email.toLowerCase();
 
           // Never re-add a contact that previously bounced.
-          if (await isPermanentlySuppressed(normalizedEmail)) {
+          if (await isPermanentlySuppressed(normalizedEmail, orgId)) {
             console.log(`  🚫 Skipping suppressed bounced contact: ${normalizedEmail}`);
             continue;
           }
@@ -196,6 +197,7 @@ exports.handler = async (event, context) => {
           const { data: existing } = await supabase
             .from('contact_database')
             .select('id')
+            .eq('org_id', orgId)
             .eq('email', normalizedEmail)
             .limit(1);
 
@@ -269,7 +271,7 @@ exports.handler = async (event, context) => {
             has_contacts: true,
             contact_name: bestMatch ? `${bestMatch.first_name || ''} ${bestMatch.last_name || ''}`.trim() : null,
             contact_email: bestMatch?.email || null,
-          }).eq('id', lead.id);
+          }).eq('id', lead.id).eq('org_id', orgId);
 
           totalFound += addedForLead;
           console.log(`  🎯 ${addedForLead} contacts added for ${domain}`);

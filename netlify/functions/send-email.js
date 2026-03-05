@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const { classifyApolloStatus, APOLLO_SAFE_STATUSES } = require('./lib/apollo-verify');
+const { classifyApolloStatus } = require('./lib/apollo-verify');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -245,12 +245,14 @@ exports.handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No recipients' }) };
     }
 
-    // ── Step 1: Read cached Apollo status — discard known invalids ──
-    // Apollo is the first gate: discard confirmed-bad emails.
-    // All other emails (including Apollo "verified") MUST pass ELV too.
+    // ── Step 1: Use cached Apollo status from discovery triage ─────
+    // verified -> send directly
+    // extrapolated/catch_all/unavailable -> route to ELV
+    // invalid or missing -> block
     const allEmails = [...(to ? [to] : []), ...(bcc || [])];
 
     const blocked = [];
+    const apolloVerified = [];
     const emailsForElv = [];
 
     for (const email of allEmails) {
@@ -264,48 +266,54 @@ exports.handler = async (event) => {
       }
 
       const cachedApollo = await getCachedApolloStatus(email, orgId);
-
-      if (cachedApollo) {
-        const action = classifyApolloStatus(cachedApollo.apollo_email_status);
-
-        if (action === 'discard') {
-          // Apollo says invalid — block immediately, no need for ELV
-          blocked.push({ email, status: `apollo_${cachedApollo.apollo_email_status}` });
-          console.log(`🚫 Blocked (Apollo): ${email} [${cachedApollo.apollo_email_status}]`);
-          await supabase.from('contact_database').delete().eq('org_id', orgId).eq('email', email);
-          continue;
-        }
-
-        // All other Apollo statuses (verified, extrapolated, catch_all, unavailable)
-        // still need ELV confirmation before sending
-        console.log(`📋 Apollo status for ${email}: ${cachedApollo.apollo_email_status} — routing to ELV`);
+      if (!cachedApollo || !cachedApollo.apollo_email_status) {
+        blocked.push({ email, status: 'missing_apollo_status' });
+        console.log(`🚫 Blocked (Apollo missing): ${email}`);
+        continue;
       }
 
-      // Route ALL non-blocked emails through ELV
+      const apolloStatus = cachedApollo.apollo_email_status.toLowerCase();
+      const action = classifyApolloStatus(apolloStatus);
+
+      if (action === 'discard') {
+        blocked.push({ email, status: `apollo_${apolloStatus}` });
+        console.log(`🚫 Blocked (Apollo): ${email} [${apolloStatus}]`);
+        await supabase.from('contact_database').delete().eq('org_id', orgId).eq('email', email);
+        continue;
+      }
+
+      if (action === 'send') {
+        apolloVerified.push(email);
+        console.log(`✅ Apollo verified — skipping ELV for ${email}`);
+        continue;
+      }
+
+      console.log(`📋 Apollo status for ${email}: ${apolloStatus} — routing to ELV`);
       emailsForElv.push(email);
     }
 
-    // ── Step 2: ELV verification — REQUIRED for all emails ────
-    if (!ELV_API_KEY) {
-      console.error('❌ EMAILLISTVERIFY_API_KEY not configured — cannot verify emails');
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ error: 'Email verification service not configured. Cannot send unverified emails.' }),
-      };
+    // ── Step 2: ELV verification — ONLY for risky Apollo statuses ────
+    let elvResults = [];
+    if (emailsForElv.length > 0) {
+      if (!ELV_API_KEY) {
+        console.error('❌ EMAILLISTVERIFY_API_KEY not configured — cannot verify risky Apollo statuses');
+        blocked.push(...emailsForElv.map(email => ({ email, status: 'elv_unavailable_for_risky_apollo_status' })));
+      } else {
+        elvResults = await Promise.all(emailsForElv.map(e => verifyEmail(e, orgId)));
+      }
     }
 
-    const elvResults = await Promise.all(emailsForElv.map(e => verifyEmail(e, orgId)));
     const elvSafe = elvResults.filter(r => r.safe).map(r => r.email);
     const elvBlocked = elvResults.filter(r => !r.safe);
 
     // Combine results
-    const safeEmails = elvSafe;
+    const safeEmails = [...apolloVerified, ...elvSafe];
     const blockedEmails = [...blocked, ...elvBlocked.map(r => ({ email: r.email, status: r.status }))];
 
     // Log verification results to activity log
     const freshlyVerified = elvResults.filter(r => r.safe && !r.cached && r.status !== 'skipped' && r.status !== 'error');
     const verificationSummary = [
+      apolloVerified.length > 0 ? `Apollo verified (no ELV): ${apolloVerified.join(', ')}` : null,
       freshlyVerified.length > 0 ? `ELV verified: ${freshlyVerified.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
       elvSafe.length > 0 && freshlyVerified.length === 0 ? `ELV cached: ${elvSafe.join(', ')}` : null,
       blocked.length > 0 ? `Blocked: ${blocked.map(r => `${r.email} (${r.status})`).join(', ')}` : null,
