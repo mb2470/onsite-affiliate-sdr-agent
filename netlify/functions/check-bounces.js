@@ -43,14 +43,20 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body || '{}');
-    const orgId = body.org_id || event.headers['x-org-id'];
+    const orgId = body.org_id || event.headers['x-org-id'] || event.headers['X-Org-Id'];
     if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
 
     const accessToken = await getAccessToken();
 
-    // Search for bounce notifications from mailer-daemon in last 7 days
-    const searchRes = await gmailGet(accessToken, 
-      'messages?q=' + encodeURIComponent('from:mailer-daemon@googlemail.com newer_than:7d') + '&maxResults=50'
+    // Search for bounce notifications from common Gmail bounce senders in last 30 days
+    const bounceQuery = [
+      'newer_than:30d',
+      '(from:mailer-daemon OR from:postmaster OR from:mail delivery subsystem)',
+      '(subject:"Delivery Status Notification (Failure)" OR subject:"Undelivered Mail Returned to Sender" OR subject:undeliverable OR subject:delivery)',
+    ].join(' ');
+
+    const searchRes = await gmailGet(accessToken,
+      'messages?q=' + encodeURIComponent(bounceQuery) + '&maxResults=100'
     );
 
     const messages = searchRes.messages || [];
