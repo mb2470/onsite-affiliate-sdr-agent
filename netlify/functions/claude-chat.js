@@ -1,5 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
+const fs = require('fs/promises');
+const path = require('path');
 
 // Use service role key (bypasses RLS) for server-side function,
 // falling back to anon key if not set.
@@ -12,6 +14,71 @@ const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
   supabaseKey
 );
+
+const REPO_ROOT = path.resolve(__dirname, '../..');
+const MAX_FILE_SIZE_BYTES = 200_000;
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.netlify']);
+
+function resolveRepoPath(relativePath = '') {
+  const normalized = relativePath.trim().replace(/^\/+/, '');
+  const resolved = path.resolve(REPO_ROOT, normalized);
+
+  if (!resolved.startsWith(REPO_ROOT)) {
+    throw new Error('Path must remain inside repository root');
+  }
+
+  return resolved;
+}
+
+async function searchRepoFiles({ query, path_prefix = '', limit = 20 }) {
+  const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
+  const searchRoot = resolveRepoPath(path_prefix);
+  const lowerQuery = query.toLowerCase();
+  const matches = [];
+
+  async function walk(currentDir) {
+    if (matches.length >= safeLimit) return;
+
+    const entries = await fs.readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (matches.length >= safeLimit) break;
+
+      const fullPath = path.join(currentDir, entry.name);
+      const relativePath = path.relative(REPO_ROOT, fullPath);
+
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) {
+          await walk(fullPath);
+        }
+        continue;
+      }
+
+      const extension = path.extname(entry.name).toLowerCase();
+      if (!['.js', '.jsx', '.ts', '.tsx', '.md', '.sql', '.json', '.toml', '.txt', '.py', '.css'].includes(extension)) {
+        continue;
+      }
+
+      const stats = await fs.stat(fullPath);
+      if (stats.size > MAX_FILE_SIZE_BYTES) continue;
+
+      const content = await fs.readFile(fullPath, 'utf8');
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i += 1) {
+        if (lines[i].toLowerCase().includes(lowerQuery)) {
+          matches.push({
+            path: relativePath,
+            line: i + 1,
+            snippet: lines[i].trim(),
+          });
+          if (matches.length >= safeLimit) break;
+        }
+      }
+    }
+  }
+
+  await walk(searchRoot);
+  return { query, path_prefix, matches };
+}
 
 // ── Tool definitions for Claude ──────────────────────────────────────────────
 
@@ -47,6 +114,44 @@ const TOOLS = [
         },
       },
       required: [],
+    },
+  },
+  {
+    name: 'repo_search',
+    description:
+      'Search the repository for code or documentation snippets by keyword. Use this before answering implementation questions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Keyword or phrase to search for',
+        },
+        path_prefix: {
+          type: 'string',
+          description: 'Optional relative folder path to constrain search (e.g. "src/services")',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max number of matches to return (default 20, max 50)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'repo_read_file',
+    description:
+      'Read a repository file so you can answer feature and function questions accurately.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Repository-relative file path',
+        },
+      },
+      required: ['path'],
     },
   },
   {
@@ -322,6 +427,35 @@ const TOOLS = [
 
 async function executeTool(name, input, orgId) {
   switch (name) {
+    case 'repo_search': {
+      if (!input.query || !input.query.trim()) return { error: 'query is required' };
+      try {
+        return await searchRepoFiles(input);
+      } catch (error) {
+        return { error: error.message };
+      }
+    }
+
+    case 'repo_read_file': {
+      if (!input.path || !input.path.trim()) return { error: 'path is required' };
+      try {
+        const fullPath = resolveRepoPath(input.path);
+        const stats = await fs.stat(fullPath);
+        if (!stats.isFile()) return { error: 'path must be a file' };
+        if (stats.size > MAX_FILE_SIZE_BYTES) {
+          return { error: `File too large (${stats.size} bytes). Max allowed is ${MAX_FILE_SIZE_BYTES}.` };
+        }
+        const content = await fs.readFile(fullPath, 'utf8');
+        return {
+          path: input.path,
+          size_bytes: stats.size,
+          content,
+        };
+      } catch (error) {
+        return { error: error.message };
+      }
+    }
+
     case 'query_leads': {
       const limit = Math.min(input.limit || 20, 100);
       let query = supabase.from('leads').select('*', { count: 'exact' });
@@ -776,6 +910,7 @@ Subject: [subject]
 const SYSTEM_PROMPT = `You are the AI assistant for an SDR (Sales Development Representative) automation platform. You help users manage their outreach pipeline.
 
 You have access to tools that let you:
+- Search and read repository files to answer feature/function questions with evidence
 - Query and search leads, contacts, outreach history, and pipeline data
 - Add new leads (single or bulk)
 - Enrich leads with company data (StoreLeads → Apollo → Claude AI waterfall)
@@ -787,6 +922,67 @@ You have access to tools that let you:
 
 GUIDELINES:
 - Be concise and direct. Users are busy salespeople.
+- For repository or implementation questions, use repo_search + repo_read_file before answering and cite concrete files/functions.
+- When asked to draft a spec for a new feature or bug fix, return a filled-in version of this template:
+
+# Task
+[One-paragraph description of desired change]
+
+# Business goal
+[Why this matters, what user/system outcome should improve]
+
+# Scope
+- In scope:
+  - [list]
+- Out of scope:
+  - [list]
+
+# Repository context
+- Frontend: \`src/\` (React/Vite)
+- Backend: \`netlify/functions/\` (CommonJS serverless functions)
+- DB: \`supabase/\` (schema + migrations)
+- Optional automation: \`agent/\` (Python)
+
+# Constraints
+- Preserve multi-tenant org isolation (\`org_id\`) across reads/writes.
+- Netlify functions must keep CORS + OPTIONS handling.
+- No secrets in source code.
+- Frontend should use existing service layer patterns in \`src/services/\`.
+
+# Files likely involved
+- [path 1]
+- [path 2]
+- [path 3]
+
+# API/data contract changes
+- Request/response updates:
+  - [details]
+- Schema changes:
+  - [details + migration requirements]
+
+# Acceptance criteria
+- [ ] Functional requirement 1
+- [ ] Functional requirement 2
+- [ ] Handles edge case X
+- [ ] No regressions in existing flow Y
+
+# Test plan
+- Unit/integration checks:
+  - [commands]
+- Manual validation:
+  - [steps]
+
+# Non-functional requirements
+- Performance: [target]
+- Observability/logging: [required logs/metrics]
+- Security/privacy: [requirements]
+
+# Deliverables
+- Code changes
+- Migration (if needed)
+- Short summary of changed files and rationale
+- Risks + follow-up recommendations
+
 - When showing data, format it clearly with key fields — don't dump raw JSON.
 - When asked about counts or stats, use the count_only flag or get_stats tool.
 - For actions like sending emails, always confirm the details with the user before executing.
