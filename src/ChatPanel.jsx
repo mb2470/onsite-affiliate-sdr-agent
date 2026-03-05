@@ -9,7 +9,7 @@ const SUGGESTIONS = [
   'Is the agent running?',
 ];
 
-export default function ChatPanel() {
+export default function ChatPanel({ orgId }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -51,7 +51,7 @@ export default function ChatPanel() {
         const res = await fetch('/.netlify/functions/claude-chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: apiMessages }),
+          body: JSON.stringify({ messages: apiMessages, org_id: orgId }),
         });
 
         if (!res.ok) {
@@ -71,7 +71,7 @@ export default function ChatPanel() {
         const toolRes = await fetch('/.netlify/functions/claude-chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tool_calls: data.tool_calls }),
+          body: JSON.stringify({ tool_calls: data.tool_calls, org_id: orgId }),
         });
 
         if (!toolRes.ok) {
