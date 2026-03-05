@@ -8,6 +8,7 @@ export default function AgentMonitor() {
   const [savingSenderId, setSavingSenderId] = useState(null);
   const [addingSender, setAddingSender] = useState(false);
   const [senderError, setSenderError] = useState('');
+  const [senderSuccess, setSenderSuccess] = useState('');
   const [newSender, setNewSender] = useState({ email: '', displayName: 'Sam Reid', dailyLimit: 30 });
   const [activeOrgId, setActiveOrgId] = useState(null);
   const [isCheckingReplies, setIsCheckingReplies] = useState(false);
@@ -70,7 +71,7 @@ export default function AgentMonitor() {
     // Load sender accounts + per-account limits for agent routing
     const { data: accounts } = await supabase
       .from('email_accounts')
-      .select('id, org_id, email_address, daily_send_limit, current_daily_sent, status')
+      .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, current_daily_sent, status')
       .order('created_at', { ascending: false });
     const nextAccounts = accounts || [];
     setSenderAccounts(nextAccounts);
@@ -85,6 +86,7 @@ export default function AgentMonitor() {
 
     setSavingSenderId(accountId);
     setSenderError('');
+    setSenderSuccess('');
 
     const { error } = await supabase
       .from('email_accounts')
@@ -139,6 +141,7 @@ export default function AgentMonitor() {
 
     setAddingSender(true);
     setSenderError('');
+    setSenderSuccess('');
 
     const { data: existingDomain, error: domainError } = await supabase
       .from('email_domains')
@@ -148,7 +151,24 @@ export default function AgentMonitor() {
       .limit(1)
       .maybeSingle();
 
-    if (domainError || !existingDomain) {
+    if (domainError) {
+      setSenderError(domainError.message || 'Failed to validate sender domain.');
+      setAddingSender(false);
+      return;
+    }
+
+    let resolvedDomainId = existingDomain?.id || null;
+    let fallbackLinkedDomain = false;
+
+    if (!resolvedDomainId && senderAccounts.length > 0) {
+      const primarySender = senderAccounts[0];
+      if (primarySender?.domain_id) {
+        resolvedDomainId = primarySender.domain_id;
+        fallbackLinkedDomain = true;
+      }
+    }
+
+    if (!resolvedDomainId) {
       setSenderError(`No matching sender domain found for ${domainName}. Add/verify this domain first.`);
       setAddingSender(false);
       return;
@@ -158,7 +178,7 @@ export default function AgentMonitor() {
       .from('email_accounts')
       .insert({
         org_id: activeOrgId,
-        domain_id: existingDomain.id,
+        domain_id: resolvedDomainId,
         email_address: email,
         display_name: (newSender.displayName || 'Sam Reid').trim(),
         first_name: (newSender.displayName || 'Sam').trim().split(' ')[0],
@@ -166,7 +186,7 @@ export default function AgentMonitor() {
         current_daily_sent: 0,
         status: 'active',
       })
-      .select('id, org_id, email_address, daily_send_limit, current_daily_sent, status')
+      .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, current_daily_sent, status')
       .single();
 
     if (insertError) {
@@ -177,6 +197,11 @@ export default function AgentMonitor() {
 
     setSenderAccounts((prev) => [inserted, ...prev]);
     setNewSender({ email: '', displayName: newSender.displayName || 'Sam Reid', dailyLimit: 30 });
+    setSenderSuccess(
+      fallbackLinkedDomain
+        ? `${inserted.email_address} added successfully and linked to your default sender account. Active at ${dailyLimit}/day.`
+        : `${inserted.email_address} added successfully. Active at ${dailyLimit}/day.`
+    );
     setAddingSender(false);
   };
 
@@ -574,6 +599,10 @@ export default function AgentMonitor() {
                 <div style={{ fontSize: '12px', color: '#f87171', marginBottom: '10px' }}>{senderError}</div>
               )}
 
+              {senderSuccess && (
+                <div style={{ fontSize: '12px', color: '#4ade80', marginBottom: '10px' }}>{senderSuccess}</div>
+              )}
+
               {senderAccounts.length === 0 ? (
                 <div style={{ fontSize: '12px', opacity: 0.45 }}>No sender inboxes found in email_accounts yet.</div>
               ) : (
@@ -590,9 +619,12 @@ export default function AgentMonitor() {
                       border: '1px solid rgba(255,255,255,0.07)',
                     }}>
                       <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.9)' }}>
-                        {account.email_address}
+                        {account.display_name ? `${account.display_name} · ` : ''}{account.email_address}
                         <span style={{ marginLeft: '8px', fontSize: '11px', color: 'rgba(255,255,255,0.45)' }}>
                           {account.current_daily_sent || 0} sent today
+                        </span>
+                        <span style={{ marginLeft: '8px', fontSize: '11px', color: '#86efac' }}>
+                          {(account.status || 'active').toUpperCase()} · Active at {(account.daily_send_limit || 1)}/day
                         </span>
                       </div>
                       <input
