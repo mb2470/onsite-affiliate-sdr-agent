@@ -110,7 +110,7 @@ async function verifyViaElv(email, orgId) {
     return { status, safe };
   } catch (e) {
     console.error(`ELV error for ${email}: ${e.message}`);
-    return { status: 'error', safe: true }; // Fail open
+    return { status: 'verification_error', safe: false }; // Fail closed — don't send unverified
   }
 }
 
@@ -141,33 +141,29 @@ exports.handler = async (event) => {
         continue;
       }
 
-      // Stage 1: Check cached Apollo status
+      // Stage 1: Check cached Apollo status — only block confirmed invalids
       const apollo = await getCachedApolloStatus(email, orgId);
 
       if (apollo) {
         const action = classifyApolloStatus(apollo.apollo_email_status);
 
-        if (action === 'send') {
-          results.push({ email, status: apollo.apollo_email_status, safe: true, source: 'apollo' });
-          continue;
-        }
-
         if (action === 'discard') {
           results.push({ email, status: apollo.apollo_email_status, safe: false, source: 'apollo' });
           continue;
         }
+        // All other Apollo statuses (including "verified") still need ELV
       }
 
-      // Stage 2: Check cached ELV status
+      // Stage 2: Check cached ELV status (required for ALL non-blocked emails)
       const cachedElv = await getCachedElvStatus(email, orgId);
       if (cachedElv) {
-        results.push({ email, status: cachedElv.status, safe: cachedElv.safe, source: 'elv_cached' });
+        results.push({ email, status: cachedElv.status, safe: cachedElv.safe, source: 'elv_cached', apollo_status: apollo?.apollo_email_status || null });
         continue;
       }
 
       // Stage 3: Live ELV verification
       const elv = await verifyViaElv(email, orgId);
-      results.push({ email, status: elv.status, safe: elv.safe, source: 'elv' });
+      results.push({ email, status: elv.status, safe: elv.safe, source: 'elv', apollo_status: apollo?.apollo_email_status || null });
     }
 
     return {
