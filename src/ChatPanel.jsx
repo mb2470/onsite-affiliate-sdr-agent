@@ -6,7 +6,7 @@ const SUGGESTIONS = [
   'What are my stats this week?',
   'Find contacts at nike.com',
   'Add example.com as a lead',
-  'Is the agent running?',
+  'Submit a dev request',
 ];
 
 export default function ChatPanel({ orgId }) {
