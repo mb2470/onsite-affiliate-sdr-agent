@@ -3,10 +3,10 @@ const { createClient } = require('@supabase/supabase-js');
 const SUPER_ADMIN_EMAIL = 'mike@onsiteaffiliates.com';
 const VALID_ROLES = new Set(['owner', 'admin', 'member']);
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
-const supabaseAdmin = createClient(supabaseUrl, serviceKey);
+const getSupabaseAdmin = () => createClient(supabaseUrl, serviceKey);
 
 const parseBody = (event) => {
   try {
@@ -32,6 +32,7 @@ exports.handler = async (event) => {
   }
 
   try {
+    const supabaseAdmin = getSupabaseAdmin();
     const token = getToken(event);
     if (!token) return { statusCode: 401, body: JSON.stringify({ error: 'Missing bearer token' }) };
 
