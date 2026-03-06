@@ -421,6 +421,59 @@ const TOOLS = [
       required: ['website'],
     },
   },
+  {
+    name: 'submit_dev_request',
+    description:
+      'Submit a development request (bug fix, feature, or general task) to the Claude Code agent. The assistant should first gather enough detail from the user, then draft a structured spec using the standard template, then submit it. Returns a request ID for tracking.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Short title for the dev request (e.g. "Add CSV export to leads table")',
+        },
+        type: {
+          type: 'string',
+          enum: ['bug', 'feature', 'task'],
+          description: 'Type of request: bug, feature, or task',
+        },
+        spec: {
+          type: 'string',
+          description: 'Full structured spec using the standard template (Task, Business goal, Scope, Files involved, Acceptance criteria, etc.)',
+        },
+        priority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'critical'],
+          description: 'Priority level. Default: medium',
+        },
+      },
+      required: ['title', 'type', 'spec'],
+    },
+  },
+  {
+    name: 'check_dev_request',
+    description:
+      'Check the status of a development request, or list recent dev requests. Use this when users ask about the status of their submitted tasks.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        request_id: {
+          type: 'string',
+          description: 'Specific request ID to check. If omitted, returns recent requests.',
+        },
+        status_filter: {
+          type: 'string',
+          enum: ['all', 'pending', 'in_progress', 'completed', 'failed'],
+          description: 'Filter by status. Default: all',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max results (default 10)',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool execution ───────────────────────────────────────────────────────────
@@ -900,6 +953,60 @@ Subject: [subject]
       return { success: true, message: `Deleted lead ${lead.website} and all associated data.` };
     }
 
+    case 'submit_dev_request': {
+      if (!input.title || !input.spec) return { error: 'title and spec are required' };
+
+      const row = {
+        title: input.title.trim(),
+        type: input.type || 'feature',
+        spec: input.spec,
+        priority: input.priority || 'medium',
+        status: 'pending',
+        requested_by: 'chat_assistant',
+      };
+      if (orgId) row.org_id = orgId;
+
+      const { data, error } = await supabase
+        .from('dev_requests')
+        .insert([row])
+        .select();
+
+      if (error) return { error: error.message };
+
+      const request = data?.[0];
+      return {
+        success: true,
+        request_id: request?.id,
+        title: request?.title,
+        status: request?.status,
+        message: `Dev request "${request?.title}" submitted successfully. The Claude Code agent will pick it up shortly. Track it with ID: ${request?.id}`,
+      };
+    }
+
+    case 'check_dev_request': {
+      if (input.request_id) {
+        let q = supabase.from('dev_requests').select('*').eq('id', input.request_id);
+        if (orgId) q = q.eq('org_id', orgId);
+        const { data, error } = await q.limit(1).single();
+        if (error) return { error: error.message };
+        if (!data) return { error: 'Request not found' };
+        return { request: data };
+      }
+
+      // List recent requests
+      const limit = Math.min(input.limit || 10, 50);
+      let q = supabase.from('dev_requests').select('id, title, type, status, priority, created_at, completed_at, branch_name, result_summary');
+      if (orgId) q = q.eq('org_id', orgId);
+      if (input.status_filter && input.status_filter !== 'all') {
+        q = q.eq('status', input.status_filter);
+      }
+      q = q.order('created_at', { ascending: false }).limit(limit);
+
+      const { data, error } = await q;
+      if (error) return { error: error.message };
+      return { requests: data, count: data?.length || 0 };
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -919,6 +1026,8 @@ You have access to tools that let you:
 - Send emails via Gmail
 - Check and update agent automation settings
 - View activity logs
+- Submit development requests (bugs, features, tasks) to a Claude Code agent that will implement them
+- Check the status of submitted dev requests
 
 GUIDELINES:
 - Be concise and direct. Users are busy salespeople.
@@ -982,6 +1091,13 @@ GUIDELINES:
 - Migration (if needed)
 - Short summary of changed files and rationale
 - Risks + follow-up recommendations
+
+DEV REQUESTS:
+- When a user wants a bug fixed, feature built, or any code change, gather the details conversationally.
+- Before submitting, draft the spec using the standard template and show it to the user for confirmation.
+- Use repo_search to identify files likely involved so the spec is accurate.
+- After submitting, give the user the request ID so they can check status later.
+- Users can ask "check my dev requests" or "what's the status of request X" to track progress.
 
 - When showing data, format it clearly with key fields — don't dump raw JSON.
 - When asked about counts or stats, use the count_only flag or get_stats tool.
