@@ -74,6 +74,7 @@ function AuthenticatedApp({ session }) {
   const [icpCounts, setIcpCounts] = useState({ high: 0, medium: 0, low: 0 });
   const [emailsSent, setEmailsSent] = useState(0);
   const [outreachStats, setOutreachStats] = useState({ uniqueLeads: 0, uniqueContacts: 0, repliedLeads: 0, repliedContacts: 0 });
+  const [deliverabilityStats, setDeliverabilityStats] = useState({ delivered: 0, sent: 0, percent: '0.0' });
   const [isCheckingBounces, setIsCheckingBounces] = useState(false);
   const [bounceResult, setBounceResult] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
@@ -370,6 +371,45 @@ function AuthenticatedApp({ session }) {
         repliedLeads: repliedLeads.size,
         repliedContacts: repliedContacts.size,
       });
+    } catch (e) { console.error(e); }
+
+    // Deliverability (trailing 7 days): delivered / sent * 100
+    try {
+      const trailingStart = new Date();
+      trailingStart.setDate(trailingStart.getDate() - 7);
+      const trailingStartIso = trailingStart.toISOString();
+
+      const { data: trailingOutreach } = await supabase
+        .from('outreach_log')
+        .select('contact_email')
+        .eq('org_id', orgId)
+        .gte('created_at', trailingStartIso);
+
+      const { data: trailingBounceActivity } = await supabase
+        .from('activity_log')
+        .select('summary')
+        .eq('org_id', orgId)
+        .eq('activity_type', 'email_bounced')
+        .gte('created_at', trailingStartIso);
+
+      const bouncedEmails = new Set(
+        (trailingBounceActivity || [])
+          .map(a => {
+            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
+            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
+          })
+          .filter(Boolean)
+      );
+
+      const sentCount = (trailingOutreach || []).filter(r => !!r.contact_email).length;
+      const bouncedCount = (trailingOutreach || []).filter(r => {
+        const email = r.contact_email?.toLowerCase();
+        return email && bouncedEmails.has(email);
+      }).length;
+      const deliveredCount = Math.max(0, sentCount - bouncedCount);
+      const deliverabilityPercent = sentCount > 0 ? ((deliveredCount / sentCount) * 100).toFixed(1) : '0.0';
+
+      setDeliverabilityStats({ delivered: deliveredCount, sent: sentCount, percent: deliverabilityPercent });
     } catch (e) { console.error(e); }
 
     try {
@@ -1305,6 +1345,14 @@ function AuthenticatedApp({ session }) {
               <span className="outreach-stat-label">Leads</span>
               <span className="outreach-stat-value" style={{ marginLeft: '10px', color: '#4ade80' }}>{outreachStats.uniqueContacts ? ((outreachStats.repliedContacts / outreachStats.uniqueContacts) * 100).toFixed(1) : '0.0'}%</span>
               <span className="outreach-stat-label">Contacts</span>
+            </div>
+          </div>
+          <div style={{ width: '1px', backgroundColor: 'rgba(255,255,255,0.12)', alignSelf: 'stretch', margin: '4px 0' }} />
+          <div className="outreach-stat-group">
+            <span className="outreach-stat-title">Deliverability (7d)</span>
+            <div className="outreach-stat-row">
+              <span className="outreach-stat-value" style={{ color: '#60a5fa' }}>{deliverabilityStats.percent}%</span>
+              <span className="outreach-stat-label">{deliverabilityStats.delivered}/{deliverabilityStats.sent}</span>
             </div>
           </div>
         </div>
