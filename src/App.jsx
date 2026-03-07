@@ -1286,39 +1286,8 @@ function AuthenticatedApp({ session }) {
     <div className="app">
       <header className="header">
         <div className="header-content">
-          <h1>🤖 AI SDR Agent</h1>
+          <h1>AI SDR Agent</h1>
           <p>Onsite Affiliate Outreach Platform</p>
-          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '11px', opacity: 0.7 }}>Organization</span>
-            <select
-              value={orgId || ""}
-              disabled={!orgId}
-              onChange={(e) => {
-                const nextOrgId = e.target.value;
-                setOrgId(nextOrgId);
-                setSelectedLeadForManual(null);
-                setManualContacts([]);
-                setSelectedManualContacts([]);
-                setEmailDetailLead(null);
-              }}
-              style={{
-                background: 'rgba(255,255,255,0.06)',
-                color: '#fff',
-                border: '1px solid rgba(255,255,255,0.2)',
-                borderRadius: '6px',
-                fontSize: '12px',
-                padding: '4px 8px',
-                fontFamily: 'inherit'
-              }}
-            >
-              {organizations.map((org) => (
-                <option key={org.id} value={org.id} style={{ color: '#111' }}>
-                  {org.name}{org.slug ? ` (${org.slug})` : ''}
-                </option>
-              ))}
-            </select>
-            {activeOrg?.slug && <span style={{ fontSize: '11px', opacity: 0.55 }}>/{activeOrg.slug}</span>}
-          </div>
         </div>
         <div className="header-outreach-stats">
           <div className="outreach-stat-group">
@@ -1411,13 +1380,33 @@ function AuthenticatedApp({ session }) {
       <div className="main-layout">
         <aside className="vertical-sidebar">
           <div className="sidebar-brand">
-            <div className="sidebar-brand-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="url(#brandGrad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <defs><linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#9015ed"/><stop offset="100%" stopColor="#245ef9"/></linearGradient></defs>
-                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-              </svg>
+            <div className="sidebar-brand-icon">Ai</div>
+            <span className="sidebar-brand-text">AI SDR Agent</span>
+          </div>
+
+          <div className="sidebar-org-selector">
+            <div className="sidebar-org-badge" style={{ background: activeOrg ? 'var(--brand-gradient)' : 'rgba(255,255,255,0.1)' }}>
+              {activeOrg?.name?.charAt(0)?.toUpperCase() || 'O'}
             </div>
-            <span className="sidebar-brand-text">AI SDR</span>
+            <select
+              className="sidebar-org-select"
+              value={orgId || ""}
+              disabled={!orgId}
+              onChange={(e) => {
+                const nextOrgId = e.target.value;
+                setOrgId(nextOrgId);
+                setSelectedLeadForManual(null);
+                setManualContacts([]);
+                setSelectedManualContacts([]);
+                setEmailDetailLead(null);
+              }}
+            >
+              {organizations.map((org) => (
+                <option key={org.id} value={org.id}>
+                  {org.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="sidebar-section-label">Main</div>
