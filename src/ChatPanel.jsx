@@ -84,18 +84,27 @@ export default function ChatPanel({ orgId }) {
       let maxIterations = 8;
       let finalContent = '';
 
+      // Retry helper for transient errors (502/503/504)
+      const fetchWithRetry = async (url, options, retries = 1) => {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          const res = await fetch(url, options);
+          if (res.ok) return res;
+          if (attempt < retries && [502, 503, 504].includes(res.status)) {
+            await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+            continue;
+          }
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `API error: ${res.status}`);
+        }
+      };
+
       while (maxIterations-- > 0) {
         // Step 1: Single Claude API call
-        const res = await fetch('/.netlify/functions/claude-chat', {
+        const res = await fetchWithRetry('/.netlify/functions/claude-chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ messages: apiMessages, org_id: orgId }),
         });
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || `API error: ${res.status}`);
-        }
 
         const data = await res.json();
 
@@ -106,16 +115,11 @@ export default function ChatPanel({ orgId }) {
         }
 
         // Step 2: Execute tool calls server-side
-        const toolRes = await fetch('/.netlify/functions/claude-chat', {
+        const toolRes = await fetchWithRetry('/.netlify/functions/claude-chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tool_calls: data.tool_calls, org_id: orgId }),
         });
-
-        if (!toolRes.ok) {
-          const err = await toolRes.json().catch(() => ({}));
-          throw new Error(err.error || `Tool execution error: ${toolRes.status}`);
-        }
 
         const toolData = await toolRes.json();
 
