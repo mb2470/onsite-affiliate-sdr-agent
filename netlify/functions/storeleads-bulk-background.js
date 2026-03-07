@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
 const { resolveOrgId } = require('./lib/org-id');
+const { upsertStoreLeadsRecord } = require('./lib/storeleads');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -114,6 +115,8 @@ exports.handler = async (event) => {
             // Leave as 'new' — these need Claude enrichment or manual review
             continue;
           }
+
+          await upsertStoreLeadsRecord(supabase, orgId, { result: d });
 
           let icpScore = scoreStoreLeads(d, config);
           let fitReason = buildStoreLeadsFitReason(d, config);

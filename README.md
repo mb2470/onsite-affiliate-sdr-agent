@@ -15,6 +15,7 @@ This repository combines:
 - Supports **multi-tenant organizations** with user-to-org mapping and org-scoped data access.  
 - Ingests leads via single add, bulk add, CSV, and StoreLeads discovery pathways.  
 - Runs an enrichment waterfall: **StoreLeads → Apollo org enrichment → Claude web research fallback**.  
+- Caches full StoreLeads domain payloads (all attributes via `raw_payload`) in `storeleads` and supports one-time backfill with `storeleads-backfill-all-background`.  
 - Scores lead ICP fit (`HIGH` / `MEDIUM` / `LOW`) using configurable thresholds from the ICP profile.  
 - Finds contacts from internal `contact_database` first, then Apollo fallback discovery.  
 - Uses a verification waterfall at send time: cached Apollo status + ELV where needed.  
