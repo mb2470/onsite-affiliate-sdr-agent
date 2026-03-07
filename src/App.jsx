@@ -379,12 +379,12 @@ function AuthenticatedApp({ session }) {
       trailingStart.setDate(trailingStart.getDate() - 7);
       const trailingStartIso = trailingStart.toISOString();
 
-      // outreach_log writes sent_at when messages are sent; created_at can be null/stale
+      // Use sent_at primarily; fallback to created_at for legacy rows
       const { data: trailingOutreach } = await supabase
         .from('outreach_log')
-        .select('id')
+        .select('id, sent_at, created_at')
         .eq('org_id', orgId)
-        .gte('sent_at', trailingStartIso);
+        .or(`sent_at.gte.${trailingStartIso},and(sent_at.is.null,created_at.gte.${trailingStartIso})`);
 
       // Count bounce events in the same trailing window
       const { count: bouncedCountRaw } = await supabase
