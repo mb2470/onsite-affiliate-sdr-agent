@@ -1378,10 +1378,6 @@ function AuthenticatedApp({ session }) {
 
       <div className="main-layout">
         <aside className="vertical-sidebar">
-          <div className="sidebar-brand">
-            <div className="sidebar-brand-icon">Ai</div>
-            <span className="sidebar-brand-text">AI SDR Agent</span>
-          </div>
 
           <div className="sidebar-org-selector">
             <div className="sidebar-org-badge" style={{ background: activeOrg ? 'var(--brand-gradient)' : 'rgba(255,255,255,0.1)' }}>
