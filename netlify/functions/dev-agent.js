@@ -11,12 +11,23 @@
 const { createClient } = require('@supabase/supabase-js');
 const { corsHeaders } = require('./lib/cors');
 
-const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY;
+let supabase;
 
-const supabase = createClient(process.env.VITE_SUPABASE_URL, supabaseKey);
+function getSupabaseClient() {
+  if (supabase) return supabase;
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('SUPABASE_URL and service role key are required');
+  }
+
+  supabase = createClient(supabaseUrl, supabaseKey);
+  return supabase;
+}
 
 // Simple bearer token auth for the runner
 function authenticateRunner(event) {
@@ -36,12 +47,14 @@ exports.handler = async (event) => {
   const action = params.action;
 
   try {
+    const client = getSupabaseClient();
+
     // Public endpoint: check status
     if (action === 'status' && event.httpMethod === 'GET') {
       const id = params.id;
       if (!id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
 
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from('dev_requests')
         .select('id, title, type, status, priority, branch_name, result_summary, created_at, started_at, completed_at')
         .eq('id', id)
@@ -59,7 +72,7 @@ exports.handler = async (event) => {
 
     // Poll: get next pending request
     if (action === 'poll' && event.httpMethod === 'GET') {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from('dev_requests')
         .select('*')
         .eq('status', 'pending')
@@ -80,7 +93,7 @@ exports.handler = async (event) => {
       const id = params.id;
       if (!id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'id required' }) };
 
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from('dev_requests')
         .update({
           status: 'in_progress',
@@ -117,7 +130,7 @@ exports.handler = async (event) => {
       if (branch_name) updates.branch_name = branch_name;
       if (files_changed) updates.files_changed = files_changed;
 
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from('dev_requests')
         .update(updates)
         .eq('id', id)
