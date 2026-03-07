@@ -1286,7 +1286,6 @@ function AuthenticatedApp({ session }) {
     <div className="app">
       <header className="header">
         <div className="header-content">
-          <h1>AI SDR Agent</h1>
         </div>
         <div className="header-outreach-stats">
           <div className="outreach-stat-group">
