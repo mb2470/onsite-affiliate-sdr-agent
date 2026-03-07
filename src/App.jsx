@@ -379,27 +379,31 @@ function AuthenticatedApp({ session }) {
       trailingStart.setDate(trailingStart.getDate() - 7);
       const trailingStartIso = trailingStart.toISOString();
 
-      // Use sent_at primarily; fallback to created_at for legacy rows
-      const { data: trailingOutreach } = await supabase
+      // Count sent emails in trailing 7 days
+      const { count: sentCount, error: sentError } = await supabase
         .from('outreach_log')
-        .select('id, sent_at, created_at')
+        .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
-        .or(`sent_at.gte.${trailingStartIso},and(sent_at.is.null,created_at.gte.${trailingStartIso})`);
+        .gte('sent_at', trailingStartIso);
+
+      if (sentError) console.error('Deliverability sent query error:', sentError);
 
       // Count bounce events in the same trailing window
-      const { count: bouncedCountRaw } = await supabase
+      const { count: bouncedCountRaw, error: bounceError } = await supabase
         .from('activity_log')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('activity_type', 'email_bounced')
         .gte('created_at', trailingStartIso);
 
-      const sentCount = (trailingOutreach || []).length;
-      const bouncedCount = Math.min(sentCount, bouncedCountRaw || 0);
-      const deliveredCount = Math.max(0, sentCount - bouncedCount);
-      const deliverabilityPercent = sentCount > 0 ? ((deliveredCount / sentCount) * 100).toFixed(1) : '0.0';
+      if (bounceError) console.error('Deliverability bounce query error:', bounceError);
 
-      setDeliverabilityStats({ delivered: deliveredCount, sent: sentCount, percent: deliverabilityPercent });
+      const sent = sentCount || 0;
+      const bouncedCount = Math.min(sent, bouncedCountRaw || 0);
+      const deliveredCount = Math.max(0, sent - bouncedCount);
+      const deliverabilityPercent = sent > 0 ? ((deliveredCount / sent) * 100).toFixed(1) : '0.0';
+
+      setDeliverabilityStats({ delivered: deliveredCount, sent, percent: deliverabilityPercent });
     } catch (e) { console.error(e); }
 
     try {
