@@ -43,7 +43,7 @@ export default function ChatPanel({ orgId }) {
       if (isDevRequestIntent) {
         const { data: { session } } = await supabase.auth.getSession();
         const accessToken = session?.access_token;
-        const edgeRes = await fetch('/api/assistant/dev-request', {
+        const edgeRes = await fetch('/.netlify/functions/assistant-dev-request', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

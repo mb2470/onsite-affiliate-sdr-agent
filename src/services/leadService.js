@@ -42,6 +42,8 @@ export const searchLeads = async ({
     query = query.neq('status', 'enriched').neq('status', 'contacted');
   } else if (enrichedOnly) {
     query = query.in('status', ['enriched', 'contacted']);
+  } else if (status === 'ready_to_contact') {
+    query = query.eq('status', 'enriched').eq('has_contacts', true);
   } else if (status !== 'all') {
     query = query.eq('status', status);
   }

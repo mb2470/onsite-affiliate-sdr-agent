@@ -902,6 +902,12 @@ function AuthenticatedApp({ session }) {
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('has_contacts', true);
+      const { count: readyToContact } = await supabase
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .eq('status', 'enriched')
+        .eq('has_contacts', true);
       const { count: totalContacted } = await supabase
         .from('leads')
         .select('*', { count: 'exact', head: true })
@@ -916,6 +922,7 @@ function AuthenticatedApp({ session }) {
       const contacted = (totalContacted || 0) + (totalReplied || 0);
       setPipelineStats({
         totalContacts: totalWithContacts || 0,
+        readyToContact: readyToContact || 0,
         contacted,
         pctContacted: totalWithContacts > 0 ? (contacted / totalWithContacts * 100).toFixed(1) : 0,
       });
@@ -3027,6 +3034,7 @@ function AuthenticatedApp({ session }) {
                 {[
                   { label: 'Total Leads', value: pipelineTotalCount, color: '#f6f6f7' },
                   { label: 'With Contacts', value: pipelineStats.totalContacts, color: '#9015ed' },
+                  { label: 'Ready to Contact', value: pipelineStats.readyToContact || 0, color: '#f59e0b' },
                   { label: 'Contacted', value: pipelineStats.contacted, color: '#4ade80' },
                   { label: '% Contacted', value: `${pipelineStats.pctContacted}%`, color: parseFloat(pipelineStats.pctContacted) > 20 ? '#4ade80' : '#eab308' },
                 ].map(s => (
@@ -3043,6 +3051,7 @@ function AuthenticatedApp({ session }) {
                   <option value="all">All ({pipelineTotalCount})</option>
                   <option value="new">New</option>
                   <option value="enriched">Enriched</option>
+                  <option value="ready_to_contact">Ready to Contact</option>
                   <option value="contacted">Contacted</option>
                 </select>
               </div>
