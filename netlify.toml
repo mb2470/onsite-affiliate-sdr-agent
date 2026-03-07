@@ -8,10 +8,6 @@
   port = 3000
   functions = "netlify/functions"
 
-[[edge_functions]]
-  path = "/api/assistant/dev-request"
-  function = "assistant-dev-request"
-
 # ── Email Outreach API Redirects ─────────────────────────────────────────────
 # Maps /api/email/* REST paths to Netlify Functions.
 # Each function dispatches internally via the `action` field in the POST body.
