@@ -52,7 +52,7 @@ Detailed visual flow lives in [`lead-workflow.mermaid`](./lead-workflow.mermaid)
 - `agent/` — Python automation runner and supporting scripts.  
 - `docs/` — Setup and migration notes.
 
----
+-----
 
 ## Core pipeline tables (Supabase)
 
