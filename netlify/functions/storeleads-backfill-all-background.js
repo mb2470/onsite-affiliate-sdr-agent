@@ -34,6 +34,7 @@ exports.handler = async () => {
       const { data, error } = await supabase
         .from('leads')
         .select('id, website, status')
+        .eq('org_id', orgId)
         .order('created_at', { ascending: true })
         .range(from, from + pageSize - 1);
 
@@ -134,7 +135,7 @@ exports.handler = async () => {
             update.status = 'enriched';
           }
 
-          const { error: updateError } = await supabase.from('leads').update(update).eq('id', lead.id);
+          const { error: updateError } = await supabase.from('leads').update(update).eq('id', lead.id).eq('org_id', orgId);
           if (updateError) {
             failed += 1;
             continue;
