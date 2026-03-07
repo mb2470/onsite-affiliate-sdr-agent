@@ -5,6 +5,11 @@ const JSON_HEADERS = {
   'access-control-allow-headers': 'content-type, authorization, x-org-id',
 };
 
+type AuthUser = {
+  id: string;
+  email?: string;
+};
+
 type Draft = {
   title: string;
   type: 'bug' | 'feature' | 'task';
@@ -143,6 +148,71 @@ async function insertDevRequest(row: Record<string, unknown>, supabaseUrl: strin
   return rows?.[0] || null;
 }
 
+const getBearerToken = (request: Request): string | null => {
+  const header = request.headers.get('authorization') || request.headers.get('Authorization') || '';
+  if (!header.startsWith('Bearer ')) return null;
+  return header.slice('Bearer '.length).trim() || null;
+};
+
+async function fetchAuthenticatedUser(
+  token: string,
+  supabaseUrl: string,
+  apiKey: string,
+): Promise<AuthUser> {
+  const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      apikey: apiKey,
+      authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Invalid auth token: ${res.status} ${errorText}`);
+  }
+
+  const user = await res.json() as { id?: string; email?: string };
+  if (!user?.id) {
+    throw new Error('Authenticated user missing id');
+  }
+
+  return { id: user.id, email: user.email };
+}
+
+async function resolveAuthorizedOrgId(
+  userId: string,
+  requestedOrgId: string | null,
+  supabaseUrl: string,
+  serviceKey: string,
+): Promise<string> {
+  const filters = [`select=org_id`, `user_id=eq.${encodeURIComponent(userId)}`, 'limit=1'];
+  if (requestedOrgId) {
+    filters.push(`org_id=eq.${encodeURIComponent(requestedOrgId)}`);
+  }
+
+  const membershipRes = await fetch(`${supabaseUrl}/rest/v1/user_organizations?${filters.join('&')}`, {
+    headers: {
+      apikey: serviceKey,
+      authorization: `Bearer ${serviceKey}`,
+    },
+  });
+
+  if (!membershipRes.ok) {
+    const errorText = await membershipRes.text();
+    throw new Error(`Org authorization lookup failed: ${membershipRes.status} ${errorText}`);
+  }
+
+  const memberships = await membershipRes.json() as Array<{ org_id?: string }>;
+  const resolvedOrgId = memberships?.[0]?.org_id;
+  if (!resolvedOrgId) {
+    throw new Error(requestedOrgId
+      ? 'Authenticated user is not a member of the specified org_id'
+      : 'Authenticated user does not belong to any organization');
+  }
+
+  return resolvedOrgId;
+}
+
 export default async (request: Request) => {
   if (request.method === 'OPTIONS') {
     return new Response('', { status: 200, headers: JSON_HEADERS });
@@ -161,10 +231,20 @@ export default async (request: Request) => {
     const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
     const supabaseUrl = Deno.env.get('VITE_SUPABASE_URL') || Deno.env.get('SUPABASE_URL');
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_KEY');
+    const anonKey = Deno.env.get('VITE_SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
 
     if (!supabaseUrl || !serviceKey) {
       return new Response(JSON.stringify({ error: 'Supabase server environment variables missing' }), { status: 500, headers: JSON_HEADERS });
     }
+
+    const token = getBearerToken(request);
+    if (!token) {
+      return new Response(JSON.stringify({ error: 'Missing bearer token' }), { status: 401, headers: JSON_HEADERS });
+    }
+
+    const authUser = await fetchAuthenticatedUser(token, supabaseUrl, anonKey || serviceKey);
+    const requestedOrgId = request.headers.get('x-org-id') || org_id || null;
+    const authorizedOrgId = await resolveAuthorizedOrgId(authUser.id, requestedOrgId, supabaseUrl, serviceKey);
 
     const draft = anthropicApiKey
       ? await draftRequestWithClaude(message.trim(), anthropicApiKey)
@@ -176,10 +256,9 @@ export default async (request: Request) => {
       spec: draft.spec,
       priority: draft.priority,
       status: 'pending',
-      requested_by: user_email || 'chat_assistant_edge',
+      requested_by: authUser.email || user_email || 'chat_assistant_edge',
     };
-
-    if (org_id) row.org_id = org_id;
+    row.org_id = authorizedOrgId;
 
     const inserted = await insertDevRequest(row, supabaseUrl, serviceKey);
 

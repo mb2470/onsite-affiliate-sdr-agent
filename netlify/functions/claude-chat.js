@@ -15,6 +15,30 @@ const supabase = createClient(
   supabaseKey
 );
 
+function getBearerToken(headers = {}) {
+  const auth = headers.authorization || headers.Authorization || '';
+  if (!auth.startsWith('Bearer ')) return null;
+  return auth.slice('Bearer '.length).trim() || null;
+}
+
+async function resolveAuthorizedOrgId(userId, requestedOrgId) {
+  if (!requestedOrgId) return null;
+
+  const { data, error } = await supabase
+    .from('user_organizations')
+    .select('org_id')
+    .eq('user_id', userId)
+    .eq('org_id', requestedOrgId)
+    .limit(1)
+    .single();
+
+  if (error || !data?.org_id) {
+    throw new Error('Authenticated user is not a member of the specified org_id');
+  }
+
+  return data.org_id;
+}
+
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const MAX_FILE_SIZE_BYTES = 200_000;
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.netlify']);
@@ -478,7 +502,7 @@ const TOOLS = [
 
 // ── Tool execution ───────────────────────────────────────────────────────────
 
-async function executeTool(name, input, orgId) {
+async function executeTool(name, input, orgId, authContext = null) {
   switch (name) {
     case 'repo_search': {
       if (!input.query || !input.query.trim()) return { error: 'query is required' };
@@ -955,6 +979,8 @@ Subject: [subject]
 
     case 'submit_dev_request': {
       if (!input.title || !input.spec) return { error: 'title and spec are required' };
+      if (!authContext?.user?.id) return { error: 'Authentication is required to submit dev requests' };
+      if (!orgId) return { error: 'org_id is required to submit dev requests' };
 
       const row = {
         title: input.title.trim(),
@@ -962,7 +988,7 @@ Subject: [subject]
         spec: input.spec,
         priority: input.priority || 'medium',
         status: 'pending',
-        requested_by: 'chat_assistant',
+        requested_by: authContext.user.email || 'chat_assistant',
       };
       if (orgId) row.org_id = orgId;
 
@@ -1123,15 +1149,26 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body);
+    const token = getBearerToken(event.headers || {});
+    let authContext = null;
+    if (token) {
+      const { data: authData, error: authError } = await supabase.auth.getUser(token);
+      if (!authError && authData?.user?.id) {
+        authContext = { user: authData.user };
+      }
+    }
 
-    const orgId = body.org_id || null;
+    let orgId = body.org_id || null;
+    if (orgId && authContext?.user?.id) {
+      orgId = await resolveAuthorizedOrgId(authContext.user.id, orgId);
+    }
 
     // ── Mode: Execute tool calls ──────────────────────────────────────────
     if (body.tool_calls) {
       const results = [];
       for (const call of body.tool_calls) {
         console.log(`Tool call: ${call.name}`, JSON.stringify(call.input));
-        const result = await executeTool(call.name, call.input, orgId);
+        const result = await executeTool(call.name, call.input, orgId, authContext);
         results.push({
           type: 'tool_result',
           tool_use_id: call.id,
