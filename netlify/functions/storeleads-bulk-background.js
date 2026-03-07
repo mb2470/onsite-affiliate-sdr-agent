@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getIcpScoringConfig, scoreStoreLeads, buildStoreLeadsFitReason, catalogSizeLabel, checkFastTrack } = require('./lib/icp-scoring');
 const { resolveOrgId } = require('./lib/org-id');
+const { upsertStoreLeadsRecord } = require('./lib/storeleads');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -37,6 +38,7 @@ exports.handler = async (event) => {
       const { data, error } = await supabase
         .from('leads')
         .select('id, website')
+        .eq('org_id', orgId)
         .eq('status', 'new')
         .order('created_at', { ascending: true })
         .range(from, from + pageSize - 1);
@@ -113,6 +115,12 @@ exports.handler = async (event) => {
             notFound++;
             // Leave as 'new' — these need Claude enrichment or manual review
             continue;
+          }
+
+          try {
+            await upsertStoreLeadsRecord(supabase, orgId, { result: d });
+          } catch (cacheError) {
+            console.error(`StoreLeads cache upsert failed for ${lead.website}:`, cacheError.message);
           }
 
           let icpScore = scoreStoreLeads(d, config);

@@ -83,6 +83,71 @@ CREATE INDEX idx_leads_enrichment_status ON leads(enrichment_status);
 CREATE INDEX idx_leads_org_id ON leads(org_id);
 
 -- ============================================
+-- 1B. STORELEADS CACHE TABLE
+-- ============================================
+CREATE TABLE storeleads (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+  -- Tenant
+  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+
+  -- Domain
+  domain TEXT NOT NULL,
+
+  -- Store metadata
+  company_name TEXT,
+  name TEXT,
+  title TEXT,
+  description TEXT,
+  keyword TEXT,
+  platform TEXT,
+  plan TEXT,
+  rank BIGINT,
+  product_count INTEGER,
+  estimated_sales BIGINT,
+
+  -- Geo
+  city TEXT,
+  state TEXT,
+  country TEXT,
+  currency TEXT,
+  language TEXT,
+  timezone TEXT,
+
+  -- Contact / social
+  phone TEXT,
+  email TEXT,
+  linkedin TEXT,
+  facebook TEXT,
+  instagram TEXT,
+  tiktok TEXT,
+  youtube TEXT,
+  pinterest TEXT,
+  twitter TEXT,
+
+  -- Structured attributes
+  categories JSONB DEFAULT '[]'::jsonb,
+  technologies JSONB DEFAULT '[]'::jsonb,
+  apps JSONB DEFAULT '[]'::jsonb,
+  contact_info JSONB DEFAULT '{}'::jsonb,
+
+  -- Freshness
+  first_seen_at TIMESTAMP WITH TIME ZONE,
+  last_seen_at TIMESTAMP WITH TIME ZONE,
+
+  -- Full payload: preserves every StoreLeads attribute
+  raw_payload JSONB DEFAULT '{}'::jsonb,
+
+  UNIQUE(org_id, domain)
+);
+
+CREATE INDEX idx_storeleads_org_id ON storeleads(org_id);
+CREATE INDEX idx_storeleads_domain ON storeleads(domain);
+CREATE INDEX idx_storeleads_updated_at ON storeleads(updated_at DESC);
+
+-- ============================================
 -- 2. CONTACTS TABLE
 -- ============================================
 CREATE TABLE contacts (
