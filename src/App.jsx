@@ -379,33 +379,23 @@ function AuthenticatedApp({ session }) {
       trailingStart.setDate(trailingStart.getDate() - 7);
       const trailingStartIso = trailingStart.toISOString();
 
+      // Use sent_at primarily; fallback to created_at for legacy rows
       const { data: trailingOutreach } = await supabase
         .from('outreach_log')
-        .select('contact_email')
+        .select('id, sent_at, created_at')
         .eq('org_id', orgId)
-        .gte('created_at', trailingStartIso);
+        .or(`sent_at.gte.${trailingStartIso},and(sent_at.is.null,created_at.gte.${trailingStartIso})`);
 
-      const { data: trailingBounceActivity } = await supabase
+      // Count bounce events in the same trailing window
+      const { count: bouncedCountRaw } = await supabase
         .from('activity_log')
-        .select('summary')
+        .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('activity_type', 'email_bounced')
         .gte('created_at', trailingStartIso);
 
-      const bouncedEmails = new Set(
-        (trailingBounceActivity || [])
-          .map(a => {
-            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
-            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
-          })
-          .filter(Boolean)
-      );
-
-      const sentCount = (trailingOutreach || []).filter(r => !!r.contact_email).length;
-      const bouncedCount = (trailingOutreach || []).filter(r => {
-        const email = r.contact_email?.toLowerCase();
-        return email && bouncedEmails.has(email);
-      }).length;
+      const sentCount = (trailingOutreach || []).length;
+      const bouncedCount = Math.min(sentCount, bouncedCountRaw || 0);
       const deliveredCount = Math.max(0, sentCount - bouncedCount);
       const deliverabilityPercent = sentCount > 0 ? ((deliveredCount / sentCount) * 100).toFixed(1) : '0.0';
 
