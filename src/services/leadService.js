@@ -141,9 +141,32 @@ export const addLead = async (website, orgId) => {
 // Bulk add leads (deduplicating)
 export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
   const scopedOrgId = await resolveOrgId(orgId);
+  const normalizeWebsite = (website) => {
+    if (!website || typeof website !== 'string') return null;
+
+    return website
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/\/$/, '');
+  };
+
   // Support both array of strings (legacy) and array of objects (new)
-  const rows = leads.map(l => typeof l === 'string' ? { website: l } : l);
-  const websites = rows.map(r => r.website).filter(Boolean);
+  const rows = leads
+    .map(l => (typeof l === 'string' ? { website: l } : l))
+    .map(r => ({ ...r, website: normalizeWebsite(r.website) }))
+    .filter(r => r.website);
+
+  // Remove duplicate websites within the uploaded file to avoid batch conflicts
+  const seenWebsites = new Set();
+  const uniqueRows = rows.filter((row) => {
+    if (seenWebsites.has(row.website)) return false;
+    seenWebsites.add(row.website);
+    return true;
+  });
+
+  const websites = uniqueRows.map(r => r.website);
 
   if (!websites.length) return { added: 0, skipped: 0 };
 
@@ -155,7 +178,7 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
     (data || []).forEach(l => existingSet.add(l.website));
   }
 
-  const newRows = rows
+  const newRows = uniqueRows
     .filter(r => r.website && !existingSet.has(r.website))
     .map(r => ({
       website: r.website,
@@ -175,15 +198,19 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
 
   if (newRows.length === 0) return { added: 0, skipped: websites.length };
 
-  // Insert in batches of 100
+  // Insert in batches of 100 and ignore duplicates that race or exist across org scopes.
   let added = 0;
   for (let i = 0; i < newRows.length; i += 100) {
     const batch = newRows.slice(i, i + 100);
-    const { error } = await supabase.from('leads').insert(batch);
+    const { data, error } = await supabase
+      .from('leads')
+      .upsert(batch, { onConflict: 'website', ignoreDuplicates: true })
+      .select('website');
+
     if (error) {
       console.error('Batch insert error:', error);
     } else {
-      added += batch.length;
+      added += (data || []).length;
     }
   }
 
