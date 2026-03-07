@@ -1,0 +1,7 @@
+nohup: ignoring input
+Dev Agent Runner started
+  API: https://sdr.onsiteaffiliate.com
+  Repo: /home/mb247/projects/onsite-affiliate-sdr-agent
+  Poll interval: 30000ms
+
+[2026-03-07T02:18:04.680Z] Poll error: fetch failed
