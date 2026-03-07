@@ -42,9 +42,13 @@ export default function ChatPanel({ orgId }) {
 
       if (isDevRequestIntent) {
         const { data: { session } } = await supabase.auth.getSession();
+        const accessToken = session?.access_token;
         const edgeRes = await fetch('/api/assistant/dev-request', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
           body: JSON.stringify({
             message: userText,
             org_id: orgId,
