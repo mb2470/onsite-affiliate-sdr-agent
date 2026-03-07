@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 
 const SUGGESTIONS = [
   'How many HIGH ICP leads do I have?',
@@ -35,6 +36,39 @@ export default function ChatPanel({ orgId }) {
     setLoading(true);
 
     try {
+      const isDevRequestIntent = /\b(submit|create|open)\b[\s\S]{0,40}\b(dev request|feature request|bug report)\b/i.test(userText)
+        || /\blets submit this request to dev\b/i.test(userText)
+        || /\bsubmit this to dev\b/i.test(userText);
+
+      if (isDevRequestIntent) {
+        const { data: { session } } = await supabase.auth.getSession();
+        const edgeRes = await fetch('/api/assistant/dev-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: userText,
+            org_id: orgId,
+            user_email: session?.user?.email || null,
+          }),
+        });
+
+        const edgeBody = await edgeRes.json().catch(() => ({}));
+        if (!edgeRes.ok) {
+          throw new Error(edgeBody.error || `Dev request submit failed: ${edgeRes.status}`);
+        }
+
+        const assistantMsg = [
+          `✅ Submitted dev request${edgeBody.request_id ? ` **${edgeBody.request_id}**` : ''}.`,
+          edgeBody.request?.title ? `**Title:** ${edgeBody.request.title}` : null,
+          edgeBody.request?.type ? `**Type:** ${edgeBody.request.type}` : null,
+          edgeBody.request?.priority ? `**Priority:** ${edgeBody.request.priority}` : null,
+          edgeBody.message || 'The Claude Code agent will pick this up shortly.',
+        ].filter(Boolean).join('\n\n');
+
+        setMessages((prev) => [...prev, { role: 'assistant', content: assistantMsg }]);
+        return;
+      }
+
       // Build the messages array for the API (only role + content)
       // Messages with string content are display messages; messages with array
       // content are tool exchanges from previous turns.
