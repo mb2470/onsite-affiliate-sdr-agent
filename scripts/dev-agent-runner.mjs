@@ -81,7 +81,7 @@ async function runClaudeCode(spec) {
 
     const { stdout, stderr } = await execFileAsync(
       'npx',
-      ['@anthropic-ai/claude-code', '--print', '--dangerously-skip-permissions', prompt],
+      ['@anthropic-ai/claude-code', '--print', prompt],
       {
         cwd: REPO_DIR,
         timeout: 600_000, // 10 min max
