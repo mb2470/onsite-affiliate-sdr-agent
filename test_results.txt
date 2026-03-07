@@ -1,12 +1,11 @@
-ERROR: usage: pytest [options] [file_or_dir] [file_or_dir] [...]
-pytest: error: unrecognized arguments: --cov=./
-  inifile: None
-  rootdir: /workspace/onsite-affiliate-sdr-agent
-
 ============================= test session starts ==============================
 platform linux -- Python 3.10.19, pytest-9.0.2, pluggy-1.6.0
 rootdir: /workspace/onsite-affiliate-sdr-agent
+configfile: pytest.ini
+testpaths: tests
 plugins: anyio-4.12.1
-collected 0 items
+collected 2 items
 
-============================ no tests ran in 0.03s =============================
+tests/test_smoke.py ..                                                   [100%]
+
+============================== 2 passed in 0.02s ===============================
