@@ -217,6 +217,10 @@ const TOOLS = [
           type: 'boolean',
           description: 'If true, only show rows with replies',
         },
+        days: {
+          type: 'number',
+          description: 'Only include records from the last N days',
+        },
         limit: {
           type: 'number',
           description: 'Max rows (default 20)',
@@ -263,6 +267,21 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_email_deliverability',
+    description:
+      'Get email deliverability stats for a date range: total sent, bounced, replied, and deliverability rate. Use this for any deliverability or bounce-rate questions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'Number of days to look back (default 7)',
+        },
+      },
       required: [],
     },
   },
@@ -502,6 +521,26 @@ const TOOLS = [
 
 // ── Tool execution ───────────────────────────────────────────────────────────
 
+const TOOL_TIMEOUT_MS = 15_000; // 15s per tool — leaves headroom within Netlify's 26s limit
+
+function withTimeout(promise, ms, toolName) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Tool "${toolName}" timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
+}
+
+async function executeToolWithTimeout(name, input, orgId, authContext = null) {
+  try {
+    return await withTimeout(executeTool(name, input, orgId, authContext), TOOL_TIMEOUT_MS, name);
+  } catch (err) {
+    console.error(`Tool timeout/error: ${name}`, err.message);
+    return { error: err.message };
+  }
+}
+
 async function executeTool(name, input, orgId, authContext = null) {
   switch (name) {
     case 'repo_search': {
@@ -580,6 +619,10 @@ async function executeTool(name, input, orgId, authContext = null) {
       if (input.website) query = query.ilike('website', `%${input.website}%`);
       if (input.contact_email) query = query.ilike('contact_email', `%${input.contact_email}%`);
       if (input.has_reply) query = query.not('replied_at', 'is', null);
+      if (input.days) {
+        const since = new Date(Date.now() - input.days * 86400000).toISOString();
+        query = query.gte('sent_at', since);
+      }
 
       query = query.order('sent_at', { ascending: false }).limit(limit);
       const { data, error } = await query;
@@ -678,6 +721,48 @@ async function executeTool(name, input, orgId, authContext = null) {
         emails_sent_all_time: outreachAll.count || 0,
         emails_sent_last_7_days: outreachRecent.count || 0,
         total_replies: outreachReplies.count || 0,
+      };
+    }
+
+    case 'get_email_deliverability': {
+      const days = input.days || 7;
+      const since = new Date(Date.now() - days * 86400000).toISOString();
+
+      const outreachQ = (extra) => {
+        let q = supabase.from('outreach_log').select('*', { count: 'exact', head: true });
+        if (orgId) q = q.eq('org_id', orgId);
+        q = q.gte('sent_at', since);
+        return extra ? extra(q) : q;
+      };
+      const bounceQ = () => {
+        let q = supabase.from('activity_log').select('*', { count: 'exact', head: true });
+        if (orgId) q = q.eq('org_id', orgId);
+        q = q.eq('activity_type', 'email_bounced').gte('created_at', since);
+        return q;
+      };
+
+      const [sentResult, repliedResult, bouncedResult] = await Promise.all([
+        outreachQ(),
+        outreachQ((q) => q.not('replied_at', 'is', null)),
+        bounceQ(),
+      ]);
+
+      const sent = sentResult.count || 0;
+      const bounced = bouncedResult.count || 0;
+      const replied = repliedResult.count || 0;
+      const delivered = sent - bounced;
+      const deliverabilityRate = sent > 0 ? ((delivered / sent) * 100).toFixed(1) : 'N/A';
+      const replyRate = sent > 0 ? ((replied / sent) * 100).toFixed(1) : 'N/A';
+
+      return {
+        period_days: days,
+        since: since,
+        total_sent: sent,
+        bounced: bounced,
+        delivered: delivered,
+        replied: replied,
+        deliverability_rate: deliverabilityRate + '%',
+        reply_rate: replyRate + '%',
       };
     }
 
@@ -1168,7 +1253,7 @@ exports.handler = async (event) => {
       const results = [];
       for (const call of body.tool_calls) {
         console.log(`Tool call: ${call.name}`, JSON.stringify(call.input));
-        const result = await executeTool(call.name, call.input, orgId, authContext);
+        const result = await executeToolWithTimeout(call.name, call.input, orgId, authContext);
         results.push({
           type: 'tool_result',
           tool_use_id: call.id,
