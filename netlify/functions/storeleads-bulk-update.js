@@ -178,6 +178,12 @@ exports.handler = async (event) => {
       notFound,
       failed,
       errors: errors.slice(0, 10),
+      debug: {
+        rawDomains: domains,
+        cleanedDomains: domains.map(cleanDomain),
+        apiResultKeys: Object.keys(resultMap),
+        apiResultCount: Object.keys(resultMap).length,
+      },
     };
 
     console.log('Batch complete:', JSON.stringify(summary));
