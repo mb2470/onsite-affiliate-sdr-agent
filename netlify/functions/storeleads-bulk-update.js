@@ -61,8 +61,18 @@ async function fetchDomainsBulk(domains) {
     return buildResultMap(data.domains || []);
   }
 
-  if (!res.ok) return {};
+  if (!res.ok) {
+    console.log(`Bulk API error: ${res.status} ${res.statusText}`);
+    const errBody = await res.text();
+    console.log(`Bulk API error body: ${errBody}`);
+    return {};
+  }
   const data = await res.json();
+  console.log(`Bulk API raw response keys: ${JSON.stringify(Object.keys(data))}`);
+  console.log(`Bulk API domains count: ${(data.domains || []).length}`);
+  if (data.domains && data.domains.length > 0) {
+    console.log(`First result sample: ${JSON.stringify(Object.keys(data.domains[0]))}`);
+  }
   return buildResultMap(data.domains || []);
 }
 
@@ -126,13 +136,20 @@ exports.handler = async (event) => {
     let notFound = 0;
     const errors = [];
 
+    // Debug: log the raw domains from DB and what we send to API
+    console.log(`DB domains (raw): ${JSON.stringify(domains)}`);
+    const cleanedForLog = domains.map(cleanDomain);
+    console.log(`Cleaned domains: ${JSON.stringify(cleanedForLog)}`);
+
     const resultMap = await fetchDomainsBulk(domains);
     console.log(`Bulk API returned ${Object.keys(resultMap).length} results for ${domains.length} domains`);
+    console.log(`API result keys: ${JSON.stringify(Object.keys(resultMap))}`);
 
     for (const domain of domains) {
       const cleaned = cleanDomain(domain);
       const store = resultMap[cleaned];
       if (!store) {
+        console.log(`Not found: raw="${domain}" cleaned="${cleaned}"`);
         notFound++;
         continue;
       }
@@ -161,6 +178,12 @@ exports.handler = async (event) => {
       notFound,
       failed,
       errors: errors.slice(0, 10),
+      debug: {
+        rawDomains: domains,
+        cleanedDomains: domains.map(cleanDomain),
+        apiResultKeys: Object.keys(resultMap),
+        apiResultCount: Object.keys(resultMap).length,
+      },
     };
 
     console.log('Batch complete:', JSON.stringify(summary));
