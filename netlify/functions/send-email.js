@@ -196,7 +196,7 @@ async function getEmailSettings(orgId) {
   return data || {};
 }
 
-async function selectSenderAccount(orgId, preferredAccountId = null) {
+async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAliasSet = null) {
   const query = () => supabase
     .from('email_accounts')
     .select('id, email_address, display_name, daily_send_limit, current_daily_sent, status')
@@ -213,18 +213,28 @@ async function selectSenderAccount(orgId, preferredAccountId = null) {
     return Number.isFinite(limit) && limit > 0 && sent < limit;
   };
 
+  const hasAcceptedAlias = (account) => {
+    if (!acceptedAliasSet || acceptedAliasSet.size === 0) return true;
+    return acceptedAliasSet.has((account?.email_address || '').trim().toLowerCase());
+  };
+
   if (preferredAccountId) {
     const { data: preferred } = await query().eq('id', preferredAccountId).limit(1);
     const account = (preferred || [])[0] || null;
-    if (account && hasCapacity(account)) {
-      return { account, hasConfiguredAccounts: true };
+    if (account && hasCapacity(account) && hasAcceptedAlias(account)) {
+      return { account, hasConfiguredAccounts: true, hasAliasEligibleAccounts: true };
     }
   }
 
   const { data: accounts } = await query();
   const list = accounts || [];
-  const available = list.find(hasCapacity) || null;
-  return { account: available, hasConfiguredAccounts: list.length > 0 };
+  const aliasEligible = list.filter(hasAcceptedAlias);
+  const available = aliasEligible.find(hasCapacity) || null;
+  return {
+    account: available,
+    hasConfiguredAccounts: list.length > 0,
+    hasAliasEligibleAccounts: aliasEligible.length > 0,
+  };
 }
 
 async function incrementSenderDailySent(accountId, amount = 1) {
@@ -386,9 +396,30 @@ exports.handler = async (event) => {
     }
 
     const settings = await getEmailSettings(orgId);
-    const { account: selectedSender, hasConfiguredAccounts } = await selectSenderAccount(orgId, from_account_id);
+    const accessToken = await getAccessToken();
+    const aliases = await getSendAsAliases(accessToken);
+    const acceptedAliasSet = new Set(
+      aliases
+        .filter((a) => a?.verificationStatus === 'accepted' && a?.sendAsEmail)
+        .map((a) => a.sendAsEmail.trim().toLowerCase())
+    );
+    const {
+      account: selectedSender,
+      hasConfiguredAccounts,
+      hasAliasEligibleAccounts,
+    } = await selectSenderAccount(orgId, from_account_id, acceptedAliasSet);
 
     if (!selectedSender && hasConfiguredAccounts) {
+      if (!hasAliasEligibleAccounts) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({
+            error: 'No active sender accounts are verified Gmail sendAs aliases. Verify sender aliases in Gmail settings before sending.',
+          }),
+        };
+      }
+
       return {
         statusCode: 429,
         headers,
@@ -404,8 +435,6 @@ exports.handler = async (event) => {
       || settings.gmail_from_name
       || 'Sam Reid';
 
-    const accessToken = await getAccessToken();
-    const aliases = await getSendAsAliases(accessToken);
     const { fromEmail: resolvedFromEmail, warning: aliasWarning } = resolveFromAlias(fromEmail, aliases);
 
     if (aliasWarning) {
