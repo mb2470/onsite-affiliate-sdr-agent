@@ -48,15 +48,25 @@ flowchart TD
   C2V --> C1D
   C2R --> C1D
 
-  %% Verification + send
+  %% Sender pool + verification + send
   C1D --> S0{Send workflow}
   S0 --> V1{Cached Apollo status}
-  V1 -->|verified| SEND[Send via Gmail API]
+  V1 -->|verified| SP0
   V1 -->|risky or missing| V2{EmailListVerify}
-  V2 -->|safe| SEND
+  V2 -->|safe| SP0
   V2 -->|bad| BLK[Block + remove bad contact]
 
+  SP0{Select sender pool}
+  SP0 --> SP1[Load Gmail accepted sendAs aliases]
+  SP1 --> SP2[Load org email_accounts<br/>status in active/ready/warming]
+  SP2 --> SP3[Filter accounts to accepted aliases<br/>with remaining daily capacity]
+  SP3 --> SP4{Eligible sender exists?}
+  SP4 -->|yes| SEND[Send via Gmail API with selected From alias]
+  SP4 -->|no| SPF[Fallback to resolved primary/configured alias]
+  SPF --> SEND
+
   SEND --> O1[(outreach_log insert)]
+  SEND --> O4[(email_accounts.current_daily_sent++)]
   O1 --> O2[(leads.status = contacted)]
   O1 --> O3[(activity_log: email_sent)]
 
@@ -88,6 +98,7 @@ flowchart TD
     D4[(contacts)]
     D5[(outreach_log / emails)]
     D6[(activity_log / agent_jobs / agent_settings)]
+    D7[(email_accounts / email_settings)]
   end
 
   L0 -.org scoped.-> D2
@@ -96,6 +107,8 @@ flowchart TD
   C1D -.session contacts.-> D4
   O1 -.write.-> D5
   SEND -.audit trail.-> D6
+  SP2 -.sender accounts.-> D7
+  O4 -.quota tracking.-> D7
 
   %% Styling
   style H fill:#166534,color:#fff
@@ -106,3 +119,5 @@ flowchart TD
   style R1 fill:#166534,color:#fff
   style B1 fill:#991b1b,color:#fff
   style AG fill:#1e40af,color:#fff
+  style SP0 fill:#1f2937,color:#fff
+  style SP4 fill:#1f2937,color:#fff
