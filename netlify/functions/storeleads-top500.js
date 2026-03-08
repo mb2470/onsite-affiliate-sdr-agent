@@ -14,7 +14,7 @@ async function fetchTopDomains(page, pageSize = 50) {
     'sort': 'rank',
     'page_size': pageSize.toString(),
     'page': page.toString(),
-    'fields': 'name,categories,country,product_count,estimated_sales,rank,city,state,platform,plan,contact_info',
+    'fields': 'name,domain,domain_url,merchant_name,categories,country,country_code,company_location,product_count,estimated_sales,estimated_monthly_sales,estimated_yearly_sales,rank,platform_rank,city,state,zip,street_address,platform,platform_domain,plan,status,employee_count,average_product_price,average_product_price_usd,product_images,product_variants,products_created_90,emails,phones,facebook,instagram,linkedin_account,pinterest,pinterest_followers,tiktok,tiktok_followers,twitter,twitter_followers,youtube,youtube_followers,created,contact_info',
   });
 
   const url = `https://storeleads.app/json/api/v1/all/domain?${params}`;
