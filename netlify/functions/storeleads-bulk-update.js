@@ -136,20 +136,19 @@ exports.handler = async (event) => {
     let notFound = 0;
     const errors = [];
 
-    // Debug: log the raw domains from DB and what we send to API
-    console.log(`DB domains (raw): ${JSON.stringify(domains)}`);
-    const cleanedForLog = domains.map(cleanDomain);
-    console.log(`Cleaned domains: ${JSON.stringify(cleanedForLog)}`);
+    // Filter out invalid domains (e.g. "[object object]" from data corruption)
+    const validDomains = domains.filter(d => /^[a-z0-9]([a-z0-9-]*\.)+[a-z]{2,}$/i.test(cleanDomain(d)));
+    const skipped = domains.length - validDomains.length;
+    if (skipped > 0) {
+      console.log(`Skipped ${skipped} invalid domains: ${JSON.stringify(domains.filter(d => !validDomains.includes(d)))}`);
+    }
 
-    const resultMap = await fetchDomainsBulk(domains);
-    console.log(`Bulk API returned ${Object.keys(resultMap).length} results for ${domains.length} domains`);
-    console.log(`API result keys: ${JSON.stringify(Object.keys(resultMap))}`);
+    const resultMap = validDomains.length > 0 ? await fetchDomainsBulk(validDomains) : {};
 
-    for (const domain of domains) {
+    for (const domain of validDomains) {
       const cleaned = cleanDomain(domain);
       const store = resultMap[cleaned];
       if (!store) {
-        console.log(`Not found: raw="${domain}" cleaned="${cleaned}"`);
         notFound++;
         continue;
       }
@@ -178,12 +177,7 @@ exports.handler = async (event) => {
       notFound,
       failed,
       errors: errors.slice(0, 10),
-      debug: {
-        rawDomains: domains,
-        cleanedDomains: domains.map(cleanDomain),
-        apiResultKeys: Object.keys(resultMap),
-        apiResultCount: Object.keys(resultMap).length,
-      },
+      skippedInvalid: skipped,
     };
 
     console.log('Batch complete:', JSON.stringify(summary));
