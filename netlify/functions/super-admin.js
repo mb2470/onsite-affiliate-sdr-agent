@@ -8,6 +8,11 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE
 
 const getSupabaseAdmin = () => createClient(supabaseUrl, serviceKey);
 
+const isMissingTableError = (error) => (
+  error?.code === '42P01'
+  || /organization_env_vars/i.test(error?.message || '')
+);
+
 const parseBody = (event) => {
   try {
     return JSON.parse(event.body || '{}');
@@ -122,7 +127,18 @@ exports.handler = async (event) => {
         .select('id, key_name, updated_at')
         .eq('org_id', orgId)
         .order('updated_at', { ascending: false });
-      if (error) throw error;
+      if (error) {
+        if (isMissingTableError(error)) {
+          return {
+            statusCode: 200,
+            body: JSON.stringify({
+              variables: [],
+              warning: 'organization_env_vars table is not installed yet. Run supabase/add_super_admin_controls.sql.',
+            }),
+          };
+        }
+        throw error;
+      }
 
       return { statusCode: 200, body: JSON.stringify({ variables: data || [] }) };
     }
@@ -137,7 +153,17 @@ exports.handler = async (event) => {
         .from('organization_env_vars')
         .upsert({ org_id: orgId, key_name: key, key_value: value }, { onConflict: 'org_id,key_name' });
 
-      if (error) throw error;
+      if (error) {
+        if (isMissingTableError(error)) {
+          return {
+            statusCode: 400,
+            body: JSON.stringify({
+              error: 'organization_env_vars table is missing. Run supabase/add_super_admin_controls.sql first.',
+            }),
+          };
+        }
+        throw error;
+      }
       return { statusCode: 200, body: JSON.stringify({ ok: true }) };
     }
 

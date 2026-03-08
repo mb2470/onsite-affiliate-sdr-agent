@@ -67,6 +67,7 @@ export default function SuperAdminDashboard() {
     try {
       const body = await callAdmin('list_org_env', { orgId });
       setOrgEnvRows(body.variables || []);
+      if (body.warning) setMessage(body.warning);
     } catch (e) {
       setError(e.message);
     } finally {
