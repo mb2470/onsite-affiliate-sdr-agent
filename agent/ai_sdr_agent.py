@@ -43,6 +43,7 @@ APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
 GMAIL_CREDENTIALS = os.getenv("GMAIL_OAUTH_CREDENTIALS")
 GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "sam@onsiteaffiliate.com")
 ELV_API_KEY = os.getenv("EMAILLISTVERIFY_API_KEY")
+ORG_ID = os.getenv("ORG_ID")
 
 # Initialize clients (defer crash to runtime with clear error messages)
 try:
@@ -420,10 +421,18 @@ class GmailService:
 
         self._resolved_from_email = fallback
         return fallback
+    def get_accepted_aliases(self) -> set:
+        aliases = self._get_send_as_aliases()
+        return {
+            (a.get('sendAsEmail') or '').strip().lower()
+            for a in aliases
+            if a.get('verificationStatus') == 'accepted' and a.get('sendAsEmail')
+        }
 
-    def send_email(self, to: str, subject: str, body: str, bcc: List[str] = None) -> Dict:
+
+    def send_email(self, to: str, subject: str, body: str, bcc: List[str] = None, from_email: str = None, from_name: str = 'Sam Reid') -> Dict:
         lines = [
-            f"From: Sam Reid <{self.get_from_email()}>",
+            f"From: {from_name} <{from_email or self.get_from_email()}>",
             f"To: {to}",
         ]
         if bcc:
@@ -441,12 +450,12 @@ class GmailService:
         return self._gmail_request('POST', 'messages/send', {'raw': raw_b64})
 
     def send_reply(self, to: str, subject: str, body: str, thread_id: str,
-                   original_message_id: str) -> Dict:
+                   original_message_id: str, from_email: str = None, from_name: str = 'Sam Reid') -> Dict:
         """Send a reply that threads under the original email."""
         reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
 
         lines = [
-            f"From: Sam Reid <{self.get_from_email()}>",
+            f"From: {from_name} <{from_email or self.get_from_email()}>",
             f"To: {to}",
             f"Subject: {reply_subject}",
             f"In-Reply-To: {original_message_id}",
@@ -876,6 +885,101 @@ class AISDRAgent:
         sent_today = today_count.count or 0
         return max_per_day - sent_today
 
+    def _resolve_org_id(self, settings: Optional[Dict] = None) -> Optional[str]:
+        cfg = settings or self._get_settings()
+        return cfg.get('org_id') or ORG_ID
+
+    def _load_sender_pool(self, settings: Dict) -> List[Dict]:
+        accepted_aliases = self.gmail.get_accepted_aliases()
+        max_per_day = int(settings.get('max_emails_per_day', 50) or 50)
+
+        query = supabase.table('email_accounts').select(
+            'id, org_id, email_address, display_name, daily_send_limit, current_daily_sent, status'
+        ).in_('status', ['active', 'ready']).order('current_daily_sent', desc=False).order('created_at', desc=False)
+
+        org_id = self._resolve_org_id(settings)
+        if org_id:
+            query = query.eq('org_id', org_id)
+
+        try:
+            rows = query.execute().data or []
+        except Exception as e:
+            print(f"  ⚠️ Could not load email_accounts sender pool: {e}")
+            rows = []
+
+        pool = []
+        for row in rows:
+            email = (row.get('email_address') or '').strip().lower()
+            if not email:
+                continue
+            if accepted_aliases and email not in accepted_aliases:
+                continue
+
+            raw_limit = row.get('daily_send_limit')
+            try:
+                limit = int(raw_limit)
+            except Exception:
+                limit = 0
+
+            sent_today = int(row.get('current_daily_sent') or 0)
+            remaining = max(0, limit - sent_today)
+            if remaining <= 0:
+                continue
+
+            pool.append({
+                'id': row.get('id'),
+                'email_address': email,
+                'from_name': row.get('display_name') or 'Sam Reid',
+                'daily_send_limit': limit,
+                'current_daily_sent': sent_today,
+                'remaining': remaining,
+                'sent_in_run': 0,
+            })
+
+        if pool:
+            return pool
+
+        fallback_email = self.gmail.get_from_email()
+        return [{
+            'id': None,
+            'email_address': fallback_email,
+            'from_name': 'Sam Reid',
+            'daily_send_limit': max_per_day,
+            'current_daily_sent': 0,
+            'remaining': max_per_day,
+            'sent_in_run': 0,
+        }]
+
+    @staticmethod
+    def _pick_sender(sender_pool: List[Dict]) -> Optional[Dict]:
+        available = [s for s in sender_pool if s.get('remaining', 0) > 0]
+        if not available:
+            return None
+        available.sort(key=lambda s: (s.get('sent_in_run', 0), -s.get('remaining', 0)))
+        return available[0]
+
+    def _record_sender_success(self, sender: Dict):
+        if not sender:
+            return
+
+        sender['remaining'] = max(0, int(sender.get('remaining', 0)) - 1)
+        sender['sent_in_run'] = int(sender.get('sent_in_run', 0)) + 1
+        sender['current_daily_sent'] = int(sender.get('current_daily_sent', 0)) + 1
+
+        if not sender.get('id'):
+            return
+
+        try:
+            supabase.table('email_accounts').update({
+                'current_daily_sent': sender['current_daily_sent']
+            }).eq('id', sender['id']).execute()
+        except Exception as e:
+            print(f"  ⚠️ Could not update sender account usage for {sender.get('email_address')}: {e}")
+
+    def _get_sender_capacity_remaining(self, settings: Dict) -> int:
+        pool = self._load_sender_pool(settings)
+        return sum(int(s.get('remaining', 0)) for s in pool)
+
     # ─── STATUS ────────────────────────────────────
 
     def show_status(self):
@@ -914,7 +1018,7 @@ class AISDRAgent:
 
     # ─── SEND ONE EMAIL ────────────────────────────
 
-    def _send_one(self, lead, all_emailed, today_by_website, settings) -> str:
+    def _send_one(self, lead, all_emailed, today_by_website, settings, sender: Dict) -> str:
         """Try to send one email for a lead. Returns: 'sent', 'skipped', 'failed'."""
         max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
 
@@ -1012,6 +1116,8 @@ class AISDRAgent:
                 to=contact['email'],
                 subject=email_data['subject'],
                 body=email_data['body'],
+                from_email=sender.get('email_address'),
+                from_name=sender.get('from_name', 'Sam Reid'),
             )
             gmail_msg_id = result.get('id', '')
             print(f"  ✅ SENT! ID: {gmail_msg_id}")
@@ -1060,7 +1166,7 @@ class AISDRAgent:
         today_by_website.setdefault(lead['website'], []).append(contact['email'])
 
         self._log('email_sent', lead['id'],
-                   f"Sent to {contact['name']} <{contact['email']}> at {lead['website']}")
+                   f"Sent from {sender.get('email_address')} to {contact['name']} <{contact['email']}> at {lead['website']}")
 
         return 'sent'
 
@@ -1121,6 +1227,10 @@ class AISDRAgent:
         skipped = 0
         min_gap = settings.get('min_minutes_between_emails', 2)
 
+        sender_pool = self._load_sender_pool(settings)
+        total_sender_remaining = sum(int(s.get('remaining', 0)) for s in sender_pool)
+        print(f"📮 Sender pool: {len(sender_pool)} inbox(es), {total_sender_remaining} remaining sends today")
+
         for lead in all_leads:
             if sent >= count:
                 break
@@ -1132,10 +1242,17 @@ class AISDRAgent:
             print(f"\n{'─' * 50}")
             print(f"[{sent + 1}/{count}] {lead['website']}")
 
-            result = self._send_one(lead, all_emailed, today_by_website, settings)
+            sender = self._pick_sender(sender_pool)
+            if not sender:
+                print("  🛑 No sender accounts with remaining daily capacity.")
+                break
+
+            print(f"  ✉️ Using sender: {sender.get('email_address')} ({sender.get('remaining')} left)")
+            result = self._send_one(lead, all_emailed, today_by_website, settings, sender)
 
             if result == 'sent':
                 sent += 1
+                self._record_sender_success(sender)
                 # Wait between sends
                 if sent < count:
                     wait = (min_gap * 60) + random.randint(10, 60)
@@ -1615,7 +1732,9 @@ class AISDRAgent:
 
             # Check daily limit
             max_per_day = settings.get('max_emails_per_day', 50)
-            remaining = self._get_remaining_today(max_per_day)
+            remaining_global = self._get_remaining_today(max_per_day)
+            remaining_sender = self._get_sender_capacity_remaining(settings)
+            remaining = min(remaining_global, remaining_sender) if remaining_sender > 0 else remaining_global
 
             if remaining <= 0:
                 print(f"\n🛑 Daily limit reached ({max_per_day}/{max_per_day}). Sleeping 30 min then rechecking...")
