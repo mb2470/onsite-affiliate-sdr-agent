@@ -19,30 +19,60 @@ function getSupabase() {
 }
 
 /**
- * Fetch a single domain from StoreLeads API.
+ * Clean domain: strip protocol, www, trailing slashes/paths.
+ */
+function cleanDomain(domain) {
+  return domain
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '')
+    .trim();
+}
+
+/**
+ * Fetch domains in bulk from StoreLeads API.
  * Retries once on 429 rate-limit.
  */
-async function fetchDomain(domain) {
-  const res = await fetch(
-    `https://storeleads.app/json/api/v1/all/domain/${encodeURIComponent(domain)}`,
-    { headers: { Authorization: `Bearer ${STORELEADS_API_KEY}` } }
-  );
+async function fetchDomainsBulk(domains) {
+  const cleaned = domains.map(cleanDomain);
+  const res = await fetch('https://storeleads.app/json/api/v1/all/domain/bulk', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${STORELEADS_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ domains: cleaned }),
+  });
 
   if (res.status === 429) {
-    const retryAfter = Number(res.headers.get('Retry-After')) || 5;
+    const retryAfter = Number(res.headers.get('Retry-After')) || 10;
     await new Promise((r) => setTimeout(r, retryAfter * 1000));
-    const retry = await fetch(
-      `https://storeleads.app/json/api/v1/all/domain/${encodeURIComponent(domain)}`,
-      { headers: { Authorization: `Bearer ${STORELEADS_API_KEY}` } }
-    );
-    if (!retry.ok) return null;
+    const retry = await fetch('https://storeleads.app/json/api/v1/all/domain/bulk', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${STORELEADS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ domains: cleaned }),
+    });
+    if (!retry.ok) return {};
     const data = await retry.json();
-    return data.result || data;
+    return buildResultMap(data.domains || []);
   }
 
-  if (!res.ok) return null;
+  if (!res.ok) return {};
   const data = await res.json();
-  return data.result || data;
+  return buildResultMap(data.domains || []);
+}
+
+function buildResultMap(domainResults) {
+  const map = {};
+  domainResults.forEach((d) => {
+    if (d.domain) map[cleanDomain(d.domain)] = d;
+    else if (d.name) map[cleanDomain(d.name)] = d;
+  });
+  return map;
 }
 
 /**
@@ -96,19 +126,20 @@ exports.handler = async (event) => {
     let notFound = 0;
     const errors = [];
 
+    const resultMap = await fetchDomainsBulk(domains);
+    console.log(`Bulk API returned ${Object.keys(resultMap).length} results for ${domains.length} domains`);
+
     for (const domain of domains) {
+      const cleaned = cleanDomain(domain);
+      const store = resultMap[cleaned];
+      if (!store) {
+        notFound++;
+        continue;
+      }
+
       try {
-        const store = await fetchDomain(domain);
-        if (!store) {
-          notFound++;
-          continue;
-        }
-
-        await upsertStoreLeadsRecord(supabase, orgId, store);
+        await upsertStoreLeadsRecord(supabase, orgId, { result: store });
         updated++;
-
-        // Rate-limit: ~200ms between requests to stay under API limits
-        await new Promise((r) => setTimeout(r, 200));
       } catch (err) {
         failed++;
         errors.push({ domain, error: err.message });
