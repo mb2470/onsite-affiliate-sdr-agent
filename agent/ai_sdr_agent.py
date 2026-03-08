@@ -318,6 +318,8 @@ def verify_via_apollo(email: str, first_name: str = None, last_name: str = None,
 class GmailService:
     def __init__(self):
         self._access_token = None
+        self._send_as_aliases = None
+        self._resolved_from_email = None
         self._creds = None
 
     def _load_creds(self):
@@ -373,9 +375,55 @@ class GmailService:
                 return self._gmail_request(method, endpoint, body, retry=False)
             raise
 
+    def _get_send_as_aliases(self) -> List[Dict]:
+        if self._send_as_aliases is not None:
+            return self._send_as_aliases
+
+        try:
+            data = self._gmail_request('GET', 'settings/sendAs')
+            aliases = data.get('sendAs', []) if isinstance(data, dict) else []
+            self._send_as_aliases = aliases
+            return aliases
+        except Exception as e:
+            print(f"    ⚠️ Could not fetch Gmail sendAs aliases: {e}")
+            self._send_as_aliases = []
+            return []
+
+    def get_from_email(self) -> str:
+        if self._resolved_from_email:
+            return self._resolved_from_email
+
+        configured = (GMAIL_FROM_EMAIL or '').strip().lower()
+        aliases = self._get_send_as_aliases()
+        accepted = [
+            (a.get('sendAsEmail') or '').strip().lower()
+            for a in aliases
+            if a.get('verificationStatus') == 'accepted' and a.get('sendAsEmail')
+        ]
+
+        if configured and configured in accepted:
+            self._resolved_from_email = configured
+            return configured
+
+        primary = next(
+            ((a.get('sendAsEmail') or '').strip().lower()
+             for a in aliases
+             if a.get('isPrimary') and a.get('verificationStatus') == 'accepted' and a.get('sendAsEmail')),
+            None,
+        )
+        fallback = primary or (accepted[0] if accepted else configured or GMAIL_FROM_EMAIL)
+
+        if configured and fallback != configured:
+            print(
+                f"    ⚠️ Configured GMAIL_FROM_EMAIL ({configured}) is not an accepted Gmail sendAs alias; using {fallback}"
+            )
+
+        self._resolved_from_email = fallback
+        return fallback
+
     def send_email(self, to: str, subject: str, body: str, bcc: List[str] = None) -> Dict:
         lines = [
-            f"From: Sam Reid <{GMAIL_FROM_EMAIL}>",
+            f"From: Sam Reid <{self.get_from_email()}>",
             f"To: {to}",
         ]
         if bcc:
@@ -398,7 +446,7 @@ class GmailService:
         reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
 
         lines = [
-            f"From: Sam Reid <{GMAIL_FROM_EMAIL}>",
+            f"From: Sam Reid <{self.get_from_email()}>",
             f"To: {to}",
             f"Subject: {reply_subject}",
             f"In-Reply-To: {original_message_id}",
@@ -1377,7 +1425,7 @@ class AISDRAgent:
             if gmail_thread_id:
                 try:
                     has_reply = self.gmail.check_thread_for_replies(
-                        gmail_thread_id, GMAIL_FROM_EMAIL
+                        gmail_thread_id, self.gmail.get_from_email()
                     )
                     if has_reply:
                         print(f"  💬 Prospect already replied — skipping!")
