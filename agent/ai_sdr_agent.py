@@ -893,19 +893,20 @@ class AISDRAgent:
         accepted_aliases = self.gmail.get_accepted_aliases()
         max_per_day = int(settings.get('max_emails_per_day', 50) or 50)
 
-        query = supabase.table('email_accounts').select(
-            'id, org_id, email_address, display_name, daily_send_limit, current_daily_sent, status'
-        ).in_('status', ['active', 'ready']).order('current_daily_sent', desc=False).order('created_at', desc=False)
-
         org_id = self._resolve_org_id(settings)
-        if org_id:
-            query = query.eq('org_id', org_id)
-
-        try:
-            rows = query.execute().data or []
-        except Exception as e:
-            print(f"  ⚠️ Could not load email_accounts sender pool: {e}")
+        if not org_id:
+            print("  ⚠️ No org_id configured in agent_settings or ORG_ID env; skipping email_accounts sender pool lookup.")
             rows = []
+        else:
+            query = supabase.table('email_accounts').select(
+                'id, org_id, email_address, display_name, daily_send_limit, current_daily_sent, status'
+            ).eq('org_id', org_id).in_('status', ['active', 'ready', 'warming']).order('current_daily_sent', desc=False).order('created_at', desc=False)
+
+            try:
+                rows = query.execute().data or []
+            except Exception as e:
+                print(f"  ⚠️ Could not load email_accounts sender pool: {e}")
+                rows = []
 
         pool = []
         for row in rows:
