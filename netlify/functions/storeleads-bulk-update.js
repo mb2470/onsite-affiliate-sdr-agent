@@ -6,10 +6,20 @@ const { resolveOrgId } = require('./lib/org-id');
 const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
 const DEFAULT_BATCH_SIZE = 20;
 
-const supabase = createClient(
-  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
-);
+let _supabase;
+function getSupabase() {
+  if (_supabase) return _supabase;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) {
+    const available = Object.keys(process.env)
+      .filter((k) => k.includes('SUPABASE'))
+      .join(', ');
+    throw new Error(`Missing Supabase env vars. Available SUPABASE vars: ${available}`);
+  }
+  _supabase = createClient(url, key);
+  return _supabase;
+}
 
 /**
  * Fetch a single domain from StoreLeads API.
@@ -41,7 +51,7 @@ async function fetchDomain(domain) {
 /**
  * Load a batch of domains from the storeleads table.
  */
-async function loadDomainBatch(offset, limit) {
+async function loadDomainBatch(supabase, offset, limit) {
   const { data, error, count } = await supabase
     .from('storeleads')
     .select('domain', { count: 'exact' })
@@ -63,6 +73,7 @@ exports.handler = async (event) => {
       return { statusCode: 500, headers, body: JSON.stringify({ error: 'STORELEADS_API_KEY not configured' }) };
     }
 
+    const supabase = getSupabase();
     const params = event.queryStringParameters || {};
     const offset = Math.max(0, parseInt(params.offset, 10) || 0);
     const batchSize = Math.min(100, Math.max(1, parseInt(params.batch_size, 10) || DEFAULT_BATCH_SIZE));
@@ -72,7 +83,7 @@ exports.handler = async (event) => {
       return { statusCode: 500, headers, body: JSON.stringify({ error: 'Could not resolve org_id' }) };
     }
 
-    const { domains, total } = await loadDomainBatch(offset, batchSize);
+    const { domains, total } = await loadDomainBatch(supabase, offset, batchSize);
     console.log(`Bulk update batch: offset=${offset}, batch_size=${batchSize}, total=${total}, fetched=${domains.length}`);
 
     if (domains.length === 0) {
