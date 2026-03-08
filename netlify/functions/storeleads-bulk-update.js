@@ -12,10 +12,7 @@ function getSupabase() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
   if (!url || !key) {
-    const available = Object.keys(process.env)
-      .filter((k) => k.includes('SUPABASE'))
-      .join(', ');
-    throw new Error(`Missing Supabase env vars. Available SUPABASE vars: ${available}`);
+    throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
   }
   _supabase = createClient(url, key);
   return _supabase;
