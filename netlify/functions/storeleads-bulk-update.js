@@ -4,6 +4,7 @@ const { corsHeaders } = require('./lib/cors');
 const { resolveOrgId } = require('./lib/org-id');
 
 const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
+const DEFAULT_BATCH_SIZE = 25; // ~5s of API calls at 200ms each, fits in Netlify timeout
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -38,23 +39,16 @@ async function fetchDomain(domain) {
 }
 
 /**
- * Load all domains from the storeleads table, paginating past the 1000-row limit.
+ * Load a batch of domains from the storeleads table.
  */
-async function loadAllDomains() {
-  const domains = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from('storeleads')
-      .select('domain')
-      .range(from, from + 999);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    domains.push(...data.map((r) => r.domain));
-    if (data.length < 1000) break;
-    from += 1000;
-  }
-  return domains;
+async function loadDomainBatch(offset, limit) {
+  const { data, error, count } = await supabase
+    .from('storeleads')
+    .select('domain', { count: 'exact' })
+    .order('domain')
+    .range(offset, offset + limit - 1);
+  if (error) throw error;
+  return { domains: (data || []).map((r) => r.domain), total: count };
 }
 
 exports.handler = async (event) => {
@@ -68,11 +62,23 @@ exports.handler = async (event) => {
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'STORELEADS_API_KEY not configured' }) };
   }
 
+  const params = event.queryStringParameters || {};
+  const offset = Math.max(0, parseInt(params.offset, 10) || 0);
+  const batchSize = Math.min(100, Math.max(1, parseInt(params.batch_size, 10) || DEFAULT_BATCH_SIZE));
+
   const orgId = await resolveOrgId(supabase);
 
   try {
-    const domains = await loadAllDomains();
-    console.log(`📦 Bulk update: ${domains.length} domains to refresh`);
+    const { domains, total } = await loadDomainBatch(offset, batchSize);
+    console.log(`📦 Bulk update batch: offset=${offset}, batch_size=${batchSize}, total=${total}, fetched=${domains.length}`);
+
+    if (domains.length === 0) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ message: 'No more domains to update', total, offset }),
+      };
+    }
 
     let updated = 0;
     let failed = 0;
@@ -99,19 +105,27 @@ exports.handler = async (event) => {
       }
     }
 
+    const nextOffset = offset + domains.length;
+    const hasMore = nextOffset < total;
+
     const summary = {
-      total: domains.length,
+      total,
+      batchSize: domains.length,
+      offset,
+      nextOffset: hasMore ? nextOffset : null,
+      hasMore,
+      remaining: hasMore ? total - nextOffset : 0,
       updated,
       notFound,
       failed,
-      errors: errors.slice(0, 10), // cap error list
+      errors: errors.slice(0, 10),
     };
 
-    console.log(`✅ Bulk update complete:`, summary);
+    console.log(`✅ Batch complete:`, summary);
 
     await supabase.from('activity_log').insert({
       activity_type: 'storeleads_bulk_update',
-      summary: `Bulk refreshed ${updated}/${domains.length} storeleads records (${notFound} not found, ${failed} failed)`,
+      summary: `Bulk batch ${offset}-${nextOffset}: refreshed ${updated}/${domains.length} (${total - nextOffset} remaining)`,
       status: failed === 0 ? 'success' : 'partial',
       org_id: orgId,
     });
