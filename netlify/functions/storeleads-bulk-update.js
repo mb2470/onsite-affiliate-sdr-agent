@@ -4,12 +4,14 @@ const { corsHeaders } = require('./lib/cors');
 const { resolveOrgId } = require('./lib/org-id');
 
 const STORELEADS_API_KEY = process.env.STORELEADS_API_KEY;
-const DEFAULT_BATCH_SIZE = 25; // ~5s of API calls at 200ms each, fits in Netlify timeout
+const DEFAULT_BATCH_SIZE = 20;
 
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
-);
+function getSupabase() {
+  const url = process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) throw new Error('Missing VITE_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+  return createClient(url, key);
+}
 
 /**
  * Fetch a single domain from StoreLeads API.
@@ -41,7 +43,7 @@ async function fetchDomain(domain) {
 /**
  * Load a batch of domains from the storeleads table.
  */
-async function loadDomainBatch(offset, limit) {
+async function loadDomainBatch(supabase, offset, limit) {
   const { data, error, count } = await supabase
     .from('storeleads')
     .select('domain', { count: 'exact' })
@@ -58,25 +60,30 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers, body: '' };
   }
 
-  if (!STORELEADS_API_KEY) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'STORELEADS_API_KEY not configured' }) };
-  }
-
-  const params = event.queryStringParameters || {};
-  const offset = Math.max(0, parseInt(params.offset, 10) || 0);
-  const batchSize = Math.min(100, Math.max(1, parseInt(params.batch_size, 10) || DEFAULT_BATCH_SIZE));
-
-  const orgId = await resolveOrgId(supabase);
-
   try {
-    const { domains, total } = await loadDomainBatch(offset, batchSize);
-    console.log(`📦 Bulk update batch: offset=${offset}, batch_size=${batchSize}, total=${total}, fetched=${domains.length}`);
+    if (!STORELEADS_API_KEY) {
+      return { statusCode: 500, headers, body: JSON.stringify({ error: 'STORELEADS_API_KEY not configured' }) };
+    }
+
+    const supabase = getSupabase();
+
+    const params = event.queryStringParameters || {};
+    const offset = Math.max(0, parseInt(params.offset, 10) || 0);
+    const batchSize = Math.min(100, Math.max(1, parseInt(params.batch_size, 10) || DEFAULT_BATCH_SIZE));
+
+    const orgId = await resolveOrgId(supabase);
+    if (!orgId) {
+      return { statusCode: 500, headers, body: JSON.stringify({ error: 'Could not resolve org_id' }) };
+    }
+
+    const { domains, total } = await loadDomainBatch(supabase, offset, batchSize);
+    console.log(`Bulk update batch: offset=${offset}, batch_size=${batchSize}, total=${total}, fetched=${domains.length}`);
 
     if (domains.length === 0) {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ message: 'No more domains to update', total, offset }),
+        body: JSON.stringify({ message: 'No more domains to update', total, offset, hasMore: false }),
       };
     }
 
@@ -101,7 +108,7 @@ exports.handler = async (event) => {
       } catch (err) {
         failed++;
         errors.push({ domain, error: err.message });
-        console.error(`  ❌ ${domain}: ${err.message}`);
+        console.error(`  Failed ${domain}: ${err.message}`);
       }
     }
 
@@ -121,7 +128,7 @@ exports.handler = async (event) => {
       errors: errors.slice(0, 10),
     };
 
-    console.log(`✅ Batch complete:`, summary);
+    console.log('Batch complete:', JSON.stringify(summary));
 
     await supabase.from('activity_log').insert({
       activity_type: 'storeleads_bulk_update',
@@ -136,7 +143,7 @@ exports.handler = async (event) => {
       body: JSON.stringify(summary),
     };
   } catch (error) {
-    console.error('💥 Bulk update error:', error);
+    console.error('Bulk update error:', error.message, error.stack);
     return {
       statusCode: 500,
       headers,
