@@ -197,13 +197,18 @@ async function getEmailSettings(orgId) {
 }
 
 async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAliasSet = null) {
-  const query = () => supabase
+  const activeQuery = () => supabase
     .from('email_accounts')
     .select('id, email_address, display_name, daily_send_limit, current_daily_sent, status')
     .eq('org_id', orgId)
     .in('status', ['active', 'ready'])
     .order('current_daily_sent', { ascending: true })
     .order('created_at', { ascending: true });
+
+  const anyConfiguredQuery = () => supabase
+    .from('email_accounts')
+    .select('id, status')
+    .eq('org_id', orgId);
 
   const hasCapacity = (account) => {
     const sent = account?.current_daily_sent || 0;
@@ -219,20 +224,32 @@ async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAli
   };
 
   if (preferredAccountId) {
-    const { data: preferred } = await query().eq('id', preferredAccountId).limit(1);
+    const { data: preferred } = await activeQuery().eq('id', preferredAccountId).limit(1);
     const account = (preferred || [])[0] || null;
     if (account && hasCapacity(account) && hasAcceptedAlias(account)) {
-      return { account, hasConfiguredAccounts: true, hasAliasEligibleAccounts: true };
+      return {
+        account,
+        hasConfiguredAccounts: true,
+        hasActiveOrReadyAccounts: true,
+        hasAliasEligibleAccounts: true,
+      };
     }
   }
 
-  const { data: accounts } = await query();
-  const list = accounts || [];
+  const [{ data: allConfigured }, { data: activeAccounts }] = await Promise.all([
+    anyConfiguredQuery(),
+    activeQuery(),
+  ]);
+
+  const configuredList = allConfigured || [];
+  const list = activeAccounts || [];
   const aliasEligible = list.filter(hasAcceptedAlias);
   const available = aliasEligible.find(hasCapacity) || null;
+
   return {
     account: available,
-    hasConfiguredAccounts: list.length > 0,
+    hasConfiguredAccounts: configuredList.length > 0,
+    hasActiveOrReadyAccounts: list.length > 0,
     hasAliasEligibleAccounts: aliasEligible.length > 0,
   };
 }
@@ -406,10 +423,21 @@ exports.handler = async (event) => {
     const {
       account: selectedSender,
       hasConfiguredAccounts,
+      hasActiveOrReadyAccounts,
       hasAliasEligibleAccounts,
     } = await selectSenderAccount(orgId, from_account_id, acceptedAliasSet);
 
     if (!selectedSender && hasConfiguredAccounts) {
+      if (!hasActiveOrReadyAccounts) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({
+            error: 'Sender accounts exist but none are active/ready. Move at least one account to active/ready status before sending.',
+          }),
+        };
+      }
+
       if (!hasAliasEligibleAccounts) {
         return {
           statusCode: 400,
