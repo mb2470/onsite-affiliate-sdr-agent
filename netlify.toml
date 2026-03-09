@@ -5,7 +5,8 @@
 
 [dev]
   command = "npm run dev"
-  port = 3000
+  port = 8888
+  targetPort = 3000
   functions = "netlify/functions"
 
 # ── Email Outreach API Redirects ─────────────────────────────────────────────
@@ -101,6 +102,12 @@
 #   EMAILLISTVERIFY_API_KEY    — Email verification API key
 
 # ── SPA fallback (must be last) ─────────────────────────────────────────────
+# Agentic Control Plane (Echelon)
+[[redirects]]
+  from = "/api/manage"
+  to = "/.netlify/functions/manage"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
