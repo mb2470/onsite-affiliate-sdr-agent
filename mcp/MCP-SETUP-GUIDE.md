@@ -32,11 +32,7 @@ cd mcp
 cp /path/to/mcp-server.js ./server.js
 cp /path/to/mcp-package.json ./package.json
 
-# Create .env
-cp ../.env .env
-# Or create new .env with:
-# SUPABASE_URL=https://vzghstujcvjmcqndtchb.supabase.co
-# SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+# Create .env from project root, or set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in environment (never commit values).
 ```
 
 ### **Step 2: Install Dependencies**
@@ -73,8 +69,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "command": "node",
       "args": ["/absolute/path/to/your/project/mcp/server.js"],
       "env": {
-        "SUPABASE_URL": "https://vzghstujcvjmcqndtchb.supabase.co",
-        "SUPABASE_SERVICE_ROLE_KEY": "your_service_role_key_here"
+        "SUPABASE_URL": "<set in environment; do not commit>",
+        "SUPABASE_SERVICE_ROLE_KEY": "<set in environment; do not commit>"
       }
     }
   }
@@ -83,24 +79,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ### **For Windows:**
 
-Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+Edit `%APPDATA%\Claude\claude_desktop_config.json` (use the same structure; set env values from your environment, never paste real keys).
 
-```json
-{
-  "mcpServers": {
-    "ai-sdr-agent": {
-      "command": "node",
-      "args": ["C:\\Users\\YourName\\path\\to\\project\\mcp\\server.js"],
-      "env": {
-        "SUPABASE_URL": "https://vzghstujcvjmcqndtchb.supabase.co",
-        "SUPABASE_SERVICE_ROLE_KEY": "your_service_role_key_here"
-      }
-    }
-  }
-}
-```
-
-**Important:** Use absolute paths!
+**Important:** Use absolute paths. Do not commit config files that contain real credentials.
 
 ---
 

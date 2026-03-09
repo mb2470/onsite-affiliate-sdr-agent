@@ -25,13 +25,9 @@ cd agent
 cp .env.example .env
 ```
 
-Edit `.env` with your credentials:
-```env
-SUPABASE_URL=https://vzghstujcvjmcqndtchb.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
-ANTHROPIC_API_KEY=sk-ant-api03-your-key-here
-CONTACTS_CSV_PATH=/path/to/contacts_500k.csv
-```
+Edit `.env` with your credentials. **Set these in environment only; never commit values.**
+
+Required: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `CONTACTS_CSV_PATH`.
 
 **⚠️ Important:** Use the **SERVICE_ROLE_KEY**, not the anon key!
 

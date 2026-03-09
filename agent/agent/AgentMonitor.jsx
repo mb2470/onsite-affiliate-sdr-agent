@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import './AgentMonitor.css';
 
 const supabase = createClient(
-  'https://vzghstujcvjmcqndtchb.supabase.co',
-  'eyJhbGciOi0iJTUzI1NIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ6Z2hzdHVqY3ZqbWNxbmR0Y2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzc1NzMxOTQsImV4cCI6MjA1MzE0OTE5NH0.fzZSIsInJlZiI6InZ6Z2hzdHVqY3ZqbWNxbmR0Y2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzc1NzMxOTQsImV4cCI6MjA1MzE0OTE5NH0'
+  process.env.REACT_APP_SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  process.env.REACT_APP_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || ''
 );
 
 function AgentMonitor() {

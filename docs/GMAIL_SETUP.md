@@ -54,15 +54,13 @@ This will:
 
 ### 5. Set Environment Variables on Cloud Server
 
-Add these to your cloud server's environment:
+Set these on your cloud server (e.g. Netlify/Railway env). **Never commit values.**
 
-```
-SUPABASE_URL=https://vzghstujcvjmcqndtchb.supabase.co
-SUPABASE_SERVICE_KEY=<your service_role key from Supabase>
-ANTHROPIC_API_KEY=sk-ant-<your key>
-GMAIL_OAUTH_CREDENTIALS='<the JSON string from step 4>'
-GMAIL_FROM_EMAIL=your-sending-email@gmail.com
-```
+- `SUPABASE_URL` — your Supabase project URL  
+- `SUPABASE_SERVICE_KEY` — service_role key from Supabase  
+- `ANTHROPIC_API_KEY` — from Anthropic console  
+- `GMAIL_OAUTH_CREDENTIALS` — JSON string from step 4  
+- `GMAIL_FROM_EMAIL` — sending address
 
 ### 6. Verify Gmail Connection
 
