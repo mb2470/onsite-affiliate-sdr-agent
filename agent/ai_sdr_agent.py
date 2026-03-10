@@ -483,19 +483,38 @@ class GmailService:
         headers['threadId'] = detail.get('threadId', '')
         return headers
 
+    @staticmethod
+    def _extract_email_address(header_value: str) -> str:
+        """Extract a plain email address from a From header value."""
+        if not header_value:
+            return ''
+        match = re.search(r'<([^>]+)>', header_value)
+        if match:
+            return match.group(1).strip().lower()
+        return header_value.strip().lower()
+
     def check_thread_for_replies(self, thread_id: str, our_email: str) -> bool:
         """Check if a thread has any replies from someone other than us."""
         try:
             thread = self._gmail_request('GET', f"threads/{thread_id}?format=metadata"
                                          "&metadataHeaders=From")
             messages = thread.get('messages', [])
+            accepted_aliases = self.get_accepted_aliases()
             our_addr = (our_email or GMAIL_FROM_EMAIL).lower()
+            all_our_addresses = {our_addr}
+            all_our_addresses.update(accepted_aliases)
 
             for msg in messages:
+                label_ids = set(msg.get('labelIds', []))
+
+                # Ignore our own sent messages even when their "From" alias differs.
+                if 'SENT' in label_ids:
+                    continue
+
                 for h in msg.get('payload', {}).get('headers', []):
                     if h['name'].lower() == 'from':
-                        sender = h['value'].lower()
-                        if our_addr not in sender:
+                        sender = self._extract_email_address(h.get('value', ''))
+                        if sender and sender not in all_our_addresses:
                             return True
             return False
         except Exception:
