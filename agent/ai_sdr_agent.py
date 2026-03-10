@@ -940,6 +940,10 @@ class AISDRAgent:
         if pool:
             return pool
 
+        if rows:
+            print("  ⚠️ Sender accounts found, but none currently have accepted aliases and remaining daily capacity.")
+            return []
+
         fallback_email = self.gmail.get_from_email()
         return [{
             'id': None,
@@ -1735,7 +1739,7 @@ class AISDRAgent:
             max_per_day = settings.get('max_emails_per_day', 50)
             remaining_global = self._get_remaining_today(max_per_day)
             remaining_sender = self._get_sender_capacity_remaining(settings)
-            remaining = min(remaining_global, remaining_sender) if remaining_sender > 0 else remaining_global
+            remaining = min(remaining_global, remaining_sender)
 
             if remaining <= 0:
                 print(f"\n🛑 Daily limit reached ({max_per_day}/{max_per_day}). Sleeping 30 min then rechecking...")
