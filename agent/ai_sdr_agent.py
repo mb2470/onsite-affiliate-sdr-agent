@@ -1589,11 +1589,16 @@ class AISDRAgent:
                     )
                     if has_reply:
                         print(f"  💬 Prospect already replied — skipping!")
-                        # Mark the lead as replied
-                        supabase.table("leads").update({
+                        # Mark only this lead row as replied (avoid cross-domain/contact bleed).
+                        update_q = supabase.table("leads").update({
                             "status": "replied",
                             "updated_at": now.isoformat(),
-                        }).eq("website", website).execute()
+                        })
+                        if outreach_row.get('lead_id'):
+                            update_q = update_q.eq("id", outreach_row['lead_id'])
+                        else:
+                            update_q = update_q.eq("website", website)
+                        update_q.execute()
                         self._log('reply_detected', summary=f"Reply detected from {contact_email}")
                         continue
                 except Exception as e:
@@ -1608,10 +1613,13 @@ class AISDRAgent:
             except Exception:
                 lead = {'website': website}
 
-            # Skip if lead status has moved beyond 'contacted'
-            if lead.get('status') in ('replied', 'qualified', 'demo'):
+            # Only skip terminal CRM stages. "replied" can be stale/misclassified;
+            # thread-level reply check above is the authoritative source for follow-up suppression.
+            if lead.get('status') in ('qualified', 'demo'):
                 print(f"  ⏭️  Lead status is '{lead.get('status')}' — skipping follow-up.")
                 continue
+            if lead.get('status') == 'replied':
+                print("  ℹ️  Lead marked 'replied' in CRM, but no thread reply detected; continuing.")
 
             # Generate follow-up email
             try:
