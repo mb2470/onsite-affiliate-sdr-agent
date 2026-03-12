@@ -493,6 +493,15 @@ class GmailService:
             return match.group(1).strip().lower()
         return header_value.strip().lower()
 
+    @staticmethod
+    def _canonicalize_email(email: str) -> str:
+        """Canonicalize addresses so plus-aliases don't look like different senders."""
+        if not email or '@' not in email:
+            return (email or '').strip().lower()
+        local, domain = email.strip().lower().split('@', 1)
+        local = local.split('+', 1)[0]
+        return f"{local}@{domain}"
+
     def check_thread_for_replies(self, thread_id: str, our_email: str) -> bool:
         """Check if a thread has any replies from someone other than us."""
         try:
@@ -500,20 +509,30 @@ class GmailService:
                                          "&metadataHeaders=From")
             messages = thread.get('messages', [])
             accepted_aliases = self.get_accepted_aliases()
-            our_addr = (our_email or GMAIL_FROM_EMAIL).lower()
-            all_our_addresses = {our_addr}
-            all_our_addresses.update(accepted_aliases)
+            all_our_addresses = {
+                self._canonicalize_email(our_email or ''),
+                self._canonicalize_email(self.get_from_email() or ''),
+                self._canonicalize_email(GMAIL_FROM_EMAIL or ''),
+            }
+            all_our_addresses.update(
+                self._canonicalize_email(addr)
+                for addr in accepted_aliases
+                if addr
+            )
+            all_our_addresses.discard('')
 
             for msg in messages:
                 label_ids = set(msg.get('labelIds', []))
 
                 # Ignore our own sent messages even when their "From" alias differs.
-                if 'SENT' in label_ids:
+                if {'SENT', 'DRAFT'}.intersection(label_ids):
                     continue
 
                 for h in msg.get('payload', {}).get('headers', []):
                     if h['name'].lower() == 'from':
-                        sender = self._extract_email_address(h.get('value', ''))
+                        sender = self._canonicalize_email(
+                            self._extract_email_address(h.get('value', ''))
+                        )
                         if sender and sender not in all_our_addresses:
                             return True
             return False
@@ -1570,11 +1589,16 @@ class AISDRAgent:
                     )
                     if has_reply:
                         print(f"  💬 Prospect already replied — skipping!")
-                        # Mark the lead as replied
-                        supabase.table("leads").update({
+                        # Mark only this lead row as replied (avoid cross-domain/contact bleed).
+                        update_q = supabase.table("leads").update({
                             "status": "replied",
                             "updated_at": now.isoformat(),
-                        }).eq("website", website).execute()
+                        })
+                        if outreach_row.get('lead_id'):
+                            update_q = update_q.eq("id", outreach_row['lead_id'])
+                        else:
+                            update_q = update_q.eq("website", website)
+                        update_q.execute()
                         self._log('reply_detected', summary=f"Reply detected from {contact_email}")
                         continue
                 except Exception as e:
@@ -1589,10 +1613,13 @@ class AISDRAgent:
             except Exception:
                 lead = {'website': website}
 
-            # Skip if lead status has moved beyond 'contacted'
-            if lead.get('status') in ('replied', 'qualified', 'demo'):
+            # Only skip terminal CRM stages. "replied" can be stale/misclassified;
+            # thread-level reply check above is the authoritative source for follow-up suppression.
+            if lead.get('status') in ('qualified', 'demo'):
                 print(f"  ⏭️  Lead status is '{lead.get('status')}' — skipping follow-up.")
                 continue
+            if lead.get('status') == 'replied':
+                print("  ℹ️  Lead marked 'replied' in CRM, but no thread reply detected; continuing.")
 
             # Generate follow-up email
             try:
