@@ -493,6 +493,15 @@ class GmailService:
             return match.group(1).strip().lower()
         return header_value.strip().lower()
 
+    @staticmethod
+    def _canonicalize_email(email: str) -> str:
+        """Canonicalize addresses so plus-aliases don't look like different senders."""
+        if not email or '@' not in email:
+            return (email or '').strip().lower()
+        local, domain = email.strip().lower().split('@', 1)
+        local = local.split('+', 1)[0]
+        return f"{local}@{domain}"
+
     def check_thread_for_replies(self, thread_id: str, our_email: str) -> bool:
         """Check if a thread has any replies from someone other than us."""
         try:
@@ -500,20 +509,30 @@ class GmailService:
                                          "&metadataHeaders=From")
             messages = thread.get('messages', [])
             accepted_aliases = self.get_accepted_aliases()
-            our_addr = (our_email or GMAIL_FROM_EMAIL).lower()
-            all_our_addresses = {our_addr}
-            all_our_addresses.update(accepted_aliases)
+            all_our_addresses = {
+                self._canonicalize_email(our_email or ''),
+                self._canonicalize_email(self.get_from_email() or ''),
+                self._canonicalize_email(GMAIL_FROM_EMAIL or ''),
+            }
+            all_our_addresses.update(
+                self._canonicalize_email(addr)
+                for addr in accepted_aliases
+                if addr
+            )
+            all_our_addresses.discard('')
 
             for msg in messages:
                 label_ids = set(msg.get('labelIds', []))
 
                 # Ignore our own sent messages even when their "From" alias differs.
-                if 'SENT' in label_ids:
+                if {'SENT', 'DRAFT'}.intersection(label_ids):
                     continue
 
                 for h in msg.get('payload', {}).get('headers', []):
                     if h['name'].lower() == 'from':
-                        sender = self._extract_email_address(h.get('value', ''))
+                        sender = self._canonicalize_email(
+                            self._extract_email_address(h.get('value', ''))
+                        )
                         if sender and sender not in all_our_addresses:
                             return True
             return False
