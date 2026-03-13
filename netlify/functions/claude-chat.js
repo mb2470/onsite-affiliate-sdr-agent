@@ -1217,6 +1217,100 @@ DEV REQUESTS:
 - When listing leads or contacts, highlight the most important fields: website, ICP fit, status, contact name, title, email.
 - Use markdown formatting for readability.`;
 
+// ── Token management ─────────────────────────────────────────────────────────
+// Claude's context window is 200K tokens. We reserve budget for the system
+// prompt (~2K), tool definitions (~8K), and the response (4K), leaving ~186K
+// for messages. Estimate tokens as ceil(chars / 3.5) (conservative for mixed
+// content including JSON tool results).
+
+const MAX_MESSAGE_TOKENS = 160000; // conservative budget for messages
+
+function estimateTokens(content) {
+  if (!content) return 0;
+  if (typeof content === 'string') return Math.ceil(content.length / 3.5);
+  if (Array.isArray(content)) {
+    return content.reduce((sum, block) => {
+      if (typeof block === 'string') return sum + Math.ceil(block.length / 3.5);
+      if (block.text) return sum + Math.ceil(block.text.length / 3.5);
+      if (block.content) return sum + Math.ceil(String(block.content).length / 3.5);
+      // tool_use input
+      if (block.input) return sum + Math.ceil(JSON.stringify(block.input).length / 3.5);
+      return sum + 50; // fallback estimate for other block types
+    }, 0);
+  }
+  // Object (e.g. tool_use block)
+  return Math.ceil(JSON.stringify(content).length / 3.5);
+}
+
+/**
+ * Truncate a single tool_result content string if it's excessively large.
+ * Keeps first and last portions so the model still has context.
+ */
+function truncateToolResult(content, maxChars = 30000) {
+  if (typeof content !== 'string' || content.length <= maxChars) return content;
+  const keep = Math.floor(maxChars / 2);
+  return (
+    content.slice(0, keep) +
+    `\n\n... [truncated ${content.length - maxChars} chars] ...\n\n` +
+    content.slice(-keep)
+  );
+}
+
+/**
+ * Trim messages to fit within the token budget.
+ * Strategy:
+ * 1. First, truncate any oversized tool_result content blocks.
+ * 2. If still over budget, drop the oldest message pairs (keeping the
+ *    most recent user message intact).
+ */
+function trimMessages(messages) {
+  // Step 1: Truncate large tool results in-place (work on a deep-ish copy)
+  let trimmed = messages.map((m) => {
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      return {
+        ...m,
+        content: m.content.map((block) => {
+          if (block.type === 'tool_result' && typeof block.content === 'string') {
+            return { ...block, content: truncateToolResult(block.content) };
+          }
+          return block;
+        }),
+      };
+    }
+    return m;
+  });
+
+  // Step 2: If total is still over budget, drop oldest pairs
+  let totalTokens = trimmed.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+
+  while (totalTokens > MAX_MESSAGE_TOKENS && trimmed.length > 2) {
+    // Remove the oldest message (index 0)
+    const removed = trimmed.shift();
+    totalTokens -= estimateTokens(removed.content);
+
+    // If the new first message is a 'user' tool_result (orphaned), also remove it
+    // to maintain valid message alternation
+    if (
+      trimmed.length > 1 &&
+      trimmed[0].role === 'user' &&
+      Array.isArray(trimmed[0].content) &&
+      trimmed[0].content.every((b) => b.type === 'tool_result')
+    ) {
+      const removed2 = trimmed.shift();
+      totalTokens -= estimateTokens(removed2.content);
+    }
+  }
+
+  // Ensure first message is from user (API requirement)
+  while (trimmed.length > 0 && trimmed[0].role !== 'user') {
+    const removed = trimmed.shift();
+    totalTokens -= estimateTokens(removed.content);
+  }
+
+  console.log(`Token estimate: ~${totalTokens} tokens in ${trimmed.length} messages`);
+  return trimmed;
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 // Two modes:
 //   { messages }    → Single Claude API call, returns response (may include tool_use blocks)
@@ -1283,12 +1377,14 @@ exports.handler = async (event) => {
       timeout: 25_000,
     });
 
+    const safeMsgs = trimMessages(messages);
+
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       tools: TOOLS,
-      messages,
+      messages: safeMsgs,
     });
 
     // Extract text content
