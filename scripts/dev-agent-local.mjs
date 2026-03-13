@@ -222,19 +222,27 @@ Rules:
 - Do NOT create new files unless the task explicitly requires it
 - Return ONLY valid JSON, no markdown`;
 
-  const response = await chatWithLLM([
+const response = await chatWithLLM([
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: editPrompt },
   ], { maxTokens: 8192 });
 
+  // --- EXACT UPDATE START ---
   try {
+    // This regex extracts the JSON object even if the LLM includes markdown backticks or conversational text
     const match = response.match(/\{[\s\S]*\}/);
-    return match ? JSON.parse(match[0]) : null;
-  } catch {
-    console.error('  Failed to parse edits:', response.substring(0, 500));
+    if (!match) {
+      console.error('  No JSON found in LLM response');
+      return null;
+    }
+    
+    const parsed = JSON.parse(match[0]);
+    return parsed;
+  } catch (err) {
+    console.error('  Failed to parse edits. Raw response snippet:', response.substring(0, 200));
     return null;
   }
-}
+  // --- EXACT UPDATE END ---
 
 async function reviewChanges(spec, fileChanges) {
   const changesContext = Object.entries(fileChanges)
