@@ -51,7 +51,7 @@ export default function ChatPanel({ orgId }) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, loading]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -65,6 +65,8 @@ export default function ChatPanel({ orgId }) {
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setInput('');
+    // Reset textarea height after sending
+    if (inputRef.current) inputRef.current.style.height = 'auto';
     setLoading(true);
 
     try {
@@ -297,25 +299,32 @@ export default function ChatPanel({ orgId }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
+      {/* Sticky input bar */}
       <div className="chat-input-area">
-        <textarea
-          ref={inputRef}
-          className="chat-input"
-          placeholder="Ask about your leads, pipeline, contacts..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          disabled={loading}
-        />
-        <button
-          className="chat-send-btn"
-          onClick={() => sendMessage()}
-          disabled={!input.trim() || loading}
-        >
-          ↑
-        </button>
+        <div className="chat-input-wrapper">
+          <textarea
+            ref={inputRef}
+            className="chat-input"
+            placeholder="Ask about your leads, pipeline, contacts..."
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Auto-expand textarea height
+              e.target.style.height = 'auto';
+              e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+            }}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            disabled={loading}
+          />
+          <button
+            className="chat-send-btn"
+            onClick={() => sendMessage()}
+            disabled={!input.trim() || loading}
+          >
+            ↑
+          </button>
+        </div>
       </div>
     </div>
   );
