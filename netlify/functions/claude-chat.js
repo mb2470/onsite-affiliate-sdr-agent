@@ -982,6 +982,7 @@ Subject: [subject]
         body: input.body,
         leadId: leadRow?.id || null,
         website: input.website,
+        org_id: orgId,
         contactDetails: input.contact_name
           ? [{ name: input.contact_name, email: input.to }]
           : [],

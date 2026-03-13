@@ -312,6 +312,53 @@ exports.handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'No recipients' }) };
     }
 
+    // ── Enforce agent_settings.max_emails_per_day as a global daily cap ──
+    const { data: agentSettings } = await supabase
+      .from('agent_settings')
+      .select('max_emails_per_day')
+      .eq('org_id', orgId)
+      .maybeSingle();
+
+    if (agentSettings?.max_emails_per_day) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const { count: sentToday } = await supabase
+        .from('outreach_log')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .gte('sent_at', todayStart.toISOString());
+
+      const allRecipients = [...(to ? [to] : []), ...(bcc || [])];
+      const remaining = agentSettings.max_emails_per_day - (sentToday || 0);
+
+      if (remaining <= 0) {
+        return {
+          statusCode: 429,
+          headers,
+          body: JSON.stringify({
+            error: `Daily email limit reached (${agentSettings.max_emails_per_day}/day). ${sentToday} emails already sent today.`,
+            daily_limit: agentSettings.max_emails_per_day,
+            sent_today: sentToday,
+          }),
+        };
+      }
+
+      if (allRecipients.length > remaining) {
+        return {
+          statusCode: 429,
+          headers,
+          body: JSON.stringify({
+            error: `Batch of ${allRecipients.length} would exceed daily limit. Only ${remaining} of ${agentSettings.max_emails_per_day} remaining today.`,
+            daily_limit: agentSettings.max_emails_per_day,
+            sent_today: sentToday,
+            remaining,
+            batch_size: allRecipients.length,
+          }),
+        };
+      }
+    }
+
     // ── Step 1: Use cached Apollo status from discovery triage ─────
     // verified -> send directly
     // extrapolated/catch_all/unavailable -> route to ELV
@@ -427,6 +474,29 @@ exports.handler = async (event) => {
       hasAliasEligibleAccounts,
     } = await selectSenderAccount(orgId, from_account_id, acceptedAliasSet);
 
+    // Enforce batch size against remaining sender capacity
+    if (selectedSender) {
+      const sent = selectedSender.current_daily_sent || 0;
+      const limit = Number.isFinite(selectedSender.daily_send_limit)
+        ? selectedSender.daily_send_limit
+        : parseInt(selectedSender.daily_send_limit, 10);
+      const remaining = (Number.isFinite(limit) && limit > 0) ? limit - sent : 0;
+
+      if (safeEmails.length > remaining) {
+        return {
+          statusCode: 429,
+          headers,
+          body: JSON.stringify({
+            error: `Batch size (${safeEmails.length}) exceeds remaining daily capacity (${remaining}) for sender ${selectedSender.email_address}. Reduce recipients or wait for daily reset.`,
+            batch_size: safeEmails.length,
+            remaining_capacity: remaining,
+            daily_limit: limit,
+            current_daily_sent: sent,
+          }),
+        };
+      }
+    }
+
     if (!selectedSender && hasConfiguredAccounts) {
       if (!hasActiveOrReadyAccounts) {
         return {
@@ -513,7 +583,7 @@ exports.handler = async (event) => {
     await supabase.from('outreach_log').insert(outreachRows);
 
     if (selectedSender?.id) {
-      await incrementSenderDailySent(selectedSender.id, 1);
+      await incrementSenderDailySent(selectedSender.id, safeEmails.length);
     }
 
     if (leadId) {
