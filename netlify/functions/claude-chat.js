@@ -5,13 +5,15 @@ const path = require('path');
 
 // Use service role key (bypasses RLS) for server-side function,
 // falling back to anon key if not set.
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
 const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY;
+  supabaseAnonKey;
 
 const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
+  supabaseUrl,
   supabaseKey
 );
 
@@ -1100,7 +1102,10 @@ Subject: [subject]
 
     case 'submit_dev_request': {
       if (!input.title || !input.spec) return { error: 'title and spec are required' };
-      if (!authContext?.user?.id) return { error: 'Authentication is required to submit dev requests' };
+      if (!authContext?.user?.id) {
+        console.warn('submit_dev_request rejected: authContext is', JSON.stringify(authContext));
+        return { error: 'Authentication is required to submit dev requests. Please sign out and sign back in to refresh your session.' };
+      }
       if (!orgId) return { error: 'org_id is required to submit dev requests' };
 
       const row = {
@@ -1367,10 +1372,19 @@ exports.handler = async (event) => {
     const token = getBearerToken(event.headers || {});
     let authContext = null;
     if (token) {
-      const { data: authData, error: authError } = await supabase.auth.getUser(token);
+      // Use anon-key client for JWT validation (service-role client can
+      // behave differently with auth.getUser and may silently fail).
+      const authClient = createClient(supabaseUrl, supabaseAnonKey || supabaseKey);
+      const { data: authData, error: authError } = await authClient.auth.getUser(token);
+      if (authError) {
+        console.warn('Auth token validation failed:', authError.message);
+      }
       if (!authError && authData?.user?.id) {
         authContext = { user: authData.user };
+        console.log('Auth context established for user:', authData.user.id);
       }
+    } else {
+      console.log('No bearer token in request headers');
     }
 
     let orgId = body.org_id || null;
