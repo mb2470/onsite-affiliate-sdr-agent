@@ -123,11 +123,26 @@ export default function ChatPanel({ orgId }) {
 
         const toolData = await toolRes.json();
 
+        // Truncate oversized tool results to prevent token bloat
+        const cappedResults = (toolData.tool_results || []).map((r) => {
+          if (typeof r.content === 'string' && r.content.length > 30000) {
+            const keep = 15000;
+            return {
+              ...r,
+              content:
+                r.content.slice(0, keep) +
+                `\n\n... [truncated ${r.content.length - 30000} chars] ...\n\n` +
+                r.content.slice(-keep),
+            };
+          }
+          return r;
+        });
+
         // Step 3: Append assistant response + tool results, then loop
         apiMessages = [
           ...apiMessages,
           { role: 'assistant', content: data.raw_content },
-          { role: 'user', content: toolData.tool_results },
+          { role: 'user', content: cappedResults },
         ];
 
         // If Claude also produced text alongside tools, keep it as a fallback
