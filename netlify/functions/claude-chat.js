@@ -1344,16 +1344,17 @@ exports.handler = async (event) => {
 
     // ── Mode: Execute tool calls ──────────────────────────────────────────
     if (body.tool_calls) {
-      const results = [];
-      for (const call of body.tool_calls) {
+      // Execute all tool calls in parallel to avoid sequential timeout accumulation
+      const promises = body.tool_calls.map(async (call) => {
         console.log(`Tool call: ${call.name}`, JSON.stringify(call.input));
         const result = await executeToolWithTimeout(call.name, call.input, orgId, authContext);
-        results.push({
+        return {
           type: 'tool_result',
           tool_use_id: call.id,
           content: JSON.stringify(result),
-        });
-      }
+        };
+      });
+      const results = await Promise.all(promises);
       return {
         statusCode: 200,
         headers,

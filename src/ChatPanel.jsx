@@ -10,12 +10,44 @@ const SUGGESTIONS = [
   'Submit a dev request',
 ];
 
+const CHAT_STORAGE_KEY = 'sdr_chat_history';
+const MAX_STORED_MESSAGES = 100; // keep last 100 messages to avoid localStorage bloat
+
+function loadChatHistory(orgId) {
+  try {
+    const raw = localStorage.getItem(`${CHAT_STORAGE_KEY}_${orgId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    // Only restore display messages (strings), not tool exchange arrays
+    return parsed.filter((m) => typeof m.content === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function saveChatHistory(orgId, messages) {
+  try {
+    // Only persist display messages (role + string content)
+    const toStore = messages
+      .filter((m) => typeof m.content === 'string')
+      .slice(-MAX_STORED_MESSAGES);
+    localStorage.setItem(`${CHAT_STORAGE_KEY}_${orgId}`, JSON.stringify(toStore));
+  } catch {
+    // localStorage full or unavailable — silently ignore
+  }
+}
+
 export default function ChatPanel({ orgId }) {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => loadChatHistory(orgId));
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Persist messages to localStorage whenever they change
+  useEffect(() => {
+    saveChatHistory(orgId, messages);
+  }, [orgId, messages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -73,10 +105,15 @@ export default function ChatPanel({ orgId }) {
         return;
       }
 
-      // Build the messages array for the API (only role + content)
-      // Messages with string content are display messages; messages with array
-      // content are tool exchanges from previous turns.
-      let apiMessages = updatedMessages.map((m) => ({
+      // Build the messages array for the API (only role + content).
+      // Only send display messages (string content) as conversation context.
+      // Tool exchange arrays from previous turns are excluded to keep token
+      // count manageable — the backend trimMessages() handles final safety.
+      // Keep last 20 message pairs to provide enough context without bloating.
+      const displayMsgs = updatedMessages
+        .filter((m) => typeof m.content === 'string')
+        .slice(-40);
+      let apiMessages = displayMsgs.map((m) => ({
         role: m.role,
         content: m.content,
       }));
@@ -84,17 +121,33 @@ export default function ChatPanel({ orgId }) {
       let maxIterations = 8;
       let finalContent = '';
 
-      // Retry helper for transient errors (502/503/504)
-      const fetchWithRetry = async (url, options, retries = 1) => {
+      // Retry helper for transient errors (502/503/504) with timeout
+      const FETCH_TIMEOUT_MS = 55_000; // 55s — generous for Netlify 26s + network latency
+      const fetchWithRetry = async (url, options, retries = 2) => {
         for (let attempt = 0; attempt <= retries; attempt++) {
-          const res = await fetch(url, options);
-          if (res.ok) return res;
-          if (attempt < retries && [502, 503, 504].includes(res.status)) {
-            await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-            continue;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+          try {
+            const res = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timer);
+            if (res.ok) return res;
+            if (attempt < retries && [502, 503, 504].includes(res.status)) {
+              await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+              continue;
+            }
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `API error: ${res.status}`);
+          } catch (e) {
+            clearTimeout(timer);
+            if (e.name === 'AbortError') {
+              if (attempt < retries) {
+                await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+                continue;
+              }
+              throw new Error('Request timed out. Try a simpler question or break it into steps.');
+            }
+            throw e;
           }
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || `API error: ${res.status}`);
         }
       };
 
@@ -177,6 +230,7 @@ export default function ChatPanel({ orgId }) {
 
   const clearChat = () => {
     setMessages([]);
+    try { localStorage.removeItem(`${CHAT_STORAGE_KEY}_${orgId}`); } catch {}
     inputRef.current?.focus();
   };
 
