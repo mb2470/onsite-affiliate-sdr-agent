@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { spawnSync, execSync } from 'child_process';
 
 const { DEV_AGENT_SECRET, LLM_API_URL, LLM_MODEL, REPO_DIR } = process.env;
 
@@ -19,6 +19,15 @@ function validatePath(filePath) {
   return resolved;
 }
 
+// 1. Immune to Command Injection: Uses Array Arguments
+function runGit(args) {
+  const result = spawnSync('git', args, { cwd: REPO_DIR, encoding: 'utf8' });
+  if (result.status !== 0 && !result.stderr.includes('nothing to commit')) {
+    throw new Error(`Git error: ${result.stderr}`);
+  }
+  return result;
+}
+
 async function chatWithLLM(messages, options = {}) {
   const response = await fetch(`${LLM_API_URL}/v1/chat/completions`, {
     method: 'POST',
@@ -26,7 +35,7 @@ async function chatWithLLM(messages, options = {}) {
     body: JSON.stringify({ model: LLM_MODEL, messages, temperature: 0.1, ...options })
   });
   const data = await response.json();
-  if (!data.choices?.[0]?.message?.content) throw new Error("LLM returned empty response");
+  if (data.error) throw new Error(`LLM Error: ${data.error.message}`);
   return data.choices[0].message.content;
 }
 
@@ -37,12 +46,11 @@ async function updateTaskStatus(id, action, result = {}) {
       headers: AUTH_HEADERS,
       body: JSON.stringify({ id, ...result })
     });
-    console.log(`  🔹 Status updated: ${action}`);
   } catch (e) { console.error(`  ⚠️ Lifecycle error: ${e.message}`); }
 }
 
 async function run() {
-  console.log(`🚀 Agent active. Repository: ${REPO_DIR}`);
+  console.log(`🚀 Agent Securely Active. Repository: ${REPO_DIR}`);
   
   while (true) {
     try {
@@ -59,9 +67,7 @@ async function run() {
           const structure = execSync(process.platform === 'win32' ? 'dir /s /b' : 'find . -maxdepth 2 -not -path "*/.*"', { cwd: REPO_DIR }).toString();
           
           const planRes = await chatWithLLM([{ role: 'system', content: "Return ONLY JSON" }, { role: 'user', content: `Task: ${task.instruction}\nStructure:\n${structure}\nReturn JSON: {"files_to_read":["string"]}` }]);
-          const planMatch = planRes.match(/\{[\s\S]*\}/);
-          if (!planMatch) throw new Error("Invalid Plan JSON");
-          const plan = JSON.parse(planMatch[0]);
+          const plan = JSON.parse(planRes.match(/\{[\s\S]*\}/)[0]);
 
           const filesContent = {};
           for (const file of (plan.files_to_read || [])) {
@@ -70,11 +76,9 @@ async function run() {
           }
 
           const editRes = await chatWithLLM([{ role: 'system', content: "Return ONLY JSON" }, { role: 'user', content: `Task: ${task.instruction}\nFiles:\n${JSON.stringify(filesContent)}\nReturn JSON: {"edits":[{"file":"string","original":"string","replacement":"string"}]}` }], { maxTokens: 8192 });
-          const editMatch = editRes.match(/\{[\s\S]*\}/);
-          if (!editMatch) throw new Error("Invalid Edit JSON");
-          const result = JSON.parse(editMatch[0]);
+          const result = JSON.parse(editRes.match(/\{[\s\S]*\}/)[0]);
 
-          if (result?.edits) {
+          if (result?.edits && result.edits.length > 0) {
             for (const edit of result.edits) {
               const fullPath = validatePath(edit.file);
               const content = fs.readFileSync(fullPath, 'utf8');
@@ -83,13 +87,17 @@ async function run() {
               fs.writeFileSync(fullPath, parts.join(edit.replacement));
             }
 
-            // Sanitized Git Ops
-            const safeMsg = task.instruction.slice(0, 50).replace(/["'`$\\]/g, '');
+            // 2. Safe Git Ops: No shell injection possible here
             console.log("  git: syncing changes...");
-            execSync(`git add . && git commit -m "agent: ${safeMsg}" && git push origin main`, { cwd: REPO_DIR, stdio: 'inherit' });
+            runGit(['add', '.']);
+            const commitMsg = `agent: ${task.instruction.slice(0, 50)}`;
+            runGit(['commit', '-m', commitMsg]);
+            runGit(['push', 'origin', 'main']);
             
             await updateTaskStatus(task.id, 'complete', { status: 'success' });
             console.log(`  🎉 Finished.`);
+          } else {
+             await updateTaskStatus(task.id, 'complete', { status: 'no_changes' });
           }
         } catch (taskErr) {
           console.error(`  ❌ Task Failed: ${taskErr.message}`);
