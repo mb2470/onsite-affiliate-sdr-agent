@@ -54,18 +54,36 @@ function resolveRepoPath(relativePath = '') {
   return resolved;
 }
 
+const SEARCH_TIMEOUT_MS = 8_000; // 8s — well within Netlify's 26s limit
+const SEARCH_MAX_FILES = 500;    // Cap files scanned to prevent runaway walks
+
 async function searchRepoFiles({ query, path_prefix = '', limit = 20 }) {
   const safeLimit = Math.min(Math.max(limit || 20, 1), 50);
   const searchRoot = resolveRepoPath(path_prefix);
   const lowerQuery = query.toLowerCase();
   const matches = [];
+  const startTime = Date.now();
+  let filesScanned = 0;
+  let timedOut = false;
 
   async function walk(currentDir) {
-    if (matches.length >= safeLimit) return;
+    if (matches.length >= safeLimit || timedOut) return;
 
-    const entries = await fs.readdir(currentDir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return; // Skip directories we can't read
+    }
+
     for (const entry of entries) {
       if (matches.length >= safeLimit) break;
+
+      // Check timeout every iteration
+      if (Date.now() - startTime > SEARCH_TIMEOUT_MS) {
+        timedOut = true;
+        break;
+      }
 
       const fullPath = path.join(currentDir, entry.name);
       const relativePath = path.relative(REPO_ROOT, fullPath);
@@ -73,8 +91,14 @@ async function searchRepoFiles({ query, path_prefix = '', limit = 20 }) {
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) {
           await walk(fullPath);
+          if (timedOut) break;
         }
         continue;
+      }
+
+      if (filesScanned >= SEARCH_MAX_FILES) {
+        timedOut = true;
+        break;
       }
 
       const extension = path.extname(entry.name).toLowerCase();
@@ -82,9 +106,15 @@ async function searchRepoFiles({ query, path_prefix = '', limit = 20 }) {
         continue;
       }
 
-      const stats = await fs.stat(fullPath);
+      let stats;
+      try {
+        stats = await fs.stat(fullPath);
+      } catch {
+        continue;
+      }
       if (stats.size > MAX_FILE_SIZE_BYTES) continue;
 
+      filesScanned++;
       const content = await fs.readFile(fullPath, 'utf8');
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i += 1) {
@@ -101,7 +131,12 @@ async function searchRepoFiles({ query, path_prefix = '', limit = 20 }) {
   }
 
   await walk(searchRoot);
-  return { query, path_prefix, matches };
+  return {
+    query,
+    path_prefix,
+    matches,
+    ...(timedOut ? { partial: true, note: `Search stopped early (${filesScanned} files scanned). Try a more specific path_prefix to narrow results.` } : {}),
+  };
 }
 
 // ── Tool definitions for Claude ──────────────────────────────────────────────
