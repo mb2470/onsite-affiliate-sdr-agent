@@ -152,6 +152,10 @@ export default function ChatPanel({ orgId }) {
         return;
       }
 
+      // Get a fresh auth token for the claude-chat calls so tools like
+      // submit_dev_request have valid authContext on the backend.
+      const { accessToken: chatToken } = await getFreshAccessToken();
+
       // Build the messages array for the API (only role + content).
       // Only send display messages (string content) as conversation context.
       // Tool exchange arrays from previous turns are excluded to keep token
@@ -202,7 +206,10 @@ export default function ChatPanel({ orgId }) {
         // Step 1: Single Claude API call
         const res = await fetchWithRetry('/.netlify/functions/claude-chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(chatToken ? { Authorization: `Bearer ${chatToken}` } : {}),
+          },
           body: JSON.stringify({ messages: apiMessages, org_id: orgId }),
         });
 
@@ -217,7 +224,10 @@ export default function ChatPanel({ orgId }) {
         // Step 2: Execute tool calls server-side
         const toolRes = await fetchWithRetry('/.netlify/functions/claude-chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(chatToken ? { Authorization: `Bearer ${chatToken}` } : {}),
+          },
           body: JSON.stringify({ tool_calls: data.tool_calls, org_id: orgId }),
         });
 
