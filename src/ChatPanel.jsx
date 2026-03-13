@@ -37,6 +37,25 @@ function saveChatHistory(orgId, messages) {
   }
 }
 
+/**
+ * Get a fresh, validated access token. Unlike getSession() which returns the
+ * cached (possibly expired) token, this calls getUser() first which triggers
+ * the Supabase SDK's automatic token refresh when the JWT has expired.
+ */
+async function getFreshAccessToken() {
+  // getUser() validates the token server-side and triggers refresh if expired
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData?.user) {
+    return { accessToken: null, user: null };
+  }
+  // After getUser() succeeds, getSession() will have the refreshed token
+  const { data: { session } } = await supabase.auth.getSession();
+  return {
+    accessToken: session?.access_token || null,
+    user: session?.user || userData.user,
+  };
+}
+
 export default function ChatPanel({ orgId }) {
   const [messages, setMessages] = useState(() => loadChatHistory(orgId));
   const [input, setInput] = useState('');
@@ -75,20 +94,46 @@ export default function ChatPanel({ orgId }) {
         || /\bsubmit this to dev\b/i.test(userText);
 
       if (isDevRequestIntent) {
-        const { data: { session } } = await supabase.auth.getSession();
-        const accessToken = session?.access_token;
-        const edgeRes = await fetch('/.netlify/functions/assistant-dev-request', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-          },
-          body: JSON.stringify({
-            message: userText,
-            org_id: orgId,
-            user_email: session?.user?.email || null,
-          }),
-        });
+        let { accessToken, user } = await getFreshAccessToken();
+
+        if (!accessToken) {
+          throw new Error(
+            'Your session has expired. Please sign out and sign back in to submit dev requests.'
+          );
+        }
+
+        const makeDevRequest = async (token, userEmail) => {
+          return fetch('/.netlify/functions/assistant-dev-request', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              message: userText,
+              org_id: orgId,
+              user_email: userEmail || null,
+            }),
+          });
+        };
+
+        let edgeRes = await makeDevRequest(accessToken, user?.email);
+
+        // If 401, try refreshing the session once and retry
+        if (edgeRes.status === 401) {
+          const refreshed = await getFreshAccessToken();
+          if (refreshed.accessToken) {
+            accessToken = refreshed.accessToken;
+            user = refreshed.user;
+            edgeRes = await makeDevRequest(accessToken, user?.email);
+          }
+        }
+
+        if (edgeRes.status === 401) {
+          throw new Error(
+            'Your session has expired. Please sign out and sign back in, then try again.'
+          );
+        }
 
         const edgeBody = await edgeRes.json().catch(() => ({}));
         if (!edgeRes.ok) {
