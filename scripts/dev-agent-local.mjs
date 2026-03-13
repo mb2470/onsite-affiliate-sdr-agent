@@ -51,7 +51,7 @@ async function updateTaskStatus(id, action, result = {}) {
 }
 
 async function run() {
-  console.log(`🚀 Agent Securely Active. Repository: ${REPO_DIR}`);
+  console.log(`🚀 Agent Fully Hardened. Repository: ${REPO_DIR}`);
   
   while (true) {
     try {
@@ -64,12 +64,13 @@ async function run() {
         await updateTaskStatus(task.id, 'claim');
 
         try {
-          // Cross-platform structure fetch with relative path normalization
           let structure = "";
           if (process.platform === 'win32') {
             structure = execSync('dir /s /b /a-d', { cwd: REPO_DIR }).toString()
               .split('\n')
-              .map(p => path.relative(REPO_DIR, p.trim()))
+              .map(p => p.trim())
+              .filter(p => p) // Remove empty lines
+              .map(p => path.relative(REPO_DIR, p))
               .join('\n');
           } else {
             structure = execSync('find . -maxdepth 3 -not -path "*/.*"', { cwd: REPO_DIR }).toString();
