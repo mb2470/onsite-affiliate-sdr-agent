@@ -21,7 +21,8 @@ function validatePath(filePath) {
 
 function runGit(args) {
   const result = spawnSync('git', args, { cwd: REPO_DIR, encoding: 'utf8' });
-  if (result.status !== 0 && !result.stderr.includes('nothing to commit')) {
+  // Allow "nothing to commit" or "already up to date" as successful states
+  if (result.status !== 0 && !result.stderr.includes('nothing to commit') && !result.stderr.includes('up to date')) {
     throw new Error(`Git error: ${result.stderr}`);
   }
   return result;
@@ -51,7 +52,7 @@ async function updateTaskStatus(id, action, result = {}) {
 }
 
 async function run() {
-  console.log(`🚀 Agent Fully Hardened. Repository: ${REPO_DIR}`);
+  console.log(`🚀 Agent Active & Sync-Enabled. Repository: ${REPO_DIR}`);
   
   while (true) {
     try {
@@ -64,14 +65,16 @@ async function run() {
         await updateTaskStatus(task.id, 'claim');
 
         try {
+          // 1. PULL LATEST CHANGES BEFORE STARTING
+          console.log("  git: pulling latest from origin/main...");
+          runGit(['pull', 'origin', 'main']);
+
+          // 2. Get Structure
           let structure = "";
           if (process.platform === 'win32') {
             structure = execSync('dir /s /b /a-d', { cwd: REPO_DIR }).toString()
-              .split('\n')
-              .map(p => p.trim())
-              .filter(p => p) // Remove empty lines
-              .map(p => path.relative(REPO_DIR, p))
-              .join('\n');
+              .split('\n').map(p => p.trim()).filter(p => p)
+              .map(p => path.relative(REPO_DIR, p)).join('\n');
           } else {
             structure = execSync('find . -maxdepth 3 -not -path "*/.*"', { cwd: REPO_DIR }).toString();
           }
@@ -101,7 +104,8 @@ async function run() {
               fs.writeFileSync(fullPath, parts.join(edit.replacement));
             }
 
-            console.log("  git: syncing changes...");
+            // 3. Sync Work Back
+            console.log("  git: syncing changes back to cloud...");
             runGit(['add', '.']);
             const commitMsg = `agent: ${task.instruction.slice(0, 50).replace(/["\n\r]/g, '')}`;
             runGit(['commit', '-m', commitMsg]);
