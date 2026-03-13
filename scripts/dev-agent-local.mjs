@@ -19,7 +19,6 @@ function validatePath(filePath) {
   return resolved;
 }
 
-// 1. Immune to Command Injection: Uses Array Arguments
 function runGit(args) {
   const result = spawnSync('git', args, { cwd: REPO_DIR, encoding: 'utf8' });
   if (result.status !== 0 && !result.stderr.includes('nothing to commit')) {
@@ -35,7 +34,9 @@ async function chatWithLLM(messages, options = {}) {
     body: JSON.stringify({ model: LLM_MODEL, messages, temperature: 0.1, ...options })
   });
   const data = await response.json();
-  if (data.error) throw new Error(`LLM Error: ${data.error.message}`);
+  if (data.error || !data.choices?.[0]?.message?.content) {
+    throw new Error(`LLM Error: ${data.error?.message || 'Empty response'}`);
+  }
   return data.choices[0].message.content;
 }
 
@@ -63,11 +64,21 @@ async function run() {
         await updateTaskStatus(task.id, 'claim');
 
         try {
-          // Cross-platform structure fetch
-          const structure = execSync(process.platform === 'win32' ? 'dir /s /b' : 'find . -maxdepth 2 -not -path "*/.*"', { cwd: REPO_DIR }).toString();
+          // Cross-platform structure fetch with relative path normalization
+          let structure = "";
+          if (process.platform === 'win32') {
+            structure = execSync('dir /s /b /a-d', { cwd: REPO_DIR }).toString()
+              .split('\n')
+              .map(p => path.relative(REPO_DIR, p.trim()))
+              .join('\n');
+          } else {
+            structure = execSync('find . -maxdepth 3 -not -path "*/.*"', { cwd: REPO_DIR }).toString();
+          }
           
           const planRes = await chatWithLLM([{ role: 'system', content: "Return ONLY JSON" }, { role: 'user', content: `Task: ${task.instruction}\nStructure:\n${structure}\nReturn JSON: {"files_to_read":["string"]}` }]);
-          const plan = JSON.parse(planRes.match(/\{[\s\S]*\}/)[0]);
+          const planMatch = planRes.match(/\{[\s\S]*\}/);
+          if (!planMatch) throw new Error("LLM returned non-JSON for plan");
+          const plan = JSON.parse(planMatch[0]);
 
           const filesContent = {};
           for (const file of (plan.files_to_read || [])) {
@@ -76,7 +87,9 @@ async function run() {
           }
 
           const editRes = await chatWithLLM([{ role: 'system', content: "Return ONLY JSON" }, { role: 'user', content: `Task: ${task.instruction}\nFiles:\n${JSON.stringify(filesContent)}\nReturn JSON: {"edits":[{"file":"string","original":"string","replacement":"string"}]}` }], { maxTokens: 8192 });
-          const result = JSON.parse(editRes.match(/\{[\s\S]*\}/)[0]);
+          const editMatch = editRes.match(/\{[\s\S]*\}/);
+          if (!editMatch) throw new Error("LLM returned non-JSON for edits");
+          const result = JSON.parse(editMatch[0]);
 
           if (result?.edits && result.edits.length > 0) {
             for (const edit of result.edits) {
@@ -87,10 +100,9 @@ async function run() {
               fs.writeFileSync(fullPath, parts.join(edit.replacement));
             }
 
-            // 2. Safe Git Ops: No shell injection possible here
             console.log("  git: syncing changes...");
             runGit(['add', '.']);
-            const commitMsg = `agent: ${task.instruction.slice(0, 50)}`;
+            const commitMsg = `agent: ${task.instruction.slice(0, 50).replace(/["\n\r]/g, '')}`;
             runGit(['commit', '-m', commitMsg]);
             runGit(['push', 'origin', 'main']);
             
@@ -98,6 +110,7 @@ async function run() {
             console.log(`  🎉 Finished.`);
           } else {
              await updateTaskStatus(task.id, 'complete', { status: 'no_changes' });
+             console.log(`  ℹ️ No changes required.`);
           }
         } catch (taskErr) {
           console.error(`  ❌ Task Failed: ${taskErr.message}`);
