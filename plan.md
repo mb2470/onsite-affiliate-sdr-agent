@@ -1,151 +1,107 @@
-# Refactor Plan: 4 Workflow Optimizations
+# Data Integrity Improvement Plan
 
-## Summary of Changes
-
-Match the codebase to the updated `lead-workflow.mermaid` by implementing these four optimizations:
-
-1. **Flip Verification Waterfall** — Move Apollo email_status triage into contact discovery (not send time)
-2. **Intent-Based Fast-Track** — Technographic signals skip Claude research → jump to HIGH
-3. **Parallel Enrichment + Discovery** — StoreLeads Discovery leads fork enrichment + contacts concurrently
-4. **Backup Title Pivot** — Replace double-check loop with automatic next-title search
+## Overview
+Address missing metrics, data integrity concerns, and structural documentation gaps across the SDR platform.
 
 ---
 
-## Optimization 1: Flip Verification Waterfall
+## Phase 1: Data Integrity Fixes (Code Changes)
 
-**Problem**: Currently, `apollo-find-contacts.js` only inserts `verified` contacts (line 66 filter). All other statuses are silently dropped. Then at send time, `send-email.js` does live Apollo verification + ELV for every email. This is redundant and slow.
+### 1A. Add `bounced_email` column to `activity_log` — Fix fragile bounce detection
+**Problem:** Bounce detection relies on regex parsing of `activity_log.summary` text (`/Bounced:\s+(\S+@\S+)/i`). If format changes, bounce exclusion silently breaks.
 
-**Changes**:
+**Changes:**
+- **New migration** `supabase/add_data_integrity_columns.sql`: Add `bounced_email TEXT` column to `activity_log` with index
+- **`check-bounces.js`** (~line 227): Write `bounced_email` field alongside `summary` when inserting bounce records
+- **`send-email.js`** (`isPermanentlySuppressed`): Query `bounced_email` column directly instead of `ilike` on `summary`
+- **`App.jsx`** (~lines 287-300, 339-352): Replace regex parsing with direct query on `bounced_email` column
+- **`METRICS.md`**: Update bounce detection documentation
 
-### A. `netlify/functions/apollo-find-contacts.js`
-- **Remove** the `email_status === 'verified'` filter on line 66
-- **Instead**, triage by `email_status` during discovery:
-  - `verified` → insert with `apollo_email_status: 'verified'` (no ELV needed)
-  - `extrapolated` / `catch_all` / `unavailable` → insert with status, flag `needs_elv: true`
-  - `invalid` → do NOT insert, trigger backup title pivot (Opt 4)
-- Log the triage decision in the activity log
+### 1B. Add `bounced` boolean to `outreach_log` — Direct bounce flag
+**Problem:** No direct way to know if an outreach row bounced without cross-referencing activity_log.
 
-### B. `netlify/functions/apollo-contacts-background.js`
-- Same triage logic as above (this is the batch version)
-- Currently inserts all statuses but doesn't filter. Add the same triage: insert non-invalid, skip invalid → backup pivot
+**Changes:**
+- **New migration** (same file): Add `bounced BOOLEAN DEFAULT FALSE` to `outreach_log` with index
+- **`check-bounces.js`**: Set `bounced = true` on matching `outreach_log` rows when bounce detected
+- **`App.jsx`**: Simplify "Emails Sent" calculation — `COUNT WHERE bounced != true` instead of building bounced email sets
 
-### C. `netlify/functions/send-email.js` — Simplify send-time verification
-- **Remove** the full Apollo verification loop (lines 161-199) — contacts are already pre-verified
-- **Instead**, check the cached `apollo_email_status` on the contact row:
-  - `verified` → send immediately (skip ELV)
-  - `extrapolated`/`catch_all`/`unavailable` → route to ELV (existing ELV logic stays)
-  - `invalid` or missing → block (shouldn't happen if discovery triage works)
-- This eliminates live Apollo API calls at send time, saving credits + latency
+### 1C. Paginate reply detection — Fix 500-row ceiling
+**Problem:** `check-replies.js` only checks last 500 outreach rows. Orgs past ~500 sends lose reply attribution for older emails.
 
-### D. `netlify/functions/lib/apollo-verify.js` — Keep but repurpose
-- Keep the module for batch verification use cases (e.g., re-verification of stale contacts)
-- The `verifyViaApollo()` function stays as-is for the batch verify endpoint
-- `apollo-verify-contacts.js` endpoint stays as-is (used for manual re-verification)
+**Changes:**
+- **`check-replies.js`** (~line 135-141): Replace `limit(500)` with cursor-based pagination using `sent_at` ranges. Process in batches of 500, but iterate until done (with a max of 5000 rows as a safety cap).
+- **`check-replies.js`** (~line 148-159): Also paginate the `alreadyLogged` dedup query
 
-### E. ELV Batch Verify — Only risky contacts
-- In `agent/ai_sdr_agent.py` `batch-verify` command: add filter to skip contacts where `apollo_email_status = 'verified'`
-- Only ELV-verify contacts with `extrapolated`, `catch_all`, or `unavailable` Apollo status
+### 1D. Add `email_unsubscribed` activity type — Track opt-outs separately
+**Problem:** Unsubscribe/opt-out replies are counted as regular replies, inflating response rate.
 
----
+**Changes:**
+- **`check-replies.js`**: Add unsubscribe detection patterns (e.g., "unsubscribe", "remove me", "stop emailing", "opt out", "take me off"). When detected, log as `email_unsubscribed` instead of `email_reply`.
+- **`App.jsx`**: Exclude `email_unsubscribed` from reply counts in response rate calculation
+- **`METRICS.md`**: Document new activity type
 
-## Optimization 2: Intent-Based Fast-Track
+### 1E. Sent count reconciliation — Fix outreach_log vs activity_log inconsistency
+**Problem:** "Emails Sent" in App.jsx uses `outreach_log`, but "Emails Today" in AgentMonitor uses `activity_log`. If one write fails, numbers diverge.
 
-**Problem**: All StoreLeads-enriched leads go through the same ICP scoring. Obvious winners (Shopify Plus, high-signal technographics) still get scored normally and may end up in the expensive Claude research path.
-
-**Changes**:
-
-### A. `netlify/functions/lib/icp-scoring.js` — Add `checkFastTrack()`
-- New exported function: `checkFastTrack(storeLeadsData)`
-- Returns `{ fastTrack: true/false, reason: string }`
-- Checks for:
-  - `plan` contains "Shopify Plus" or "Enterprise" → fast track
-  - `platform` is "Shopify" + `product_count >= 500` + `estimated_sales >= 500000` (high-volume signal)
-- Fast-tracked leads get `icp_fit: 'HIGH'` immediately, skip Claude research
-
-### B. `src/services/enrichService.js` — Add fast-track check after StoreLeads
-- After `tryStoreLeads()` returns data, call `checkFastTrack()` logic (inline, since frontend can't import CommonJS)
-- If fast-tracked: set `icp_fit: 'HIGH'` directly, add `fit_reason: 'Fast-track: Shopify Plus'`
-- Skip Apollo org enrichment and Claude research entirely
-
-### C. `netlify/functions/storeleads-bulk-background.js` — Add fast-track in batch
-- After scoring each domain, check `checkFastTrack()` before final ICP assignment
-- If fast-tracked: override to HIGH regardless of normal scoring
-
-### D. `netlify/functions/storeleads-discover.js` — Add fast-track in discovery
-- Same pattern: check fast-track before normal scoring
+**Changes:**
+- **`send-email.js`** (~lines 569-580): Add `gmail_message_id` to the outreach_log insert (currently missing for frontend sends).
+- **`AgentMonitor.jsx`** and **`AgentDashboard.jsx`**: Switch "Emails Today" to use `outreach_log` with `sent_at >= todayStart` instead of `activity_log`, making all email count metrics consistent.
+- **`METRICS.md`**: Document that `outreach_log` is the single source of truth for all sent email counts.
 
 ---
 
-## Optimization 3: Parallel Enrichment + Discovery
+## Phase 2: Missing Metrics (New Features)
 
-**Problem**: For StoreLeads Discovery leads (source: `storeleads_discovery`), the flow is sequential: enrich → score ICP → then find contacts. Contact discovery waits for enrichment to complete.
+### 2A. Contact verification pass/fail dashboard metric
+**Problem:** Verification outcomes exist in activity_log but aren't surfaced on dashboards.
 
-**Changes**:
+**Changes:**
+- **`App.jsx`** (in `loadGlobalData`): Add queries to count `email_verified` activity entries. Count total verifications and use bounced_email + blocked statuses to derive pass/fail rates. Surface as a "Verification" stat in the header bar.
+- **`AgentDashboard.jsx`**: Add verification stats to today's stats grid.
 
-### A. `netlify/functions/storeleads-discover.js`
-- After inserting a new HIGH lead, immediately trigger contact discovery in parallel
-- Use `Promise.allSettled()` to fire Apollo contact search alongside the next batch of enrichments
-- Add a simple in-function contact search (reuse `searchApollo` + `enrichPeople` logic from `apollo-contacts-background.js`)
+### 2B. Follow-up metrics on frontend
+**Problem:** Follow-up data exists in `outreach_log.followup_number` but dashboards don't surface follow-up-specific stats.
 
-### B. `netlify/functions/storeleads-top500.js`
-- Same pattern: after inserting HIGH leads, trigger Apollo contact search in parallel
-- Already has a contact matching loop at the end (lines 132-161) — enhance it to also call Apollo for non-matched HIGH leads
+**Changes:**
+- **`AgentMonitor.jsx`** (in `loadRangeStats`): Add queries that break down sent/replied by `followup_number` from `outreach_log`. Show FU#0 (initial) vs FU#1 vs FU#2 reply rates.
+- **`App.jsx`**: In the outreach stats section, show follow-up breakdown (initial sent, FU#1 sent, FU#2 sent, with reply rates per step).
 
-### C. `src/services/contactService.js` — No changes needed
-- The frontend `findContacts()` already does DB check → Apollo fallback
-- Parallel discovery runs server-side in the background functions
+### 2C. Document open tracking as a known gap
+**Problem:** No open tracking exists. The legacy `emails` table has `opened`/`opened_at` columns but they're never populated.
 
----
-
-## Optimization 4: Backup Title Pivot
-
-**Problem**: The current "double-check loop" in `apollo-verify.js` re-searches the *same person* by name. If their email is invalid, it tries to find them at a new company. But the mermaid now says: pivot to the *next title* at the same company instead.
-
-**Changes**:
-
-### A. `netlify/functions/lib/apollo-verify.js` — Replace `apolloDoubleCheck()` with `backupTitlePivot()`
-- **Remove**: `apolloDoubleCheck()` (searches same person by name)
-- **Add**: `backupTitlePivot(supabase, { domain, exhaustedTitles, leadId })`
-  - Takes the domain + list of already-tried titles
-  - Searches Apollo for the next-best title at that domain:
-    - Priority: Marketing Leader → Founder → Ecom Manager → Growth Lead → Brand/Content
-  - If found with verified email → return new contact
-  - If all titles exhausted → return null
-- Update `verifyContactsBatch()` to call `backupTitlePivot()` instead of `apolloDoubleCheck()` on discard
-
-### B. `netlify/functions/apollo-find-contacts.js` — Integrate title pivot on invalid
-- When a contact has `email_status: 'invalid'`, don't just skip — call title pivot
-- Pass the failed title to the exclusion list so the pivot tries the next one
-
-### C. `netlify/functions/apollo-contacts-background.js` — Same integration
-- On invalid email status, pivot to next title rather than moving on
-
-### D. `netlify/functions/apollo-verify-contacts.js` — Update endpoint
-- Replace `refreshed` results (from double-check) with `pivoted` results (from title pivot)
-- Update response shape accordingly
+**Changes:**
+- **`METRICS.md`**: Add "Known Gaps" section documenting that open tracking is not implemented. Note that implementing it would require a tracking pixel service (not feasible with plain-text Gmail sends).
 
 ---
 
-## Files Changed (Summary)
+## Phase 3: Documentation (METRICS.md Updates)
 
-| File | Opt | Change |
-|------|-----|--------|
-| `netlify/functions/lib/icp-scoring.js` | 2 | Add `checkFastTrack()` |
-| `netlify/functions/lib/apollo-verify.js` | 1,4 | Replace `apolloDoubleCheck` with `backupTitlePivot`, keep verify functions |
-| `netlify/functions/apollo-find-contacts.js` | 1,4 | Triage by email_status, integrate title pivot |
-| `netlify/functions/apollo-contacts-background.js` | 1,3,4 | Triage + title pivot + parallel triggers |
-| `netlify/functions/send-email.js` | 1 | Remove live Apollo calls, use cached status from DB |
-| `netlify/functions/apollo-verify-contacts.js` | 4 | Replace refreshed with pivoted |
-| `netlify/functions/storeleads-bulk-background.js` | 2 | Add fast-track check |
-| `netlify/functions/storeleads-discover.js` | 2,3 | Fast-track + parallel contact discovery for HIGH leads |
-| `netlify/functions/storeleads-top500.js` | 2,3 | Fast-track + parallel contact discovery for HIGH leads |
-| `src/services/enrichService.js` | 2 | Add fast-track check after StoreLeads |
+### 3A. Add missing table schemas
+- Document `contact_database` full schema (already in schema.sql but not referenced in METRICS.md)
+- Document `agent_settings` table shape (columns, org_id scoping, defaults, who creates it)
+- Document `contacts` table schema (especially verification caching columns)
 
-## Files NOT Changed
-- `src/services/contactService.js` — No changes needed (already does DB → Apollo fallback)
-- `src/services/exportService.js` — No changes needed (just calls send-email)
-- `netlify/functions/storeleads-single.js` — Returns raw data, no scoring logic
-- `agent/ai_sdr_agent.py` — Only the batch-verify filter for apollo_email_status='verified' skip
+### 3B. Document error/retry semantics
+- What happens when Gmail API fails mid-send in `send-email.js` (outreach_log not written, activity_log not written — clean failure because Gmail send happens first)
+- What happens when Gmail succeeds but Supabase write fails (email sent but not tracked — document as a known risk; gmail_message_id can be used for manual reconciliation)
+- Document that the Python agent has similar partial-write risks
 
-## Build Verification
-- Run `npm run build` after all changes to verify no regressions
+### 3C. Document all activity types comprehensively
+- Add `email_unsubscribed` (new)
+- Document `followup_sent` processing details
+- Note which activity types feed which metrics
+
+---
+
+## File Change Summary
+
+| File | Change Type | Description |
+|------|------------|-------------|
+| `supabase/add_data_integrity_columns.sql` | **New** | Migration: `bounced_email` on activity_log, `bounced` on outreach_log |
+| `netlify/functions/check-bounces.js` | Edit | Write `bounced_email` column; set `outreach_log.bounced` flag |
+| `netlify/functions/check-replies.js` | Edit | Paginate past 500-row limit; detect unsubscribes |
+| `netlify/functions/send-email.js` | Edit | Use `bounced_email` column for suppression; add `gmail_message_id` to outreach_log |
+| `src/App.jsx` | Edit | Use `bounced`/`bounced_email` columns; add verification & follow-up stats; exclude unsubscribes |
+| `src/AgentMonitor.jsx` | Edit | Switch to `outreach_log` for sent counts; add follow-up breakdown |
+| `src/AgentDashboard.jsx` | Edit | Switch to `outreach_log` for sent counts; add verification stats |
+| `METRICS.md` | Edit | Document all schema gaps, error semantics, known gaps, new activity types |
