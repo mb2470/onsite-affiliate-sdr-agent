@@ -19,7 +19,7 @@ export default function AgentMonitor() {
   const [dateRange, setDateRange] = useState('today');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
-  const [rangeStats, setRangeStats] = useState({ sent: 0, replies: 0, bounces: 0, replyRate: 0 });
+  const [rangeStats, setRangeStats] = useState({ sent: 0, replies: 0, bounces: 0, replyRate: 0, initialSent: 0, initialReplied: 0, fu1Sent: 0, fu1Replied: 0, fu2Sent: 0, fu2Replied: 0 });
 
   useEffect(() => {
     loadData();
@@ -48,14 +48,14 @@ export default function AgentMonitor() {
     setActiveOrgId(resolvedOrgId);
 
     // Load today's stats — scoped by org_id
+    // Use outreach_log for sent count (consistent with App.jsx)
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
     let emailsTodayQuery = supabase
-      .from('activity_log')
+      .from('outreach_log')
       .select('*', { count: 'exact', head: true })
-      .in('activity_type', ['email_sent', 'email_exported'])
-      .gte('created_at', todayStart.toISOString());
+      .gte('sent_at', todayStart.toISOString());
     if (resolvedOrgId) emailsTodayQuery = emailsTodayQuery.eq('org_id', resolvedOrgId);
     const { count: emailsToday } = await emailsTodayQuery;
 
@@ -242,7 +242,17 @@ export default function AgentMonitor() {
   const loadRangeStats = async () => {
     const { start, end } = getDateRange();
 
-    const rangeQuery = (activityType) => {
+    // Use outreach_log for sent counts (consistent source of truth)
+    let sentQuery = supabase
+      .from('outreach_log')
+      .select('*', { count: 'exact', head: true })
+      .gte('sent_at', start)
+      .lte('sent_at', end);
+    if (activeOrgId) sentQuery = sentQuery.eq('org_id', activeOrgId);
+    const { count: sent } = await sentQuery;
+
+    // Replies and bounces still from activity_log (event-based)
+    const activityRangeQuery = (activityType) => {
       let q = supabase
         .from('activity_log')
         .select('*', { count: 'exact', head: true })
@@ -257,13 +267,53 @@ export default function AgentMonitor() {
       return q;
     };
 
-    const { count: sent } = await rangeQuery(['email_sent', 'email_exported']);
-    const { count: replies } = await rangeQuery('email_reply');
-    const { count: bounces } = await rangeQuery('email_bounced');
+    const { count: replies } = await activityRangeQuery('email_reply');
+    const { count: bounces } = await activityRangeQuery('email_bounced');
+
+    // Follow-up breakdown from outreach_log
+    const fuQuery = (fuNum) => {
+      let q = supabase
+        .from('outreach_log')
+        .select('*', { count: 'exact', head: true })
+        .gte('sent_at', start)
+        .lte('sent_at', end)
+        .eq('followup_number', fuNum);
+      if (activeOrgId) q = q.eq('org_id', activeOrgId);
+      return q;
+    };
+
+    const fuRepliedQuery = (fuNum) => {
+      let q = supabase
+        .from('outreach_log')
+        .select('*', { count: 'exact', head: true })
+        .gte('sent_at', start)
+        .lte('sent_at', end)
+        .eq('followup_number', fuNum)
+        .not('replied_at', 'is', null);
+      if (activeOrgId) q = q.eq('org_id', activeOrgId);
+      return q;
+    };
+
+    const [
+      { count: initialSent },
+      { count: fu1Sent },
+      { count: fu2Sent },
+      { count: initialReplied },
+      { count: fu1Replied },
+      { count: fu2Replied },
+    ] = await Promise.all([
+      fuQuery(0), fuQuery(1), fuQuery(2),
+      fuRepliedQuery(0), fuRepliedQuery(1), fuRepliedQuery(2),
+    ]);
 
     const replyRate = sent > 0 ? ((replies || 0) / sent * 100).toFixed(1) : 0;
 
-    setRangeStats({ sent: sent || 0, replies: replies || 0, bounces: bounces || 0, replyRate });
+    setRangeStats({
+      sent: sent || 0, replies: replies || 0, bounces: bounces || 0, replyRate,
+      initialSent: initialSent || 0, initialReplied: initialReplied || 0,
+      fu1Sent: fu1Sent || 0, fu1Replied: fu1Replied || 0,
+      fu2Sent: fu2Sent || 0, fu2Replied: fu2Replied || 0,
+    });
   };
 
   const handleCheckReplies = async () => {
@@ -421,6 +471,22 @@ export default function AgentMonitor() {
             <span style={statLabelStyle}>Reply Rate</span>
           </div>
         </div>
+        {(rangeStats.initialSent > 0 || rangeStats.fu1Sent > 0) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginTop: '12px' }}>
+          <div style={{ ...statBoxStyle, textAlign: 'center' }}>
+            <span style={{ ...statNumStyle, fontSize: '16px', color: 'rgba(255,255,255,0.7)' }}>{rangeStats.initialSent}</span>
+            <span style={statLabelStyle}>Initial ({rangeStats.initialSent > 0 ? ((rangeStats.initialReplied / rangeStats.initialSent) * 100).toFixed(1) : '0.0'}% reply)</span>
+          </div>
+          <div style={{ ...statBoxStyle, textAlign: 'center' }}>
+            <span style={{ ...statNumStyle, fontSize: '16px', color: 'rgba(255,255,255,0.7)' }}>{rangeStats.fu1Sent}</span>
+            <span style={statLabelStyle}>FU#1 ({rangeStats.fu1Sent > 0 ? ((rangeStats.fu1Replied / rangeStats.fu1Sent) * 100).toFixed(1) : '0.0'}% reply)</span>
+          </div>
+          <div style={{ ...statBoxStyle, textAlign: 'center' }}>
+            <span style={{ ...statNumStyle, fontSize: '16px', color: 'rgba(255,255,255,0.7)' }}>{rangeStats.fu2Sent}</span>
+            <span style={statLabelStyle}>FU#2 ({rangeStats.fu2Sent > 0 ? ((rangeStats.fu2Replied / rangeStats.fu2Sent) * 100).toFixed(1) : '0.0'}% reply)</span>
+          </div>
+        </div>
+        )}
       </div>
 
       {/* ── Agent Settings (Editable) ── */}

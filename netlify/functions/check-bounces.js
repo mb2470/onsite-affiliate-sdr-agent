@@ -132,17 +132,19 @@ exports.handler = async (event) => {
     console.log(`🚫 Bounced emails found: ${bouncedEmails.join(', ')}`);
 
     // Filter out bounces we already processed (already logged in activity_log)
+    // Use the structured bounced_email column (preferred), fall back to regex on summary
     const { data: alreadyLogged } = await supabase
       .from('activity_log')
-      .select('summary')
+      .select('bounced_email, summary')
       .eq('org_id', orgId)
       .eq('activity_type', 'email_bounced')
       .order('created_at', { ascending: false })
-      .limit(200);
+      .limit(500);
 
     const alreadyProcessed = new Set(
       (alreadyLogged || []).map(a => {
-        const match = a.summary.match(/Bounced:\s+(\S+@\S+)/);
+        if (a.bounced_email) return a.bounced_email.toLowerCase();
+        const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/);
         return match ? match[1].toLowerCase() : '';
       }).filter(Boolean)
     );
@@ -223,10 +225,19 @@ exports.handler = async (event) => {
         }
       }
 
+      // Mark matching outreach_log rows as bounced
+      await supabase
+        .from('outreach_log')
+        .update({ bounced: true })
+        .eq('org_id', orgId)
+        .eq('contact_email', email);
+
       // Log activity with the actual bounce date (not today)
+      // Write bounced_email as a structured column for reliable querying
       await supabase.from('activity_log').insert({
         org_id: orgId,
         activity_type: 'email_bounced',
+        bounced_email: email,
         summary: `Bounced: ${email} — removed from contacts`,
         status: 'failed',
         created_at: bounceMap[email] || new Date().toISOString(),

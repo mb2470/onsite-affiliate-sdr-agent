@@ -49,18 +49,39 @@ function AgentDashboard() {
         return count || 0;
       };
 
-      // Load today's stats from activity_log (source of truth)
-      const emailsSent = await countActivity(['email_sent', 'email_exported']);
+      // Emails sent today from outreach_log (consistent source of truth)
+      let emailsSentQuery = supabase
+        .from('outreach_log')
+        .select('*', { count: 'exact', head: true })
+        .gte('sent_at', todayIso);
+      if (orgId) emailsSentQuery = emailsSentQuery.eq('org_id', orgId);
+      const { count: emailsSent } = await emailsSentQuery;
+
       const emailsFailed = await countActivity('email_failed');
       const leadsEnriched = await countActivity('lead_enriched');
       const contactsFound = await countActivity(['contacts_found', 'contact_matching', 'apollo_discovery']);
+
+      // Verification stats today
+      const totalVerified = await countActivity('email_verified');
+      const verifyBlocked = await countActivity('email_verified');
+      // Re-query with blocked filter for accurate count
+      let blockedQuery = supabase
+        .from('activity_log')
+        .select('*', { count: 'exact', head: true })
+        .eq('activity_type', 'email_verified')
+        .ilike('summary', '%Blocked%')
+        .gte('created_at', todayIso);
+      if (orgId) blockedQuery = blockedQuery.eq('org_id', orgId);
+      const { count: verifyBlockedCount } = await blockedQuery;
 
       setStats({
         leads_enriched: leadsEnriched,
         contacts_found: contactsFound,
         emails_drafted: 0,
-        emails_sent: emailsSent,
+        emails_sent: emailsSent || 0,
         emails_failed: emailsFailed,
+        verifications_total: totalVerified,
+        verifications_blocked: verifyBlockedCount || 0,
       });
 
       // Load recent activity
@@ -176,6 +197,14 @@ function AgentDashboard() {
           </div>
           <div className="stat-label">Remaining Today</div>
         </div>
+        {stats?.verifications_total > 0 && (
+        <div className="stat-card">
+          <div className="stat-value" style={{ color: stats.verifications_blocked > 0 ? '#f59e0b' : '#4ade80' }}>
+            {stats.verifications_total > 0 ? (((stats.verifications_total - stats.verifications_blocked) / stats.verifications_total) * 100).toFixed(0) : 0}%
+          </div>
+          <div className="stat-label">Verify Pass Rate ({stats.verifications_total} checked)</div>
+        </div>
+        )}
       </div>
 
       <div className="dashboard-content">

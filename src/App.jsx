@@ -73,8 +73,9 @@ function AuthenticatedApp({ session }) {
   const [unenrichedCount, setUnenrichedCount] = useState(0);
   const [icpCounts, setIcpCounts] = useState({ high: 0, medium: 0, low: 0 });
   const [emailsSent, setEmailsSent] = useState(0);
-  const [outreachStats, setOutreachStats] = useState({ uniqueLeads: 0, uniqueContacts: 0, repliedLeads: 0, repliedContacts: 0 });
+  const [outreachStats, setOutreachStats] = useState({ uniqueLeads: 0, uniqueContacts: 0, repliedLeads: 0, repliedContacts: 0, unsubscribes: 0, initialSent: 0, initialReplied: 0, fu1Sent: 0, fu1Replied: 0, fu2Sent: 0, fu2Replied: 0 });
   const [deliverabilityStats, setDeliverabilityStats] = useState({ delivered: 0, sent: 0, percent: '0.0' });
+  const [verificationStats, setVerificationStats] = useState({ total: 0, passed: 0, blocked: 0, passRate: '0.0' });
   const [isCheckingBounces, setIsCheckingBounces] = useState(false);
   const [bounceResult, setBounceResult] = useState(null);
   const [agentSettings, setAgentSettings] = useState(null);
@@ -277,45 +278,20 @@ function AuthenticatedApp({ session }) {
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
-    // Emails sent (lifetime): total outreach minus bounced
+    // Emails sent (lifetime): total non-bounced outreach
     try {
       const { count: totalOutreach } = await supabase
         .from('outreach_log')
         .select('*', { count: 'exact', head: true })
-        .eq('org_id', orgId);
-
-      const { data: bounceActivity } = await supabase
-        .from('activity_log')
-        .select('summary')
         .eq('org_id', orgId)
-        .eq('activity_type', 'email_bounced');
+        .or('bounced.is.null,bounced.eq.false');
 
-      const bouncedEmails = new Set(
-        (bounceActivity || [])
-          .map(a => {
-            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
-            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
-          })
-          .filter(Boolean)
-      );
-
-      // Count bounced outreach rows using the bounced emails set
-      let bouncedOutreachCount = 0;
-      if (bouncedEmails.size > 0) {
-        const bouncedArr = [...bouncedEmails];
-        const { count: bouncedCount } = await supabase
-          .from('outreach_log')
-          .select('*', { count: 'exact', head: true })
-          .eq('org_id', orgId)
-          .in('contact_email', bouncedArr);
-        bouncedOutreachCount = bouncedCount || 0;
-      }
-
-      setEmailsSent((totalOutreach || 0) - bouncedOutreachCount);
+      setEmailsSent(totalOutreach || 0);
     } catch (e) { console.error(e); }
 
     // Outreach stats: contacted/replied leads & contacts from outreach_log
     // Paginate to avoid Supabase's 1000-row default limit
+    // Uses bounced column directly instead of regex on activity_log summary
     try {
       let outreach = [];
       let outreachFrom = 0;
@@ -324,7 +300,7 @@ function AuthenticatedApp({ session }) {
       while (hasMoreOutreach) {
         const { data } = await supabase
           .from('outreach_log')
-          .select('lead_id, website, contact_email, replied_at')
+          .select('lead_id, website, contact_email, replied_at, bounced, followup_number')
           .eq('org_id', orgId)
           .range(outreachFrom, outreachFrom + outreachPageSize - 1);
         if (data && data.length > 0) {
@@ -336,24 +312,10 @@ function AuthenticatedApp({ session }) {
         }
       }
 
-      const { data: bounceActivity } = await supabase
-        .from('activity_log')
-        .select('summary')
-        .eq('org_id', orgId)
-        .eq('activity_type', 'email_bounced');
-
-      const bouncedEmails = new Set(
-        (bounceActivity || [])
-          .map(a => {
-            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
-            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
-          })
-          .filter(Boolean)
-      );
-
+      // Filter out bounced rows using the structured column
       const rows = outreach.filter(r => {
         const email = r.contact_email?.toLowerCase();
-        return email && !bouncedEmails.has(email);
+        return email && !r.bounced;
       });
 
       const toLeadKey = (row) => row.lead_id || (row.website ? `website:${row.website}` : null);
@@ -361,15 +323,45 @@ function AuthenticatedApp({ session }) {
       const uniqueContacts = new Set(rows.map(r => r.contact_email?.toLowerCase()).filter(Boolean));
       const uniqueLeads = new Set(rows.map(toLeadKey).filter(Boolean));
 
-      const repliedRows = rows.filter(r => !!r.replied_at);
+      // Exclude unsubscribes from replied counts by checking activity_log
+      const { data: unsubActivity } = await supabase
+        .from('activity_log')
+        .select('summary')
+        .eq('org_id', orgId)
+        .eq('activity_type', 'email_unsubscribed');
+
+      const unsubEmails = new Set(
+        (unsubActivity || []).map(a => {
+          const match = (a.summary || '').match(/from\s+(\S+@\S+)/i);
+          return match ? match[1].toLowerCase() : '';
+        }).filter(Boolean)
+      );
+
+      const repliedRows = rows.filter(r => !!r.replied_at && !unsubEmails.has(r.contact_email?.toLowerCase()));
       const repliedContacts = new Set(repliedRows.map(r => r.contact_email?.toLowerCase()).filter(Boolean));
       const repliedLeads = new Set(repliedRows.map(toLeadKey).filter(Boolean));
+
+      // Follow-up breakdown
+      const initialRows = rows.filter(r => !r.followup_number || r.followup_number === 0);
+      const fu1Rows = rows.filter(r => r.followup_number === 1);
+      const fu2Rows = rows.filter(r => r.followup_number === 2);
+      const initialReplied = initialRows.filter(r => !!r.replied_at && !unsubEmails.has(r.contact_email?.toLowerCase())).length;
+      const fu1Replied = fu1Rows.filter(r => !!r.replied_at && !unsubEmails.has(r.contact_email?.toLowerCase())).length;
+      const fu2Replied = fu2Rows.filter(r => !!r.replied_at && !unsubEmails.has(r.contact_email?.toLowerCase())).length;
 
       setOutreachStats({
         uniqueLeads: uniqueLeads.size,
         uniqueContacts: uniqueContacts.size,
         repliedLeads: repliedLeads.size,
         repliedContacts: repliedContacts.size,
+        unsubscribes: unsubEmails.size,
+        // Follow-up breakdown
+        initialSent: initialRows.length,
+        initialReplied,
+        fu1Sent: fu1Rows.length,
+        fu1Replied,
+        fu2Sent: fu2Rows.length,
+        fu2Replied,
       });
     } catch (e) { console.error(e); }
 
@@ -388,13 +380,13 @@ function AuthenticatedApp({ session }) {
 
       if (sentError) console.error('Deliverability sent query error:', sentError);
 
-      // Count bounce events in the same trailing window
+      // Count bounced outreach rows in the same window (structured column)
       const { count: bouncedCountRaw, error: bounceError } = await supabase
-        .from('activity_log')
+        .from('outreach_log')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
-        .eq('activity_type', 'email_bounced')
-        .gte('created_at', trailingStartIso);
+        .eq('bounced', true)
+        .gte('sent_at', trailingStartIso);
 
       if (bounceError) console.error('Deliverability bounce query error:', bounceError);
 
@@ -411,10 +403,27 @@ function AuthenticatedApp({ session }) {
       setAgentSettings(data);
     } catch (e) { console.error(e); }
 
+    // Verification pass/fail stats
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const { data } = await supabase.from('daily_stats').select('*').eq('org_id', orgId).eq('date', today).maybeSingle();
-      setStats(data || { leads_enriched: 0, contacts_found: 0, emails_drafted: 0, emails_sent: 0 });
+      const { count: totalVerified } = await supabase
+        .from('activity_log')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .eq('activity_type', 'email_verified');
+
+      const { count: verifyBlocked } = await supabase
+        .from('activity_log')
+        .select('*', { count: 'exact', head: true })
+        .eq('org_id', orgId)
+        .eq('activity_type', 'email_verified')
+        .ilike('summary', '%Blocked%');
+
+      setVerificationStats({
+        total: totalVerified || 0,
+        passed: (totalVerified || 0) - (verifyBlocked || 0),
+        blocked: verifyBlocked || 0,
+        passRate: totalVerified > 0 ? (((totalVerified - (verifyBlocked || 0)) / totalVerified) * 100).toFixed(1) : '0.0',
+      });
     } catch (e) { console.error(e); }
 
     try {
@@ -1356,7 +1365,38 @@ function AuthenticatedApp({ session }) {
               <span className="outreach-stat-label">{deliverabilityStats.delivered}/{deliverabilityStats.sent}</span>
             </div>
           </div>
+          {verificationStats.total > 0 && (<>
+            <div style={{ width: '1px', backgroundColor: 'rgba(255,255,255,0.12)', alignSelf: 'stretch', margin: '4px 0' }} />
+            <div className="outreach-stat-group">
+              <span className="outreach-stat-title">Verification</span>
+              <div className="outreach-stat-row">
+                <span className="outreach-stat-value" style={{ color: verificationStats.passRate >= 70 ? '#4ade80' : '#f59e0b' }}>{verificationStats.passRate}%</span>
+                <span className="outreach-stat-label">{verificationStats.passed}/{verificationStats.total} pass</span>
+              </div>
+            </div>
+          </>)}
+          {outreachStats.unsubscribes > 0 && (<>
+            <div style={{ width: '1px', backgroundColor: 'rgba(255,255,255,0.12)', alignSelf: 'stretch', margin: '4px 0' }} />
+            <div className="outreach-stat-group">
+              <span className="outreach-stat-title">Opt-outs</span>
+              <div className="outreach-stat-row">
+                <span className="outreach-stat-value" style={{ color: '#f87171' }}>{outreachStats.unsubscribes}</span>
+              </div>
+            </div>
+          </>)}
         </div>
+        {(outreachStats.initialSent > 0 || outreachStats.fu1Sent > 0) && (
+        <div className="header-outreach-stats" style={{ marginTop: '4px', fontSize: '10px' }}>
+          <div className="outreach-stat-group">
+            <span className="outreach-stat-title">Sequence Breakdown</span>
+            <div className="outreach-stat-row" style={{ gap: '12px' }}>
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}>Initial: {outreachStats.initialSent} sent, {outreachStats.initialReplied} replied ({outreachStats.initialSent > 0 ? ((outreachStats.initialReplied / outreachStats.initialSent) * 100).toFixed(1) : '0.0'}%)</span>
+              {outreachStats.fu1Sent > 0 && <span style={{ color: 'rgba(255,255,255,0.6)' }}>FU#1: {outreachStats.fu1Sent} sent, {outreachStats.fu1Replied} replied ({((outreachStats.fu1Replied / outreachStats.fu1Sent) * 100).toFixed(1)}%)</span>}
+              {outreachStats.fu2Sent > 0 && <span style={{ color: 'rgba(255,255,255,0.6)' }}>FU#2: {outreachStats.fu2Sent} sent, {outreachStats.fu2Replied} replied ({((outreachStats.fu2Replied / outreachStats.fu2Sent) * 100).toFixed(1)}%)</span>}
+            </div>
+          </div>
+        </div>
+        )}
         <div className="header-stats">
           <div className="stat">
             <span className="stat-value">{totalLeadCount}</span>
