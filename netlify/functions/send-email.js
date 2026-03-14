@@ -37,15 +37,27 @@ async function getCachedApolloStatus(email, orgId) {
  * We treat bounced contacts as permanently suppressed.
  */
 async function isPermanentlySuppressed(email, orgId) {
+  // Primary: use the structured bounced_email column
   const { data } = await supabase
     .from('activity_log')
     .select('id')
     .eq('org_id', orgId)
     .eq('activity_type', 'email_bounced')
-    .ilike('summary', `Bounced: ${email} %`)
+    .eq('bounced_email', email.toLowerCase())
     .limit(1);
 
-  return !!(data && data.length > 0);
+  if (data && data.length > 0) return true;
+
+  // Fallback: check outreach_log.bounced flag
+  const { data: outreachData } = await supabase
+    .from('outreach_log')
+    .select('id')
+    .eq('org_id', orgId)
+    .eq('contact_email', email.toLowerCase())
+    .eq('bounced', true)
+    .limit(1);
+
+  return !!(outreachData && outreachData.length > 0);
 }
 
 /**
@@ -577,6 +589,7 @@ exports.handler = async (event) => {
         email_body: body,
         sent_at: new Date().toISOString(),
         org_id: orgId,
+        gmail_message_id: sendData.id || null,
       };
     });
 

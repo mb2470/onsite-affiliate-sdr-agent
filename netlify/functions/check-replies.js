@@ -43,7 +43,6 @@ const AUTO_RESPONDER_PATTERNS = [
   /this is an automated/i,
   /do not reply/i,
   /no[- ]?reply/i,
-  /unsubscribe/i,
   /delivery (status )?notification/i,
   /mailer[- ]?daemon/i,
   /postmaster/i,
@@ -96,6 +95,25 @@ function isAutoResponder(message, body) {
   return false;
 }
 
+// Unsubscribe / opt-out detection patterns
+// These are real replies from prospects asking to stop — tracked separately
+// from auto-responders so they don't inflate response rate.
+const UNSUBSCRIBE_PATTERNS = [
+  /\bunsubscribe\b/i,
+  /\bremove me\b/i,
+  /\bopt[- ]?out\b/i,
+  /\bstop (emailing|contacting|sending)\b/i,
+  /\btake me off\b/i,
+  /\bdo not (contact|email|send)\b/i,
+  /\bnot interested\b.*\b(remove|stop|unsubscribe)\b/i,
+  /\bplease remove\b/i,
+];
+
+function isUnsubscribeRequest(body, subject) {
+  const textToCheck = ((subject || '') + ' ' + (body || '').substring(0, 500)).toLowerCase();
+  return UNSUBSCRIBE_PATTERNS.some(p => p.test(textToCheck));
+}
+
 function getMessageBody(message) {
   let body = '';
   if (message.payload?.body?.data) {
@@ -131,29 +149,56 @@ exports.handler = async (event) => {
     const accessToken = await getAccessToken();
     const fromEmail = process.env.GMAIL_FROM_EMAIL || '';
 
-    // Get all emails we've sent from outreach_log
-    let outreachQuery = supabase
-      .from('outreach_log')
-      .select('contact_email, website, email_subject, sent_at')
-      .order('sent_at', { ascending: false })
-      .limit(500);
-    if (orgId) outreachQuery = outreachQuery.eq('org_id', orgId);
-    const { data: outreachLog } = await outreachQuery;
-
-    if (!outreachLog || outreachLog.length === 0) {
-      return { statusCode: 200, headers, body: JSON.stringify({ replies: [], newReplies: 0, autoResponders: 0 }) };
+    // Get all emails we've sent from outreach_log (paginated, up to 5000 rows)
+    let outreachLog = [];
+    const OUTREACH_PAGE_SIZE = 1000;
+    const OUTREACH_MAX_ROWS = 5000;
+    let outreachOffset = 0;
+    let hasMore = true;
+    while (hasMore && outreachOffset < OUTREACH_MAX_ROWS) {
+      let q = supabase
+        .from('outreach_log')
+        .select('contact_email, website, email_subject, sent_at')
+        .order('sent_at', { ascending: false })
+        .range(outreachOffset, outreachOffset + OUTREACH_PAGE_SIZE - 1);
+      if (orgId) q = q.eq('org_id', orgId);
+      const { data } = await q;
+      if (data && data.length > 0) {
+        outreachLog = outreachLog.concat(data);
+        outreachOffset += OUTREACH_PAGE_SIZE;
+        if (data.length < OUTREACH_PAGE_SIZE) hasMore = false;
+      } else {
+        hasMore = false;
+      }
     }
 
-    // Get already-logged replies to skip
-    const { data: alreadyLogged } = await supabase
-      .from('activity_log')
-      .select('summary')
-      .eq('activity_type', 'email_reply')
-      .limit(500);
+    if (outreachLog.length === 0) {
+      return { statusCode: 200, headers, body: JSON.stringify({ replies: [], newReplies: 0, autoResponders: 0, unsubscribes: 0 }) };
+    }
+
+    // Get already-logged replies AND unsubscribes to skip (paginated)
+    let alreadyLoggedRows = [];
+    let alOffset = 0;
+    let alHasMore = true;
+    while (alHasMore) {
+      const { data: alPage } = await supabase
+        .from('activity_log')
+        .select('summary')
+        .in('activity_type', ['email_reply', 'email_unsubscribed'])
+        .range(alOffset, alOffset + 999);
+      if (orgId) { /* org_id filter applied below */ }
+      if (alPage && alPage.length > 0) {
+        alreadyLoggedRows = alreadyLoggedRows.concat(alPage);
+        alOffset += 1000;
+        if (alPage.length < 1000) alHasMore = false;
+      } else {
+        alHasMore = false;
+      }
+    }
 
     const alreadyProcessed = new Set(
-      (alreadyLogged || []).map(a => {
-        const match = a.summary.match(/from\s+(\S+@\S+)/i);
+      alreadyLoggedRows.map(a => {
+        const match = (a.summary || '').match(/from\s+(\S+@\S+)/i);
         return match ? match[1].toLowerCase() : '';
       }).filter(Boolean)
     );
@@ -206,6 +251,8 @@ exports.handler = async (event) => {
             // Find the matching outreach
             const outreach = outreachLog.find(o => o.contact_email.toLowerCase() === replyEmail);
             
+            const isOptOut = isUnsubscribeRequest(body, subject);
+
             allReplies.push({
               from: replyEmail,
               fromName: fromHeader.replace(/<[^>]+>/, '').trim(),
@@ -214,6 +261,7 @@ exports.handler = async (event) => {
               website: outreach?.website || '',
               snippet: (body || '').substring(0, 200).replace(/\n/g, ' ').trim(),
               messageId: msg.id,
+              isUnsubscribe: isOptOut,
             });
 
           } catch (msgErr) {
@@ -238,10 +286,13 @@ exports.handler = async (event) => {
       return true;
     });
 
-    console.log(`📬 Found ${allReplies.length} real replies, ${autoResponders} auto-responders filtered`);
+    const realReplies = allReplies.filter(r => !r.isUnsubscribe);
+    const unsubscribeReplies = allReplies.filter(r => r.isUnsubscribe);
 
-    // Log new replies to activity_log and update outreach_log
-    for (const reply of allReplies) {
+    console.log(`📬 Found ${realReplies.length} real replies, ${unsubscribeReplies.length} unsubscribes, ${autoResponders} auto-responders filtered`);
+
+    // Log real replies to activity_log and update outreach_log
+    for (const reply of realReplies) {
       await supabase.from('activity_log').insert({
         activity_type: 'email_reply',
         summary: `Reply from ${reply.from} at ${reply.website}: "${reply.subject.substring(0, 60)}"`,
@@ -265,12 +316,32 @@ exports.handler = async (event) => {
       }
     }
 
+    // Log unsubscribe requests separately — these should NOT inflate response rate
+    for (const reply of unsubscribeReplies) {
+      await supabase.from('activity_log').insert({
+        activity_type: 'email_unsubscribed',
+        summary: `Unsubscribe request from ${reply.from} at ${reply.website}: "${reply.subject.substring(0, 60)}"`,
+        status: 'success',
+        org_id: orgId,
+      });
+
+      // Mark replied_at so we don't follow up, but don't count as a real reply
+      await supabase
+        .from('outreach_log')
+        .update({ replied_at: new Date().toISOString() })
+        .eq('contact_email', reply.from)
+        .is('replied_at', null);
+
+      console.log(`🚫 Unsubscribe from ${reply.from} at ${reply.website}`);
+    }
+
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
-        replies: allReplies,
-        newReplies: allReplies.length,
+        replies: realReplies,
+        newReplies: realReplies.length,
+        unsubscribes: unsubscribeReplies.length,
         autoResponders,
         totalContacts: contactEmails.length,
       }),
