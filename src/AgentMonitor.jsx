@@ -36,39 +36,6 @@ export default function AgentMonitor() {
     const { data: s } = await supabase.from('agent_settings').select('*').limit(1).single();
     setSettings(s);
 
-    // Load today's stats
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    // Note: org_id not yet available on first load — scoped after settings resolve
-    const { count: emailsToday } = await supabase
-      .from('activity_log')
-      .select('*', { count: 'exact', head: true })
-      .in('activity_type', ['email_sent', 'email_exported'])
-      .gte('created_at', todayStart.toISOString());
-
-    const { count: repliesToday } = await supabase
-      .from('activity_log')
-      .select('*', { count: 'exact', head: true })
-      .eq('activity_type', 'email_reply')
-      .gte('created_at', todayStart.toISOString());
-
-    setStats(prev => ({
-      ...prev,
-      emailsToday: emailsToday || 0,
-      repliesToday: repliesToday || 0,
-      maxPerDay: s?.max_emails_per_day || 20,
-      lastHeartbeat: s?.last_heartbeat,
-    }));
-
-    // Load recent activity
-    const { data: activity } = await supabase
-      .from('activity_log')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(20);
-    setActivityLog(activity || []);
-
     // Load sender accounts + per-account limits for agent routing
     const { data: accounts } = await supabase
       .from('email_accounts')
@@ -79,6 +46,44 @@ export default function AgentMonitor() {
 
     const resolvedOrgId = s?.org_id || nextAccounts[0]?.org_id || null;
     setActiveOrgId(resolvedOrgId);
+
+    // Load today's stats — scoped by org_id
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    let emailsTodayQuery = supabase
+      .from('activity_log')
+      .select('*', { count: 'exact', head: true })
+      .in('activity_type', ['email_sent', 'email_exported'])
+      .gte('created_at', todayStart.toISOString());
+    if (resolvedOrgId) emailsTodayQuery = emailsTodayQuery.eq('org_id', resolvedOrgId);
+    const { count: emailsToday } = await emailsTodayQuery;
+
+    let repliesTodayQuery = supabase
+      .from('activity_log')
+      .select('*', { count: 'exact', head: true })
+      .eq('activity_type', 'email_reply')
+      .gte('created_at', todayStart.toISOString());
+    if (resolvedOrgId) repliesTodayQuery = repliesTodayQuery.eq('org_id', resolvedOrgId);
+    const { count: repliesToday } = await repliesTodayQuery;
+
+    setStats(prev => ({
+      ...prev,
+      emailsToday: emailsToday || 0,
+      repliesToday: repliesToday || 0,
+      maxPerDay: s?.max_emails_per_day || 20,
+      lastHeartbeat: s?.last_heartbeat,
+    }));
+
+    // Load recent activity — scoped by org_id
+    let activityQuery = supabase
+      .from('activity_log')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (resolvedOrgId) activityQuery = activityQuery.eq('org_id', resolvedOrgId);
+    const { data: activity } = await activityQuery;
+    setActivityLog(activity || []);
   };
 
   const handleUpdateSenderLimit = async (accountId, dailyLimit) => {

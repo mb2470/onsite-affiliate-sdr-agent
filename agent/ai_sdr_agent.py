@@ -886,6 +886,9 @@ class AISDRAgent:
             row = {"activity_type": activity_type, "summary": summary, "status": status}
             if lead_id:
                 row["lead_id"] = lead_id
+            org_id = self._resolve_org_id()
+            if org_id:
+                row["org_id"] = org_id
             supabase.table("activity_log").insert(row).execute()
         except Exception as e:
             print(f"  ⚠️ Log error: {e}")
@@ -917,9 +920,13 @@ class AISDRAgent:
 
     def _get_remaining_today(self, max_per_day: int) -> int:
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        today_count = supabase.table("outreach_log").select(
+        query = supabase.table("outreach_log").select(
             "id", count="exact", head=True
-        ).gte("sent_at", f"{today}T00:00:00Z").execute()
+        ).gte("sent_at", f"{today}T00:00:00Z")
+        org_id = self._resolve_org_id()
+        if org_id:
+            query = query.eq("org_id", org_id)
+        today_count = query.execute()
         sent_today = today_count.count or 0
         return max_per_day - sent_today
 
@@ -1181,7 +1188,8 @@ class AISDRAgent:
                 print(f"  ⚠️ Could not fetch message headers: {e}")
 
         # Log outreach
-        supabase.table("outreach_log").insert({
+        org_id = self._resolve_org_id()
+        outreach_row_data = {
             "lead_id": lead['id'],
             "website": lead['website'],
             "contact_email": contact['email'],
@@ -1193,7 +1201,10 @@ class AISDRAgent:
             "gmail_message_id": gmail_msg_id,
             "gmail_thread_id": gmail_thread_id,
             "rfc_message_id": rfc_message_id,
-        }).execute()
+        }
+        if org_id:
+            outreach_row_data["org_id"] = org_id
+        supabase.table("outreach_log").insert(outreach_row_data).execute()
 
         # Mark contacted
         supabase.table("leads").update({
@@ -1669,7 +1680,8 @@ class AISDRAgent:
                     pass
 
             # Log the follow-up in outreach_log
-            supabase.table("outreach_log").insert({
+            fu_org_id = self._resolve_org_id()
+            fu_outreach_data = {
                 "lead_id": outreach_row.get('lead_id'),
                 "website": website,
                 "contact_email": contact_email,
@@ -1682,7 +1694,10 @@ class AISDRAgent:
                 "gmail_thread_id": fu_gmail_thread_id,
                 "rfc_message_id": fu_rfc_message_id,
                 "parent_outreach_id": outreach_row.get('id'),
-            }).execute()
+            }
+            if fu_org_id:
+                fu_outreach_data["org_id"] = fu_org_id
+            supabase.table("outreach_log").insert(fu_outreach_data).execute()
 
             self._log('followup_sent', outreach_row.get('lead_id'),
                        f"Follow-up #{fu_number} sent to {contact_name} <{contact_email}> at {website}")

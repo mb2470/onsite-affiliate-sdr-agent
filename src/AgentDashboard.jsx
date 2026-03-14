@@ -28,30 +28,52 @@ function AgentDashboard() {
         .single();
       setSettings(settingsData);
 
-      // Load today's stats
-      const today = new Date().toISOString().split('T')[0];
-      const { data: statsData } = await supabase
-        .from('daily_stats')
-        .select('*')
-        .eq('date', today)
-        .single();
-      setStats(statsData || {
-        leads_enriched: 0,
-        contacts_found: 0,
+      const orgId = settingsData?.org_id;
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayIso = todayStart.toISOString();
+
+      // Build org-scoped count helper for activity_log
+      const countActivity = async (activityTypes) => {
+        let q = supabase
+          .from('activity_log')
+          .select('*', { count: 'exact', head: true })
+          .gte('created_at', todayIso);
+        if (orgId) q = q.eq('org_id', orgId);
+        if (Array.isArray(activityTypes)) {
+          q = q.in('activity_type', activityTypes);
+        } else {
+          q = q.eq('activity_type', activityTypes);
+        }
+        const { count } = await q;
+        return count || 0;
+      };
+
+      // Load today's stats from activity_log (source of truth)
+      const emailsSent = await countActivity(['email_sent', 'email_exported']);
+      const emailsFailed = await countActivity('email_failed');
+      const leadsEnriched = await countActivity('lead_enriched');
+      const contactsFound = await countActivity(['contacts_found', 'contact_matching', 'apollo_discovery']);
+
+      setStats({
+        leads_enriched: leadsEnriched,
+        contacts_found: contactsFound,
         emails_drafted: 0,
-        emails_sent: 0,
-        emails_failed: 0
+        emails_sent: emailsSent,
+        emails_failed: emailsFailed,
       });
 
       // Load recent activity
-      const { data: activityData } = await supabase
+      let activityQuery = supabase
         .from('activity_log')
-        .select('*, leads(website), contacts(full_name, email)')
+        .select('*, leads(website)')
         .order('created_at', { ascending: false })
         .limit(20);
+      if (orgId) activityQuery = activityQuery.eq('org_id', orgId);
+      const { data: activityData } = await activityQuery;
       setActivityLog(activityData || []);
 
-      // Load pending emails (drafts)
+      // Load pending emails (drafts) — kept for approval flow
       const { data: emailsData } = await supabase
         .from('emails')
         .select('*, leads(website), contacts(full_name, title, email)')
@@ -150,7 +172,7 @@ function AgentDashboard() {
         </div>
         <div className="stat-card">
           <div className="stat-value">
-            {(settings?.max_emails_per_day || 50) - (settings?.emails_sent_today || 0)}
+            {Math.max(0, (settings?.max_emails_per_day || 50) - (stats?.emails_sent || 0))}
           </div>
           <div className="stat-label">Remaining Today</div>
         </div>
