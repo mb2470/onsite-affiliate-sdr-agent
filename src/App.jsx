@@ -278,40 +278,21 @@ function AuthenticatedApp({ session }) {
     } catch (e) { console.error(e); }
 
     // Emails sent (lifetime): total outreach minus bounced
+    // Use outreach_log.bounced flag directly — no fragile regex on activity_log.summary
     try {
-      const { count: totalOutreach } = await supabase
-        .from('outreach_log')
-        .select('*', { count: 'exact', head: true })
-        .eq('org_id', orgId);
-
-      const { data: bounceActivity } = await supabase
-        .from('activity_log')
-        .select('summary')
-        .eq('org_id', orgId)
-        .eq('activity_type', 'email_bounced');
-
-      const bouncedEmails = new Set(
-        (bounceActivity || [])
-          .map(a => {
-            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
-            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
-          })
-          .filter(Boolean)
-      );
-
-      // Count bounced outreach rows using the bounced emails set
-      let bouncedOutreachCount = 0;
-      if (bouncedEmails.size > 0) {
-        const bouncedArr = [...bouncedEmails];
-        const { count: bouncedCount } = await supabase
+      const [{ count: totalOutreach }, { count: bouncedOutreachCount }] = await Promise.all([
+        supabase
+          .from('outreach_log')
+          .select('*', { count: 'exact', head: true })
+          .eq('org_id', orgId),
+        supabase
           .from('outreach_log')
           .select('*', { count: 'exact', head: true })
           .eq('org_id', orgId)
-          .in('contact_email', bouncedArr);
-        bouncedOutreachCount = bouncedCount || 0;
-      }
+          .eq('bounced', true),
+      ]);
 
-      setEmailsSent((totalOutreach || 0) - bouncedOutreachCount);
+      setEmailsSent((totalOutreach || 0) - (bouncedOutreachCount || 0));
     } catch (e) { console.error(e); }
 
     // Outreach stats: contacted/replied leads & contacts from outreach_log
@@ -324,7 +305,7 @@ function AuthenticatedApp({ session }) {
       while (hasMoreOutreach) {
         const { data } = await supabase
           .from('outreach_log')
-          .select('lead_id, website, contact_email, replied_at')
+          .select('lead_id, website, contact_email, replied_at, bounced')
           .eq('org_id', orgId)
           .range(outreachFrom, outreachFrom + outreachPageSize - 1);
         if (data && data.length > 0) {
@@ -336,25 +317,8 @@ function AuthenticatedApp({ session }) {
         }
       }
 
-      const { data: bounceActivity } = await supabase
-        .from('activity_log')
-        .select('summary')
-        .eq('org_id', orgId)
-        .eq('activity_type', 'email_bounced');
-
-      const bouncedEmails = new Set(
-        (bounceActivity || [])
-          .map(a => {
-            const match = (a.summary || '').match(/Bounced:\s+(\S+@\S+)/i);
-            return match?.[1]?.toLowerCase().replace(/[)>.,;:"']+$/, '') || null;
-          })
-          .filter(Boolean)
-      );
-
-      const rows = outreach.filter(r => {
-        const email = r.contact_email?.toLowerCase();
-        return email && !bouncedEmails.has(email);
-      });
+      // Filter out bounced rows using the bounced flag already in outreach_log
+      const rows = outreach.filter(r => !r.bounced);
 
       const toLeadKey = (row) => row.lead_id || (row.website ? `website:${row.website}` : null);
 
@@ -388,13 +352,13 @@ function AuthenticatedApp({ session }) {
 
       if (sentError) console.error('Deliverability sent query error:', sentError);
 
-      // Count bounce events in the same trailing window
+      // Count bounced emails in the same trailing window using outreach_log.bounced flag
       const { count: bouncedCountRaw, error: bounceError } = await supabase
-        .from('activity_log')
+        .from('outreach_log')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
-        .eq('activity_type', 'email_bounced')
-        .gte('created_at', trailingStartIso);
+        .eq('bounced', true)
+        .gte('bounced_at', trailingStartIso);
 
       if (bounceError) console.error('Deliverability bounce query error:', bounceError);
 
