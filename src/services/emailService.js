@@ -89,103 +89,47 @@ ${sigLines}`);
   // Buyer context for personalization
   const contextParts = [];
   if (ctx.alternative) contextParts.push(`THE ALTERNATIVE (what they'd use without us): ${ctx.alternative}`);
-  if (ctx.daily_obstacles) contextParts.push(`BUYER'S DAILY OBSTACLES: ${ctx.daily_obstacles}`);
-  if (ctx.success_metrics) contextParts.push(`BUYER'S SUCCESS METRICS: ${ctx.success_metrics}`);
-  if (ctx.key_responsibilities) contextParts.push(`BUYER'S RESPONSIBILITIES: ${ctx.key_responsibilities}`);
-  if (contextParts.length) {
-    sections.push(`ICP CONTEXT (use this to personalize messaging):\n${contextParts.join('\n\n')}`);
+  if (ctx.daily_obstacles) contextParts.push(`BUYER CONTEXT (daily obstacles): ${ctx.daily_obstacles}`);
+  if (ctx.success_stories) contextParts.push(`SUCCESS STORIES: ${ctx.success_stories}`);
+  if (ctx.industry_trends) contextParts.push(`INDUSTRY TRENDS: ${ctx.industry_trends}`);
+  if (ctx.competitor_analysis) contextParts.push(`COMPETITOR ANALYSIS: ${ctx.competitor_analysis}`);
+  if (ctx.call_to_action) contextParts.push(`CALL TO ACTION: ${ctx.call_to_action}`);
+
+  if (contextParts.length > 0) {
+    sections.push(`BUYER CONTEXT:\n${contextParts.join('\n')}`);
   }
 
-  return sections.join('\n\n');
+  return sections.join('\n');
 }
 
-function buildEmailPrompt(lead, firstName) {
-  const ctx = _emailIcpContext;
-  const senderName = ctx?.sender_name || 'Team';
-  const senderUrl = ctx?.sender_url || '';
-  const sigLine = [senderName, senderUrl].filter(Boolean).join(' and ');
+// ── Generate a system prompt based on the current ICP profile ──
 
-  const parts = [
-    `Write a casual outreach email for ${lead.website}.`,
-    `The contact's first name is "${firstName}" — ALWAYS address them as "Hey ${firstName} -"`,
-    '',
-    lead.research_notes ? `Context: ${lead.research_notes.substring(0, 300)}` : '',
-    lead.industry ? `Industry: ${lead.industry}` : '',
-    lead.pain_points ? `Pain Points: ${lead.pain_points}` : '',
-    '',
-    'Requirements:',
-    '- Under 90 words total',
-    `- Start with "Hey ${firstName} -"`,
-    ctx?.core_problem ? `- Reference their pain: ${ctx.core_problem}` : '- Ask about a relevant pain point',
-    ctx?.social_proof ? `- Use social proof: ${ctx.social_proof}` : '- Explain why our approach works',
-    ctx?.uvp_1 ? `- Key point: ${ctx.uvp_1}` : '- Highlight our main value prop',
-    '- Tone: Casual, like a Slack message',
-    `- End with signature: ${sigLine}`,
-    '- Include subject line',
-    '',
-    'Format:',
-    'Subject: [subject]',
-    '',
-    '[body]',
-  ];
-
-  return parts.filter(line => line !== null).join('\n');
-}
-
-// Check outreach_log for a previously sent email for this lead that can be reused.
-// Returns { subject, body, contactName, sentAt } or null if none found.
-export const getCachedEmail = async (website, orgId) => {
-  const scopedOrgId = await resolveOrgId(orgId);
-  const cleanDomain = website.toLowerCase().replace(/^www\./, '');
-
-  const { data, error } = await supabase
-    .from('outreach_log')
-    .select('email_subject, email_body, contact_name, sent_at')
-    .eq('org_id', scopedOrgId)
-    .ilike('website', `%${cleanDomain}%`)
-    .order('sent_at', { ascending: false })
-    .limit(1);
-
-  if (error || !data || data.length === 0) return null;
-
-  const row = data[0];
-  if (!row.email_subject || !row.email_body) return null;
-
-  return {
-    subject: row.email_subject,
-    body: row.email_body,
-    contactName: row.contact_name,
-    sentAt: row.sent_at,
-    // Reconstruct the full email text in the same format generateEmail returns
-    text: `Subject: ${row.email_subject}\n\n${row.email_body}`,
-  };
+export const getSystemPrompt = () => {
+  return buildSystemPrompt();
 };
 
-// Personalize a cached email for a new contact by swapping the first name greeting
-export const personalizeEmail = (emailText, newFirstName) => {
-  if (!newFirstName || newFirstName === 'there') return emailText;
-  // Replace "Hey <AnyName> -" with "Hey <newFirstName> -"
-  let result = emailText.replace(/Hey \w+ -/i, `Hey ${newFirstName} -`);
-  result = result.replace(/Hey there -/i, `Hey ${newFirstName} -`);
-  return result;
-};
+// ── Generate a personalized email based on the system prompt and user input ──
 
-// Generate a personalized outreach email for a lead
-export const generateEmail = async (lead, contactName) => {
-  const firstName = contactName ? contactName.split(' ')[0] : 'there';
+export const generateEmail = (userInput) => {
+  const systemPrompt = getSystemPrompt();
+  const emailTemplate = `
+  You are an SDR writing outreach emails. Under 90 words, casual tone.
 
-  const response = await fetch('/.netlify/functions/claude', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt: buildEmailPrompt(lead, firstName),
-      systemPrompt: buildSystemPrompt()
-    })
-  });
+  Write a concise, personalized cold email. Ask about a relevant pain point, introduce the product, and end with a simple CTA.
 
-  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  SIGNATURE: Always end with exactly:
+  Team
+  [Company]
 
-  const data = await response.json();
-  const email = data.text || data.content?.[0]?.text || '';
-  return email;
+  TONE: Conversational, direct, no fluff. Like messaging a coworker on Slack.
+
+  ${systemPrompt}
+
+  USER INPUT:
+  ${userInput}
+
+  EMAIL:
+  `;
+
+  return emailTemplate;
 };

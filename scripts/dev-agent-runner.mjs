@@ -1,179 +1,255 @@
 #!/usr/bin/env node
 
-/**
- * dev-agent-runner.mjs
- *
- * Polls the dev-agent API for pending dev requests, then runs Claude Code
- * (via @anthropic-ai/claude-code SDK) to implement them.
- *
- * Usage:
- *   DEV_AGENT_SECRET=xxx ANTHROPIC_API_KEY=xxx node scripts/dev-agent-runner.mjs
- *
- * Environment variables:
- *   DEV_AGENT_SECRET   — Bearer token for the dev-agent API
- *   ANTHROPIC_API_KEY   — Claude API key (used by Claude Code SDK)
- *   DEV_AGENT_API_URL   — Base URL (default: https://sdr.onsiteaffiliate.com)
- *   POLL_INTERVAL_MS    — Polling interval in ms (default: 30000)
- *   REPO_DIR            — Path to the git repo (default: cwd)
- */
-
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs/promises';
+import path from 'path';
+import http from 'http';
 
 const execFileAsync = promisify(execFile);
 
+// --- CONFIG ---
 const API_URL = process.env.DEV_AGENT_API_URL || 'https://sdr.onsiteaffiliate.com';
 const SECRET = process.env.DEV_AGENT_SECRET;
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL_MS || '30000', 10);
-const REPO_DIR = process.env.REPO_DIR || process.cwd();
+const REPO_DIR = path.resolve(process.env.REPO_DIR || process.cwd());
+const LLM_URL = process.env.LLM_API_URL || 'http://localhost:11434';
+const LLM_MODEL = process.env.LLM_MODEL || 'qwen2.5-coder:7b';
+const MAX_CONTEXT_FILES = parseInt(process.env.MAX_CONTEXT_FILES || '12', 10);
 
-if (!SECRET) {
-  console.error('DEV_AGENT_SECRET is required');
-  process.exit(1);
-}
-
-const authHeaders = {
-  Authorization: `Bearer ${SECRET}`,
-  'Content-Type': 'application/json',
-};
+if (!SECRET) { console.error('DEV_AGENT_SECRET is required'); process.exit(1); }
+const authHeaders = { Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' };
 
 async function apiFetch(path, options = {}) {
   const url = `${API_URL}/.netlify/functions/dev-agent${path}`;
   const res = await fetch(url, {
     ...options,
     headers: { ...authHeaders, ...options.headers },
+    signal: AbortSignal.timeout(60000)
   });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
-async function pollForRequest() {
-  const data = await apiFetch('?action=poll');
-  return data.request || null;
-}
+// Use raw http.request for Ollama to avoid fetch/undici timeout issues
+function ollamaRequest(body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${LLM_URL}/api/chat`);
+    const postData = JSON.stringify(body);
 
-async function claimRequest(id) {
-  const data = await apiFetch(`?action=claim&id=${id}`, { method: 'POST' });
-  return data.success;
-}
+    const req = http.request({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: 0  // no timeout
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve({ statusCode: res.statusCode, body: JSON.parse(data) });
+        } catch (e) {
+          reject(new Error(`Failed to parse Ollama response: ${data.slice(0, 200)}`));
+        }
+      });
+    });
 
-async function completeRequest(id, result) {
-  return apiFetch('?action=complete', {
-    method: 'POST',
-    body: JSON.stringify({ id, ...result }),
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Ollama request timed out'));
+    });
+
+    req.write(postData);
+    req.end();
   });
 }
 
-async function runClaudeCode(spec) {
-  // Create a feature branch
-  const branchName = `dev-agent/${Date.now()}`;
+async function getFileContext(spec) {
+  const files = await fs.readdir(REPO_DIR, { recursive: true });
 
-  try {
-    await execFileAsync('git', ['checkout', '-b', branchName], { cwd: REPO_DIR });
-  } catch (e) {
-    console.error('Failed to create branch:', e.message);
-    throw e;
-  }
+  // Extract keywords from the task spec for relevance scoring
+  const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'it', 'fix', 'implement', 'add', 'update', 'create']);
+  const taskWords = spec.toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !stopWords.has(w));
 
-  try {
-    // Use the Claude Code SDK via CLI (npx @anthropic-ai/claude-code)
-    // The spec is passed as the prompt
-    const prompt = `You are working on a development task. Here is the full spec:\n\n${spec}\n\nImplement this task. Follow the project's CLAUDE.md standards. Make the changes, then summarize what you did.`;
+  // Filter to code files, exclude junk
+  const codeFiles = files.filter(f =>
+    !f.includes('node_modules') &&
+    !f.includes('.git') &&
+    !f.includes('package-lock') &&
+    /\.(mjs|js|ts|py|json|md)$/.test(f)
+  );
 
-    const { stdout, stderr } = await execFileAsync(
-      'npx',
-      ['@anthropic-ai/claude-code', '--print', prompt],
-      {
-        cwd: REPO_DIR,
-        timeout: 600_000, // 10 min max
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-        },
-        maxBuffer: 10 * 1024 * 1024,
+  // Score each file by relevance to the task
+  const scored = codeFiles.map(f => {
+    const lower = f.toLowerCase();
+    const nameParts = lower.replace(/[^a-z0-9]/g, ' ').split(/\s+/);
+
+    let score = 0;
+
+    // Boost for keyword matches in file path
+    for (const word of taskWords) {
+      if (lower.includes(word)) score += 3;
+      // Partial matches (e.g. "email" matches "email_service")
+      for (const part of nameParts) {
+        if (part.includes(word) || word.includes(part)) score += 1;
       }
-    );
-
-    if (stderr) console.error('Claude Code stderr:', stderr);
-
-    // Get list of changed files
-    const { stdout: diffOutput } = await execFileAsync(
-      'git',
-      ['diff', '--name-only', 'HEAD'],
-      { cwd: REPO_DIR }
-    );
-    const filesChanged = diffOutput.trim().split('\n').filter(Boolean);
-
-    // Stage and commit if there are changes
-    if (filesChanged.length > 0) {
-      await execFileAsync('git', ['add', '-A'], { cwd: REPO_DIR });
-      await execFileAsync('git', ['commit', '-m', `dev-agent: ${spec.split('\n')[0].substring(0, 72)}`], { cwd: REPO_DIR });
-      await execFileAsync('git', ['push', '-u', 'origin', branchName], { cwd: REPO_DIR });
     }
 
-    return {
-      status: 'completed',
-      result_summary: stdout.substring(0, 5000),
-      branch_name: filesChanged.length > 0 ? branchName : null,
-      files_changed: filesChanged,
-    };
-  } catch (error) {
-    // Try to get back to main on failure
-    try {
-      await execFileAsync('git', ['checkout', 'main'], { cwd: REPO_DIR });
-      await execFileAsync('git', ['branch', '-D', branchName], { cwd: REPO_DIR });
-    } catch (_) { /* best effort */ }
+    // Boost actual code files over docs
+    if (/\.(mjs|js|ts|py)$/.test(f)) score += 2;
+    // Boost files in relevant-sounding directories
+    if (lower.includes('service') || lower.includes('api') || lower.includes('function') || lower.includes('netlify')) score += 1;
+    // Slight penalty for deeply nested files
+    const depth = f.split(path.sep).length;
+    if (depth > 4) score -= 1;
 
-    return {
-      status: 'failed',
-      error_message: error.message?.substring(0, 2000),
-    };
+    return { file: f, score };
+  });
+
+  // Sort by score descending, take top N
+  scored.sort((a, b) => b.score - a.score);
+  const relevant = scored.slice(0, MAX_CONTEXT_FILES);
+
+  console.log(`  Selected ${relevant.length} files for context:`);
+  for (const { file, score } of relevant) {
+    console.log(`    [score:${score}] ${file}`);
   }
+
+  let ctx = "";
+  let totalChars = 0;
+  const MAX_CHARS = 60000; // ~15k tokens, safe for num_ctx: 16384
+
+  for (const { file } of relevant) {
+    try {
+      const content = await fs.readFile(path.join(REPO_DIR, file), 'utf8');
+      // Skip files that would blow the context budget
+      if (totalChars + content.length > MAX_CHARS) {
+        console.log(`    ⏭️  Skipping ${file} (${content.length} chars would exceed budget)`);
+        continue;
+      }
+      ctx += `\n--- FILE: ${file} ---\n${content}\n`;
+      totalChars += content.length;
+    } catch (e) {}
+  }
+
+  console.log(`  Total context: ${totalChars} chars`);
+  return ctx;
 }
 
-async function processRequest(request) {
-  console.log(`\n[${new Date().toISOString()}] Processing: ${request.title} (${request.id})`);
+async function runLocalLLM(spec) {
+  const branchName = `dev-agent/fix-${Date.now()}`;
+  let filesChanged = [];
 
-  const claimed = await claimRequest(request.id);
-  if (!claimed) {
-    console.log('  Could not claim — skipping.');
-    return;
+  try {
+    await execFileAsync('git', ['checkout', 'main'], { cwd: REPO_DIR });
+    await execFileAsync('git', ['checkout', '-b', branchName], { cwd: REPO_DIR });
+
+    console.log(`  Scanning repo for context...`);
+    const codeContext = await getFileContext(spec);
+
+    console.log(`  Asking Qwen2.5-Coder (Chat Mode)...`);
+    console.log('  LLM_URL:', LLM_URL);
+
+    const res = await ollamaRequest({
+      model: LLM_MODEL,
+      messages: [
+        {
+          role: "system",
+          content: "You are a professional software engineer robot. You ONLY output updates in the requested format. No conversational text. No preamble. You MUST only reference files that exist in the CONTEXT FILES provided. Do NOT invent new file paths."
+        },
+        {
+          role: "user",
+          content: `TASK: ${spec}\n\nCONTEXT FILES:\n${codeContext}\n\nREQUIRED OUTPUT FORMAT:\nFILEPATH: (path)\nCONTENT:\n(full file code)`
+        }
+      ],
+      stream: false,
+      options: {
+        temperature: 0.1,
+        num_ctx: 16384,
+        num_predict: 4096
+      }
+    });
+
+    if (res.statusCode !== 200) {
+      throw new Error(`Ollama API error (${res.statusCode}): ${JSON.stringify(res.body)}`);
+    }
+
+    const output = res.body?.message?.content || "";
+
+    console.log('  Ollama responded:', output.length, 'chars');
+
+    if (!output || output.trim().length === 0) {
+      console.log("  ⚠️ DEBUG: Received empty message from Qwen. Check Ollama logs (journalctl -u ollama).");
+      return { status: 'failed', error_message: "Empty LLM response" };
+    }
+
+    const upperOutput = output.toUpperCase();
+    if (upperOutput.includes('FILEPATH:') && upperOutput.includes('CONTENT:')) {
+      const filePathIndex = upperOutput.indexOf('FILEPATH:');
+      const contentIndex = upperOutput.indexOf('CONTENT:');
+
+      const filePathPart = output.substring(filePathIndex + 9, contentIndex).trim().split('\n')[0];
+      let newContent = output.substring(contentIndex + 8).trim();
+
+      // Clean up markdown code fences
+      newContent = newContent.replace(/^```[a-z]*\n/i, '').replace(/\n```$/i, '');
+
+      const safePath = path.resolve(REPO_DIR, filePathPart);
+      if (!safePath.startsWith(REPO_DIR + path.sep)) {
+        throw new Error(`Security Alert: Path traversal attempted to ${filePathPart}`);
+      }
+
+      // Auto-create directories if needed
+      await fs.mkdir(path.dirname(safePath), { recursive: true });
+
+      await fs.writeFile(safePath, newContent);
+      filesChanged.push(filePathPart);
+      console.log(`  ✍️  Modified: ${filePathPart}`);
+    } else {
+      console.log(`  ⚠️ DEBUG: Format mismatch. Output received:\n${output}`);
+    }
+
+    if (filesChanged.length > 0) {
+      console.log(`  Committing and Pushing...`);
+      await execFileAsync('git', ['add', '.'], { cwd: REPO_DIR });
+      await execFileAsync('git', ['commit', '-m', `dev-agent: fix implemented`], { cwd: REPO_DIR });
+      await execFileAsync('git', ['push', '-u', 'origin', branchName], { cwd: REPO_DIR });
+    } else {
+      console.log(`  ℹ️  No files modified by Agent.`);
+    }
+
+    return { status: 'completed', branch_name: branchName, files_changed: filesChanged };
+  } catch (error) {
+    console.error('  ❌ Error:', error.message);
+    console.error('  Cause:', error.cause || 'none');
+    return { status: 'failed', error_message: error.message };
   }
-
-  console.log(`  Claimed. Running Claude Code...`);
-  const result = await runClaudeCode(request.spec);
-
-  console.log(`  Result: ${result.status}`);
-  if (result.branch_name) console.log(`  Branch: ${result.branch_name}`);
-  if (result.files_changed?.length) console.log(`  Files changed: ${result.files_changed.join(', ')}`);
-  if (result.error_message) console.log(`  Error: ${result.error_message}`);
-
-  await completeRequest(request.id, result);
-  console.log('  Done.');
 }
 
 async function main() {
-  console.log(`Dev Agent Runner started`);
-  console.log(`  API: ${API_URL}`);
-  console.log(`  Repo: ${REPO_DIR}`);
-  console.log(`  Poll interval: ${POLL_INTERVAL}ms`);
-  console.log('');
-
-  // Continuous polling loop
+  console.log(`Hardened Qwen Agent Active on ${REPO_DIR}`);
   while (true) {
     try {
-      const request = await pollForRequest();
-      if (request) {
-        await processRequest(request);
+      const data = await apiFetch('?action=poll');
+      if (data.request) {
+        console.log(`\n[${new Date().toLocaleTimeString()}] 🚀 Task: ${data.request.title}`);
+        await apiFetch(`?action=claim&id=${data.request.id}`, { method: 'POST' });
+        const result = await runLocalLLM(data.request.spec);
+        await apiFetch('?action=complete', { method: 'POST', body: JSON.stringify({ id: data.request.id, ...result }) });
+        console.log(`  ✅ Task Finalized.`);
       }
-    } catch (err) {
-      console.error(`[${new Date().toISOString()}] Poll error:`, err.message);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
+    } catch (err) { console.error('Poll Error:', err.message); }
+    await new Promise(r => setTimeout(r, POLL_INTERVAL));
   }
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+main();
