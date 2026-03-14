@@ -772,9 +772,9 @@ async function executeTool(name, input, orgId, authContext = null) {
         return extra ? extra(q) : q;
       };
       const bounceQ = () => {
-        let q = supabase.from('activity_log').select('*', { count: 'exact', head: true });
+        let q = supabase.from('outreach_log').select('*', { count: 'exact', head: true });
         if (orgId) q = q.eq('org_id', orgId);
-        q = q.eq('activity_type', 'email_bounced').gte('created_at', since);
+        q = q.eq('bounced', true).gte('bounced_at', since);
         return q;
       };
 

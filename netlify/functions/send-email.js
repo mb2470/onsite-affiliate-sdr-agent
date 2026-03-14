@@ -34,18 +34,33 @@ async function getCachedApolloStatus(email, orgId) {
 
 /**
  * Check whether this email has previously bounced.
- * We treat bounced contacts as permanently suppressed.
+ * Queries bounced_email column directly — no fragile regex on summary text.
+ * Falls back to checking outreach_log.bounced flag as a secondary guard.
  */
 async function isPermanentlySuppressed(email, orgId) {
-  const { data } = await supabase
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // Primary: dedicated bounced_email column (set by check-bounces.js)
+  const { data: activityHit } = await supabase
     .from('activity_log')
     .select('id')
     .eq('org_id', orgId)
     .eq('activity_type', 'email_bounced')
-    .ilike('summary', `Bounced: ${email} %`)
+    .eq('bounced_email', normalizedEmail)
     .limit(1);
 
-  return !!(data && data.length > 0);
+  if (activityHit && activityHit.length > 0) return true;
+
+  // Secondary: outreach_log.bounced flag (in case activity_log entry is missing)
+  const { data: outreachHit } = await supabase
+    .from('outreach_log')
+    .select('id')
+    .eq('org_id', orgId)
+    .eq('contact_email', normalizedEmail)
+    .eq('bounced', true)
+    .limit(1);
+
+  return !!(outreachHit && outreachHit.length > 0);
 }
 
 /**
@@ -565,7 +580,7 @@ exports.handler = async (event) => {
     const sendData = await sendRes.json();
     console.log(`✅ Email sent to ${safeEmails.join(', ')} (message ID: ${sendData.id})`);
 
-    // Log outreach for verified recipients only
+    // Log outreach for verified recipients only — include Gmail message/thread IDs
     const outreachRows = safeEmails.map(email => {
       const contact = (contactDetails || []).find(c => c.email === email);
       return {
@@ -577,6 +592,8 @@ exports.handler = async (event) => {
         email_body: body,
         sent_at: new Date().toISOString(),
         org_id: orgId,
+        gmail_message_id: sendData.id || '',
+        gmail_thread_id: sendData.threadId || '',
       };
     });
 

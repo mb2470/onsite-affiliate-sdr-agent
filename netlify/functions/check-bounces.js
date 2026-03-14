@@ -8,7 +8,7 @@ const supabase = createClient(
 // Refresh OAuth access token using refresh token
 async function getAccessToken() {
   const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
-  
+
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -97,7 +97,7 @@ exports.handler = async (event) => {
 
         const foundEmails = [];
 
-        // Check X-Failed-Recipients header
+        // Check X-Failed-Recipients header (most reliable)
         const failedHeader = (detail.payload?.headers || []).find(
           h => h.name.toLowerCase() === 'x-failed-recipients'
         );
@@ -131,20 +131,16 @@ exports.handler = async (event) => {
     let bouncedEmails = Object.keys(bounceMap);
     console.log(`🚫 Bounced emails found: ${bouncedEmails.join(', ')}`);
 
-    // Filter out bounces we already processed (already logged in activity_log)
+    // Filter out bounces already processed — query bounced_email column directly (no regex)
     const { data: alreadyLogged } = await supabase
       .from('activity_log')
-      .select('summary')
+      .select('bounced_email')
       .eq('org_id', orgId)
       .eq('activity_type', 'email_bounced')
-      .order('created_at', { ascending: false })
-      .limit(200);
+      .not('bounced_email', 'is', null);
 
     const alreadyProcessed = new Set(
-      (alreadyLogged || []).map(a => {
-        const match = a.summary.match(/Bounced:\s+(\S+@\S+)/);
-        return match ? match[1].toLowerCase() : '';
-      }).filter(Boolean)
+      (alreadyLogged || []).map(a => (a.bounced_email || '').toLowerCase()).filter(Boolean)
     );
 
     const newBounces = bouncedEmails.filter(e => !alreadyProcessed.has(e));
@@ -162,7 +158,37 @@ exports.handler = async (event) => {
     let leadsReset = [];
 
     for (const email of newBounces) {
-      // Remove from contact_database
+      const bounceDate = bounceMap[email] || new Date().toISOString();
+
+      // 1. Mark all outreach_log rows for this email as bounced
+      await supabase
+        .from('outreach_log')
+        .update({ bounced: true, bounced_at: bounceDate })
+        .eq('org_id', orgId)
+        .eq('contact_email', email);
+
+      // 2. Stop any active campaign sequences for this email
+      //    Find leads with this contact email and mark campaign_leads as bounced
+      const { data: outreachRows } = await supabase
+        .from('outreach_log')
+        .select('lead_id, website')
+        .eq('org_id', orgId)
+        .eq('contact_email', email);
+
+      const leadIds = [...new Set((outreachRows || []).map(r => r.lead_id).filter(Boolean))];
+
+      if (leadIds.length > 0) {
+        await supabase
+          .from('campaign_leads')
+          .update({ status: 'bounced' })
+          .eq('org_id', orgId)
+          .in('lead_id', leadIds)
+          .eq('status', 'active');
+
+        console.log(`🛑 Stopped ${leadIds.length} campaign sequence(s) for bounced address: ${email}`);
+      }
+
+      // 3. Remove from contact_database to prevent re-sending during discovery
       const { data: deleted } = await supabase
         .from('contact_database')
         .delete()
@@ -174,7 +200,7 @@ exports.handler = async (event) => {
         console.log(`🗑️ Removed ${email} from contact_database`);
         cleaned++;
 
-        // Check if lead has remaining contacts
+        // Clear has_contacts flag on the lead if no other contacts remain
         for (const contact of deleted) {
           const website = (contact.website || '').replace(/^www\./, '').toLowerCase();
           if (!website) continue;
@@ -195,15 +221,10 @@ exports.handler = async (event) => {
         }
       }
 
-      // Reset lead if this was the only outreach
-      const { data: outreach } = await supabase
-        .from('outreach_log')
-        .select('website')
-        .eq('org_id', orgId)
-        .eq('contact_email', email);
-
-      if (outreach) {
-        for (const o of outreach) {
+      // 4. Reset lead status to 'enriched' if this was their only outreach contact
+      if (outreachRows) {
+        for (const o of outreachRows) {
+          if (!o.website) continue;
           const { count } = await supabase
             .from('outreach_log')
             .select('*', { count: 'exact', head: true })
@@ -223,13 +244,14 @@ exports.handler = async (event) => {
         }
       }
 
-      // Log activity with the actual bounce date (not today)
+      // 5. Log to activity_log — store email in dedicated column (not just summary text)
       await supabase.from('activity_log').insert({
         org_id: orgId,
         activity_type: 'email_bounced',
+        bounced_email: email,
         summary: `Bounced: ${email} — removed from contacts`,
         status: 'failed',
-        created_at: bounceMap[email] || new Date().toISOString(),
+        created_at: bounceDate,
       });
     }
 
