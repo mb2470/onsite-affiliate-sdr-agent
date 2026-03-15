@@ -1242,7 +1242,7 @@ class AISDRAgent:
 
     # ─── SEND BATCH ────────────────────────────────
 
-    def send_batch(self, count: int = 10, deadline: datetime = None):
+    def send_batch(self, count: int = 10, deadline: datetime = None, sender_pool: list = None):
         print(f"\n{'=' * 60}")
         print(f"📤 SENDING BATCH: up to {count} emails")
         print(f"{'=' * 60}\n")
@@ -1297,7 +1297,8 @@ class AISDRAgent:
         skipped = 0
         min_gap = settings.get('min_minutes_between_emails', 2)
 
-        sender_pool = self._load_sender_pool(settings)
+        if sender_pool is None:
+            sender_pool = self._load_sender_pool(settings)
         total_sender_remaining = sum(int(s.get('remaining', 0)) for s in sender_pool)
         print(f"📮 Sender pool: {len(sender_pool)} inbox(es), {total_sender_remaining} remaining sends today")
 
@@ -1916,10 +1917,12 @@ class AISDRAgent:
                     self._update_heartbeat()
                 continue
 
-            # Check daily limit
+            # Check daily limit — load pool once and reuse for both capacity check
+            # and send_batch (avoids double DB round-trip + double reset logic per loop)
             max_per_day = settings.get('max_emails_per_day', 50)
             remaining_global = self._get_remaining_today(max_per_day)
-            remaining_sender = self._get_sender_capacity_remaining(settings)
+            sender_pool_for_loop = self._load_sender_pool(settings)
+            remaining_sender = sum(int(s.get('remaining', 0)) for s in sender_pool_for_loop)
             remaining = min(remaining_global, remaining_sender)
 
             if remaining <= 0:
@@ -1948,7 +1951,7 @@ class AISDRAgent:
             batch_size = min(remaining, 5)
             print(f"\n🔄 Loop #{loop_count} — Budget: {remaining}/{max_per_day}, sending up to {batch_size}")
 
-            sent = self.send_batch(count=batch_size, deadline=hard_deadline)
+            sent = self.send_batch(count=batch_size, deadline=hard_deadline, sender_pool=sender_pool_for_loop)
             total_sent_this_run += sent
 
             if sent == 0:
