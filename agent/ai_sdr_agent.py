@@ -1389,23 +1389,28 @@ class AISDRAgent:
 
     # ─── CHECK REPLIES ──────────────────────────
 
-    def check_replies(self) -> int:
-        """Scan all sent email threads for real replies and record them.
+    def check_replies(self, lookback_days: int = 60) -> int:
+        """Scan sent email threads for real replies and record them.
+
+        Only checks threads sent within the last `lookback_days` days (default 60)
+        that have not yet been marked as replied. Deduplicates by gmail_thread_id
+        so each thread triggers at most one Gmail API call.
 
         Updates outreach_log.replied_at, leads.status='replied', and logs
         activity_type='email_reply' for any thread where the prospect replied.
-        Skips threads already marked as replied.
         """
         print(f"\n{'=' * 60}")
         print("💬 CHECKING REPLIES")
         print(f"{'=' * 60}\n")
 
-        # Only check threads not yet marked as replied
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
+        # Only check threads not yet marked as replied, within the lookback window
         results = supabase.table('outreach_log').select(
             'id, lead_id, contact_email, contact_name, website, gmail_thread_id, replied_at'
         ).is_('replied_at', 'null').not_.is_('gmail_thread_id', 'null').neq(
             'gmail_thread_id', ''
-        ).order('sent_at', desc=True).limit(500).execute()
+        ).gte('sent_at', cutoff).order('sent_at', desc=True).execute()
 
         rows = results.data or []
         if not rows:
@@ -1991,7 +1996,7 @@ if __name__ == "__main__":
         print("  python ai_sdr_agent.py send-batch 10     # Send N emails")
         print("  python ai_sdr_agent.py process-followups  # Send due follow-up emails")
         print("  python ai_sdr_agent.py check-bounces     # Check bounced emails")
-        print("  python ai_sdr_agent.py check-replies     # Scan threads for new replies")
+        print("  python ai_sdr_agent.py check-replies [days]  # Scan threads for new replies (default: 60 days)")
         print("  python ai_sdr_agent.py batch-verify 500  # Pre-verify N emails for HIGH leads")
         print("  python ai_sdr_agent.py verify-gmail      # Test Gmail")
         print("  python ai_sdr_agent.py status             # Pipeline stats")
@@ -2009,7 +2014,8 @@ if __name__ == "__main__":
     elif cmd == "check-bounces":
         agent.check_bounces()
     elif cmd == "check-replies":
-        agent.check_replies()
+        days = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+        agent.check_replies(lookback_days=days)
     elif cmd == "batch-verify":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 500
         min_score = int(sys.argv[3]) if len(sys.argv) > 3 else 60
