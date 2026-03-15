@@ -944,7 +944,7 @@ class AISDRAgent:
             rows = []
         else:
             query = supabase.table('email_accounts').select(
-                'id, org_id, email_address, display_name, daily_send_limit, current_daily_sent, status'
+                'id, org_id, email_address, display_name, daily_send_limit, current_daily_sent, last_sent_at, status'
             ).eq('org_id', org_id).in_('status', ['active', 'ready', 'warming']).order('current_daily_sent', desc=False).order('created_at', desc=False)
 
             try:
@@ -952,6 +952,21 @@ class AISDRAgent:
             except Exception as e:
                 print(f"  ⚠️ Could not load email_accounts sender pool: {e}")
                 rows = []
+
+            # Reset stale daily counters — if last_sent_at is not today the count
+            # carries over from a previous session and must be zeroed before use.
+            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            for row in rows:
+                last_sent = (row.get('last_sent_at') or '')[:10]  # "YYYY-MM-DD"
+                if last_sent != today_str and row.get('id'):
+                    try:
+                        supabase.table('email_accounts').update(
+                            {'current_daily_sent': 0}
+                        ).eq('id', row['id']).execute()
+                        row['current_daily_sent'] = 0
+                        print(f"  🔄 Reset daily counter for {row.get('email_address')} (last sent: {last_sent or 'never'})")
+                    except Exception as _e:
+                        print(f"  ⚠️ Could not reset counter for {row.get('email_address')}: {_e}")
 
         pool = []
         for row in rows:
@@ -1021,7 +1036,8 @@ class AISDRAgent:
 
         try:
             supabase.table('email_accounts').update({
-                'current_daily_sent': sender['current_daily_sent']
+                'current_daily_sent': sender['current_daily_sent'],
+                'last_sent_at': datetime.now(timezone.utc).isoformat(),
             }).eq('id', sender['id']).execute()
         except Exception as e:
             print(f"  ⚠️ Could not update sender account usage for {sender.get('email_address')}: {e}")
@@ -1357,9 +1373,99 @@ class AISDRAgent:
                     supabase.table("leads").update({"status": "enriched"}).eq("website", o['website']).execute()
                     print(f"  ↩️ Reset {o['website']} to enriched")
 
+            # Mark all outreach_log rows for this email as bounced
+            try:
+                supabase.table('outreach_log').update({
+                    'bounced': True,
+                    'bounced_at': datetime.now(timezone.utc).isoformat(),
+                }).eq('contact_email', email).execute()
+            except Exception as e:
+                print(f"  ⚠️ Could not mark outreach_log bounced for {email}: {e}")
+
             self._log('email_bounced', summary=f"Bounced: {email}", status='failed')
 
         print(f"\n✅ Cleaned {cleaned} contacts")
+
+    # ─── CHECK REPLIES ──────────────────────────
+
+    def check_replies(self) -> int:
+        """Scan all sent email threads for real replies and record them.
+
+        Updates outreach_log.replied_at, leads.status='replied', and logs
+        activity_type='email_reply' for any thread where the prospect replied.
+        Skips threads already marked as replied.
+        """
+        print(f"\n{'=' * 60}")
+        print("💬 CHECKING REPLIES")
+        print(f"{'=' * 60}\n")
+
+        # Only check threads not yet marked as replied
+        results = supabase.table('outreach_log').select(
+            'id, lead_id, contact_email, contact_name, website, gmail_thread_id, replied_at'
+        ).is_('replied_at', 'null').not_.is_('gmail_thread_id', 'null').neq(
+            'gmail_thread_id', ''
+        ).order('sent_at', desc=True).limit(500).execute()
+
+        rows = results.data or []
+        if not rows:
+            print("  📭 No unreplied threads to check.")
+            return 0
+
+        print(f"  Checking {len(rows)} threads...")
+        our_email = self.gmail.get_from_email()
+        new_replies = 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Deduplicate by thread_id — one DB write per unique thread
+        seen_threads: set = set()
+        for row in rows:
+            thread_id = row.get('gmail_thread_id', '')
+            if not thread_id or thread_id in seen_threads:
+                continue
+            seen_threads.add(thread_id)
+
+            try:
+                has_reply = self.gmail.check_thread_for_replies(thread_id, our_email)
+            except Exception as e:
+                print(f"  ⚠️ Thread check error ({row.get('contact_email')}): {e}")
+                continue
+
+            if not has_reply:
+                continue
+
+            contact_email = row.get('contact_email', '')
+            website = row.get('website', '')
+            lead_id = row.get('lead_id')
+            print(f"  💬 Reply detected: {contact_email} ({website})")
+            new_replies += 1
+
+            # Update all outreach rows for this thread
+            try:
+                supabase.table('outreach_log').update({
+                    'replied_at': now_iso,
+                }).eq('gmail_thread_id', thread_id).is_('replied_at', 'null').execute()
+            except Exception as e:
+                print(f"  ⚠️ Could not update outreach_log replied_at: {e}")
+
+            # Mark lead as replied
+            try:
+                update_q = supabase.table('leads').update({
+                    'status': 'replied',
+                    'updated_at': now_iso,
+                })
+                if lead_id:
+                    update_q = update_q.eq('id', lead_id)
+                else:
+                    update_q = update_q.eq('website', website)
+                update_q.execute()
+            except Exception as e:
+                print(f"  ⚠️ Could not update lead status: {e}")
+
+            self._log('email_reply', lead_id,
+                      f"Reply from {contact_email} at {website}")
+
+        print(f"\n  ✅ Found {new_replies} new {'reply' if new_replies == 1 else 'replies'}")
+        return new_replies
 
     # ─── BATCH VERIFY EMAILS ─────────────────────
 
@@ -1610,7 +1716,15 @@ class AISDRAgent:
                         else:
                             update_q = update_q.eq("website", website)
                         update_q.execute()
-                        self._log('reply_detected', summary=f"Reply detected from {contact_email}")
+                        # Mark outreach_log replied_at if not already set
+                        try:
+                            supabase.table('outreach_log').update({
+                                'replied_at': now.isoformat(),
+                            }).eq('id', outreach_row['id']).is_('replied_at', 'null').execute()
+                        except Exception:
+                            pass
+                        self._log('email_reply', outreach_row.get('lead_id'),
+                                  f"Reply from {contact_email} at {website}")
                         continue
                 except Exception as e:
                     print(f"  ⚠️ Could not check replies: {e}")
@@ -1739,12 +1853,18 @@ class AISDRAgent:
             self._log('autonomous_run', summary=f"Gmail auth failed: {e}", status='failed')
             return
 
-        # Phase 1: Check bounces once at start
-        print("\n📬 Phase 1: Checking bounces...")
+        # Phase 1: Check bounces and replies once at start
+        print("\n📬 Phase 1a: Checking bounces...")
         try:
             self.check_bounces()
         except Exception as e:
             print(f"  ⚠️ Bounce check error: {e}")
+
+        print("\n💬 Phase 1b: Checking replies...")
+        try:
+            self.check_replies()
+        except Exception as e:
+            print(f"  ⚠️ Reply check error: {e}")
 
         # Phase 2: Process follow-ups once at start
         print(f"\n{'=' * 80}")
@@ -1810,7 +1930,7 @@ class AISDRAgent:
                     self._update_heartbeat()
                 continue
 
-            # Periodically process follow-ups during the send loop
+            # Periodically process follow-ups and check replies during the send loop
             if loop_count % followup_check_interval == 0:
                 print(f"\n📩 Periodic follow-up check (loop #{loop_count})...")
                 try:
@@ -1819,6 +1939,10 @@ class AISDRAgent:
                     total_sent_this_run += fu_sent
                 except Exception as e:
                     print(f"  ⚠️ Follow-up error: {e}")
+                try:
+                    self.check_replies()
+                except Exception as e:
+                    print(f"  ⚠️ Reply check error: {e}")
 
             # Send a small batch (5 at a time to allow frequent settings checks)
             batch_size = min(remaining, 5)
@@ -1864,6 +1988,7 @@ if __name__ == "__main__":
         print("  python ai_sdr_agent.py send-batch 10     # Send N emails")
         print("  python ai_sdr_agent.py process-followups  # Send due follow-up emails")
         print("  python ai_sdr_agent.py check-bounces     # Check bounced emails")
+        print("  python ai_sdr_agent.py check-replies     # Scan threads for new replies")
         print("  python ai_sdr_agent.py batch-verify 500  # Pre-verify N emails for HIGH leads")
         print("  python ai_sdr_agent.py verify-gmail      # Test Gmail")
         print("  python ai_sdr_agent.py status             # Pipeline stats")
@@ -1880,6 +2005,8 @@ if __name__ == "__main__":
         agent.process_followups()
     elif cmd == "check-bounces":
         agent.check_bounces()
+    elif cmd == "check-replies":
+        agent.check_replies()
     elif cmd == "batch-verify":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 500
         min_score = int(sys.argv[3]) if len(sys.argv) > 3 else 60
