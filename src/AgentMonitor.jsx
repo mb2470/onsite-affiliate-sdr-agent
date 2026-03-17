@@ -59,11 +59,13 @@ export default function AgentMonitor() {
     if (resolvedOrgId) emailsTodayQuery = emailsTodayQuery.eq('org_id', resolvedOrgId);
     const { count: emailsToday } = await emailsTodayQuery;
 
-    // Query outreach_log for accurate reply count using actual reply date
+    // Query outreach_log for accurate reply count — exclude bounces and auto-responders
+    // (auto-responders have replied_at cleared by check-replies; bounces have bounced=true)
     let repliesTodayQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
-      .gte('replied_at', todayStart.toISOString());
+      .gte('replied_at', todayStart.toISOString())
+      .or('bounced.is.null,bounced.eq.false');
     if (resolvedOrgId) repliesTodayQuery = repliesTodayQuery.eq('org_id', resolvedOrgId);
     const { count: repliesToday } = await repliesTodayQuery;
 
@@ -266,12 +268,13 @@ export default function AgentMonitor() {
     if (activeOrgId) sentQuery = sentQuery.eq('org_id', activeOrgId);
     const { count: sent } = await sentQuery;
 
-    // Query outreach_log for accurate reply count using actual reply date
+    // Query outreach_log for accurate reply count — exclude bounces and auto-responders
     let repliesQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
       .gte('replied_at', start)
-      .lte('replied_at', end);
+      .lte('replied_at', end)
+      .or('bounced.is.null,bounced.eq.false');
     if (activeOrgId) repliesQuery = repliesQuery.eq('org_id', activeOrgId);
     const { count: replies } = await repliesQuery;
 
