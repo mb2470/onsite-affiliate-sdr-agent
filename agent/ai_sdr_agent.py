@@ -596,6 +596,31 @@ class GmailService:
         profile = self._gmail_request('GET', 'profile')
         return profile['emailAddress']
 
+    def count_sent_since(self, start_dt: datetime, from_addresses: Optional[set] = None) -> Optional[int]:
+        """Return Gmail's sent count since a UTC datetime. Falls back to None on API issues."""
+        try:
+            after_epoch = int(start_dt.timestamp())
+            query_parts = [f"in:sent after:{after_epoch}"]
+
+            senders = {
+                self._canonicalize_email(addr)
+                for addr in (from_addresses or set())
+                if addr
+            }
+            if senders:
+                sender_filters = ' OR '.join(
+                    f"from:{urllib.parse.quote(addr)}" for addr in sorted(senders)
+                )
+                query_parts.append(f"({sender_filters})")
+
+            query = ' '.join(query_parts)
+            encoded = urllib.parse.quote(query)
+            search = self._gmail_request('GET', f'messages?q={encoded}&maxResults=1')
+            return int(search.get('resultSizeEstimate', 0) or 0)
+        except Exception as e:
+            print(f"  ⚠️ Could not fetch Gmail sent count: {e}")
+            return None
+
 
 # ═══════════════════════════════════════════════════════════
 # EMAIL GENERATION
@@ -919,7 +944,8 @@ class AISDRAgent:
         return True
 
     def _get_remaining_today(self, max_per_day: int) -> int:
-        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today = day_start.strftime('%Y-%m-%d')
         query = supabase.table("outreach_log").select(
             "id", count="exact", head=True
         ).gte("sent_at", f"{today}T00:00:00Z")
@@ -927,7 +953,20 @@ class AISDRAgent:
         if org_id:
             query = query.eq("org_id", org_id)
         today_count = query.execute()
-        sent_today = today_count.count or 0
+
+        sent_today_db = today_count.count or 0
+
+        sender_aliases = self.gmail.get_accepted_aliases() or set()
+        sender_aliases.add(self.gmail.get_from_email())
+        sent_today_gmail = self.gmail.count_sent_since(day_start, sender_aliases)
+
+        sent_today = max(sent_today_db, sent_today_gmail or 0)
+        if sent_today_gmail is not None and sent_today_gmail != sent_today_db:
+            print(
+                f"  ⚠️ Sent-count mismatch (outreach_log={sent_today_db}, gmail={sent_today_gmail}). "
+                "Using the higher value for safety."
+            )
+
         return max_per_day - sent_today
 
     def _resolve_org_id(self, settings: Optional[Dict] = None) -> Optional[str]:
