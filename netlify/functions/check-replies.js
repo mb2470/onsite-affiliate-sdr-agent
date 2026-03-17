@@ -249,10 +249,12 @@ exports.handler = async (event) => {
         org_id: orgId,
       });
 
-      // Mark in outreach_log
+      // Mark in outreach_log using the actual reply date from Gmail headers
+      const actualReplyDate = reply.date ? new Date(reply.date) : null;
+      const repliedAt = actualReplyDate && !isNaN(actualReplyDate) ? actualReplyDate.toISOString() : new Date().toISOString();
       await supabase
         .from('outreach_log')
-        .update({ replied_at: new Date().toISOString() })
+        .update({ replied_at: repliedAt })
         .eq('contact_email', reply.from)
         .is('replied_at', null);
 
