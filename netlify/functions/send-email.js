@@ -142,8 +142,23 @@ async function verifyEmail(email, orgId) {
   }
 }
 
-async function getAccessToken() {
-  const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
+async function getGmailCredentials(orgId) {
+  const { data } = await supabase
+    .from('email_settings')
+    .select('gmail_oauth_credentials')
+    .eq('org_id', orgId)
+    .maybeSingle();
+  return data?.gmail_oauth_credentials || null;
+}
+
+async function getAccessToken(orgId) {
+  // Use per-org credentials from DB first (consistent with gmail-inbox.js),
+  // then fall back to env var
+  const orgCreds = await getGmailCredentials(orgId);
+  const credsJson = orgCreds || process.env.GMAIL_OAUTH_CREDENTIALS;
+  if (!credsJson) throw new Error('No Gmail OAuth credentials available (neither org-level nor env var)');
+
+  const creds = typeof credsJson === 'string' ? JSON.parse(credsJson) : credsJson;
 
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -205,7 +220,7 @@ function resolveFromAlias(requestedFromEmail, aliases) {
 async function getEmailSettings(orgId) {
   const { data } = await supabase
     .from('email_settings')
-    .select('gmail_from_email, gmail_from_name')
+    .select('gmail_from_email, gmail_from_name, gmail_oauth_credentials')
     .eq('org_id', orgId)
     .maybeSingle();
   return data || {};
@@ -475,13 +490,17 @@ exports.handler = async (event) => {
     }
 
     const settings = await getEmailSettings(orgId);
-    const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken(orgId);
     const aliases = await getSendAsAliases(accessToken);
-    const acceptedAliasSet = new Set(
-      aliases
-        .filter((a) => a?.verificationStatus === 'accepted' && a?.sendAsEmail)
-        .map((a) => a.sendAsEmail.trim().toLowerCase())
+    const acceptedAliases = aliases.filter(
+      (a) => a?.verificationStatus === 'accepted' && a?.sendAsEmail
     );
+    const acceptedAliasSet = new Set(
+      acceptedAliases.map((a) => a.sendAsEmail.trim().toLowerCase())
+    );
+
+    console.log(`📋 Gmail aliases found: ${acceptedAliases.map(a => `${a.sendAsEmail} (${a.isPrimary ? 'primary' : 'alias'})`).join(', ') || 'none'}`);
+
     const {
       account: selectedSender,
       hasConfiguredAccounts,
@@ -540,13 +559,31 @@ exports.handler = async (event) => {
       };
     }
 
-    const fromEmail = selectedSender?.email_address
-      || settings.gmail_from_email
-      || process.env.GMAIL_FROM_EMAIL
-      || 'sam@onsiteaffiliate.com';
-    const fromName = selectedSender?.display_name
-      || settings.gmail_from_name
-      || 'Sam Reid';
+    // When no email_accounts are configured, pick a non-primary alias to rotate through
+    // instead of always falling back to the primary/hardcoded email
+    let fromEmail;
+    let fromName;
+
+    if (selectedSender) {
+      fromEmail = selectedSender.email_address;
+      fromName = selectedSender.display_name || settings.gmail_from_name || 'Sam Reid';
+    } else {
+      // No email_accounts configured — try to use a non-primary accepted alias
+      const nonPrimaryAliases = acceptedAliases.filter((a) => !a.isPrimary);
+      if (nonPrimaryAliases.length > 0) {
+        // Simple round-robin: pick alias based on minute to distribute sends
+        const idx = new Date().getMinutes() % nonPrimaryAliases.length;
+        const alias = nonPrimaryAliases[idx];
+        fromEmail = alias.sendAsEmail;
+        fromName = alias.displayName || settings.gmail_from_name || 'Sam Reid';
+        console.log(`📧 No email_accounts configured — using Gmail alias: ${fromEmail}`);
+      } else {
+        fromEmail = settings.gmail_from_email
+          || process.env.GMAIL_FROM_EMAIL
+          || 'sam@onsiteaffiliate.com';
+        fromName = settings.gmail_from_name || 'Sam Reid';
+      }
+    }
 
     const { fromEmail: resolvedFromEmail, warning: aliasWarning } = resolveFromAlias(fromEmail, aliases);
 
