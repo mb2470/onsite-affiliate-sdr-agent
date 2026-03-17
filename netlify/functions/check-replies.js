@@ -193,14 +193,20 @@ exports.handler = async (event) => {
             
             const body = getMessageBody(detail);
             
-            // Check if auto-responder
+            // Check if auto-responder — clear any previously set replied_at so it
+            // doesn't pollute reply stats, then skip (don't count as a real reply)
             if (isAutoResponder(detail, body)) {
               autoResponders++;
               console.log(`🤖 Auto-responder from ${replyEmail}: "${subject.substring(0, 50)}"`);
+              await supabase
+                .from('outreach_log')
+                .update({ replied_at: null })
+                .eq('contact_email', replyEmail)
+                .not('replied_at', 'is', null);
               continue;
             }
 
-            // Skip already processed
+            // Skip already processed genuine replies
             if (alreadyProcessed.has(replyEmail)) continue;
 
             // Find the matching outreach
