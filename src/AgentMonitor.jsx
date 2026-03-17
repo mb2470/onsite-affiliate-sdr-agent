@@ -100,11 +100,21 @@ export default function AgentMonitor() {
 
     const resolvedEmailsToday = gmailSentToday ?? reportingSentToday ?? (emailsToday || 0);
 
+    const baseDailyLimit = Number.isFinite(s?.max_emails_per_day)
+      ? s.max_emails_per_day
+      : parseInt(s?.max_emails_per_day, 10) || 20;
+    const senderAliasLimit = nextAccounts.reduce((sum, account) => {
+      const parsed = Number.isFinite(account?.daily_send_limit)
+        ? account.daily_send_limit
+        : parseInt(account?.daily_send_limit, 10);
+      return sum + (Number.isFinite(parsed) && parsed > 0 ? parsed : 0);
+    }, 0);
+
     setStats(prev => ({
       ...prev,
       emailsToday: resolvedEmailsToday,
       repliesToday: repliesToday || 0,
-      maxPerDay: s?.max_emails_per_day || 20,
+      maxPerDay: baseDailyLimit + senderAliasLimit,
       lastHeartbeat: s?.last_heartbeat,
     }));
 
