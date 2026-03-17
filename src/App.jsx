@@ -337,37 +337,62 @@ function AuthenticatedApp({ session }) {
       });
     } catch (e) { console.error(e); }
 
-    // Deliverability (trailing 7 days): delivered / sent * 100
+    // Deliverability (trailing 7 days): prefer live Gmail metrics, then DB fallback
     try {
-      const trailingStart = new Date();
-      trailingStart.setDate(trailingStart.getDate() - 7);
-      const trailingStartIso = trailingStart.toISOString();
+      let sent = null;
+      let bouncedCount = null;
 
-      // Count sent emails in trailing 7 days
-      const { count: sentCount, error: sentError } = await supabase
-        .from('outreach_log')
-        .select('*', { count: 'exact', head: true })
-        .eq('org_id', orgId)
-        .gte('sent_at', trailingStartIso);
+      try {
+        const gmailStatsRes = await fetch('/.netlify/functions/gmail-inbox', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'stats', org_id: orgId, trailing_days: 7 }),
+        });
 
-      if (sentError) console.error('Deliverability sent query error:', sentError);
+        if (gmailStatsRes.ok) {
+          const gmailStats = await gmailStatsRes.json();
+          if (Number.isFinite(gmailStats?.gmail_sent_trailing)) {
+            sent = Math.max(0, gmailStats.gmail_sent_trailing);
+          }
+          if (Number.isFinite(gmailStats?.gmail_bounces_trailing)) {
+            bouncedCount = Math.max(0, gmailStats.gmail_bounces_trailing);
+          }
+        }
+      } catch {
+        // Gmail stats unavailable; fallback below
+      }
 
-      // Count bounced emails in the same trailing window using outreach_log.bounced flag
-      const { count: bouncedCountRaw, error: bounceError } = await supabase
-        .from('outreach_log')
-        .select('*', { count: 'exact', head: true })
-        .eq('org_id', orgId)
-        .eq('bounced', true)
-        .gte('bounced_at', trailingStartIso);
+      if (!Number.isFinite(sent) || !Number.isFinite(bouncedCount)) {
+        const trailingStart = new Date();
+        trailingStart.setDate(trailingStart.getDate() - 7);
+        const trailingStartIso = trailingStart.toISOString();
 
-      if (bounceError) console.error('Deliverability bounce query error:', bounceError);
+        const { count: sentCount, error: sentError } = await supabase
+          .from('outreach_log')
+          .select('*', { count: 'exact', head: true })
+          .eq('org_id', orgId)
+          .gte('sent_at', trailingStartIso);
 
-      const sent = sentCount || 0;
-      const bouncedCount = Math.min(sent, bouncedCountRaw || 0);
-      const deliveredCount = Math.max(0, sent - bouncedCount);
-      const deliverabilityPercent = sent > 0 ? ((deliveredCount / sent) * 100).toFixed(1) : '0.0';
+        if (sentError) console.error('Deliverability sent query error:', sentError);
 
-      setDeliverabilityStats({ delivered: deliveredCount, sent, percent: deliverabilityPercent });
+        const { count: bouncedCountRaw, error: bounceError } = await supabase
+          .from('outreach_log')
+          .select('*', { count: 'exact', head: true })
+          .eq('org_id', orgId)
+          .eq('bounced', true)
+          .gte('bounced_at', trailingStartIso);
+
+        if (bounceError) console.error('Deliverability bounce query error:', bounceError);
+
+        sent = sentCount || 0;
+        bouncedCount = bouncedCountRaw || 0;
+      }
+
+      const boundedBounces = Math.min(sent || 0, bouncedCount || 0);
+      const deliveredCount = Math.max(0, (sent || 0) - boundedBounces);
+      const deliverabilityPercent = (sent || 0) > 0 ? ((deliveredCount / sent) * 100).toFixed(1) : '0.0';
+
+      setDeliverabilityStats({ delivered: deliveredCount, sent: sent || 0, percent: deliverabilityPercent });
     } catch (e) { console.error(e); }
 
     try {
