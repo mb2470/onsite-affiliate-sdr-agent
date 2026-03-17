@@ -713,13 +713,19 @@ async function handleStats(orgId, creds, body = {}) {
     ? Math.max(1, parseInt(body.trailing_days, 10))
     : 1;
 
-  // Gmail source-of-truth sent count for trailing window (UTC day bucket)
+  const tzOffsetMinutes = Number.isFinite(Number(body.tz_offset_minutes))
+    ? parseInt(body.tz_offset_minutes, 10)
+    : 0;
+
+  // Gmail source-of-truth sent count for trailing window (local day bucket)
   let gmailSentTrailing = null;
   try {
-    const start = new Date();
-    start.setUTCHours(0, 0, 0, 0);
-    start.setUTCDate(start.getUTCDate() - (trailingDays - 1));
-    const afterEpochSeconds = Math.floor(start.getTime() / 1000);
+    const offsetMs = tzOffsetMinutes * 60 * 1000;
+    const localNow = new Date(Date.now() - offsetMs);
+    localNow.setUTCHours(0, 0, 0, 0);
+    localNow.setUTCDate(localNow.getUTCDate() - (trailingDays - 1));
+    const startUtcMs = localNow.getTime() + offsetMs;
+    const afterEpochSeconds = Math.floor(startUtcMs / 1000);
 
     const sentQuery = `in:sent after:${afterEpochSeconds}`;
     const sentData = await gmailRequest(
@@ -736,10 +742,12 @@ async function handleStats(orgId, creds, body = {}) {
   // Gmail bounce proxy from mailbox DSN-style messages in same trailing window
   let gmailBouncesTrailing = null;
   try {
-    const start = new Date();
-    start.setUTCHours(0, 0, 0, 0);
-    start.setUTCDate(start.getUTCDate() - (trailingDays - 1));
-    const afterEpochSeconds = Math.floor(start.getTime() / 1000);
+    const offsetMs = tzOffsetMinutes * 60 * 1000;
+    const localNow = new Date(Date.now() - offsetMs);
+    localNow.setUTCHours(0, 0, 0, 0);
+    localNow.setUTCDate(localNow.getUTCDate() - (trailingDays - 1));
+    const startUtcMs = localNow.getTime() + offsetMs;
+    const afterEpochSeconds = Math.floor(startUtcMs / 1000);
 
     const bounceQuery = `after:${afterEpochSeconds} (from:mailer-daemon OR from:postmaster OR subject:"Delivery Status Notification" OR subject:"Undeliverable" OR subject:"Message blocked" OR subject:"Delivery has failed")`;
     const bounceData = await gmailRequest(
@@ -768,6 +776,7 @@ async function handleStats(orgId, creds, body = {}) {
     gmail_sent_trailing: gmailSentTrailing,
     gmail_bounces_trailing: gmailBouncesTrailing,
     gmail_trailing_days: trailingDays,
+    gmail_tz_offset_minutes: tzOffsetMinutes,
   });
 }
 

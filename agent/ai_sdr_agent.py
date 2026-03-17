@@ -609,7 +609,7 @@ class GmailService:
             }
             if senders:
                 sender_filters = ' OR '.join(
-                    f"from:{urllib.parse.quote(addr)}" for addr in sorted(senders)
+                    f"from:{addr}" for addr in sorted(senders)
                 )
                 query_parts.append(f"({sender_filters})")
 
