@@ -6,11 +6,8 @@ const supabase = createClient(
   process.env.VITE_SUPABASE_ANON_KEY
 );
 
-async function getAccessToken(orgCredentials = null) {
-  const credsJson = orgCredentials || process.env.GMAIL_OAUTH_CREDENTIALS;
-  if (!credsJson) throw new Error('No Gmail OAuth credentials available');
-
-  const creds = typeof credsJson === 'string' ? JSON.parse(credsJson) : credsJson;
+async function getAccessToken() {
+  const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -24,15 +21,6 @@ async function getAccessToken(orgCredentials = null) {
   const data = await response.json();
   if (!data.access_token) throw new Error('Failed to refresh token');
   return data.access_token;
-}
-
-async function getOrgOAuthCredentials(orgId) {
-  const { data } = await supabase
-    .from('email_settings')
-    .select('gmail_oauth_credentials')
-    .eq('org_id', orgId)
-    .maybeSingle();
-  return data?.gmail_oauth_credentials || null;
 }
 
 async function gmailGet(accessToken, endpoint) {
@@ -140,8 +128,7 @@ exports.handler = async (event) => {
   try {
     const body = event.body ? JSON.parse(event.body) : {};
     const orgId = await resolveOrgId(supabase, body.org_id);
-    const orgCreds = await getOrgOAuthCredentials(orgId);
-    const accessToken = await getAccessToken(orgCreds);
+    const accessToken = await getAccessToken();
     const fromEmail = process.env.GMAIL_FROM_EMAIL || '';
 
     // Get all emails we've sent from outreach_log
