@@ -323,6 +323,20 @@ function buildRawEmail({ to, bcc, subject, body, fromEmail, fromName }) {
     .replace(/=+$/, '');
 }
 
+async function incrementReportingDaily(orgId, sentDelta = 0) {
+  if (!orgId || sentDelta <= 0) return;
+  const reportDate = new Date().toISOString().slice(0, 10);
+  const { error } = await supabase.rpc('increment_email_reporting_daily', {
+    p_org_id: orgId,
+    p_report_date: reportDate,
+    p_sent_delta: sentDelta,
+  });
+
+  if (error) {
+    console.warn('⚠️ Failed to increment email_reporting_daily:', error.message || error);
+  }
+}
+
 const { corsHeaders } = require('./lib/cors');
 
 exports.handler = async (event) => {
@@ -636,6 +650,7 @@ exports.handler = async (event) => {
     });
 
     await supabase.from('outreach_log').insert(outreachRows);
+    await incrementReportingDaily(orgId, safeEmails.length);
 
     if (selectedSender?.id) {
       await incrementSenderDailySent(selectedSender.id, safeEmails.length);

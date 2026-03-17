@@ -643,7 +643,7 @@ async function handleSync(orgId, creds, body) {
   });
 }
 
-async function handleStats(orgId, creds) {
+async function handleStats(orgId, creds, body = {}) {
   // Total conversations from Supabase
   const { count: total } = await supabase
     .from('email_conversations')
@@ -709,6 +709,52 @@ async function handleStats(orgId, creds) {
     // Silently fail — live count is optional
   }
 
+  const trailingDays = Number.isFinite(Number(body.trailing_days))
+    ? Math.max(1, parseInt(body.trailing_days, 10))
+    : 1;
+
+  // Gmail source-of-truth sent count for trailing window (UTC day bucket)
+  let gmailSentTrailing = null;
+  try {
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCDate(start.getUTCDate() - (trailingDays - 1));
+    const afterEpochSeconds = Math.floor(start.getTime() / 1000);
+
+    const sentQuery = `in:sent after:${afterEpochSeconds}`;
+    const sentData = await gmailRequest(
+      orgId,
+      creds,
+      'GET',
+      `/users/me/messages?q=${encodeURIComponent(sentQuery)}&maxResults=1`
+    );
+    if (sentData) gmailSentTrailing = sentData.resultSizeEstimate || 0;
+  } catch {
+    // Silently fail — live count is optional
+  }
+
+  // Gmail bounce proxy from mailbox DSN-style messages in same trailing window
+  let gmailBouncesTrailing = null;
+  try {
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCDate(start.getUTCDate() - (trailingDays - 1));
+    const afterEpochSeconds = Math.floor(start.getTime() / 1000);
+
+    const bounceQuery = `after:${afterEpochSeconds} (from:mailer-daemon OR from:postmaster OR subject:"Delivery Status Notification" OR subject:"Undeliverable" OR subject:"Message blocked" OR subject:"Delivery has failed")`;
+    const bounceData = await gmailRequest(
+      orgId,
+      creds,
+      'GET',
+      `/users/me/messages?q=${encodeURIComponent(bounceQuery)}&maxResults=1`
+    );
+    if (bounceData) gmailBouncesTrailing = bounceData.resultSizeEstimate || 0;
+  } catch {
+    // Silently fail — live count is optional
+  }
+
+  const gmailSentToday = trailingDays === 1 ? gmailSentTrailing : null;
+
   return respond(200, {
     total_conversations: total || 0,
     unread: unread || 0,
@@ -718,6 +764,10 @@ async function handleStats(orgId, creds) {
       outbound: outboundCount || 0,
     },
     gmail_unread_total: gmailUnreadTotal,
+    gmail_sent_today: gmailSentToday,
+    gmail_sent_trailing: gmailSentTrailing,
+    gmail_bounces_trailing: gmailBouncesTrailing,
+    gmail_trailing_days: trailingDays,
   });
 }
 
@@ -785,7 +835,7 @@ exports.handler = async (event) => {
       case 'sync':
         return await handleSync(orgId, creds, body);
       case 'stats':
-        return await handleStats(orgId, creds);
+        return await handleStats(orgId, creds, body);
       case 'mark-read':
         return await handleMarkRead(orgId, creds, body);
       default:

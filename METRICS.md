@@ -76,7 +76,17 @@ Tracks per-sender daily usage for multi-sender rotation.
 This is a legacy table. **Do not query it for metrics.** All email metrics come from `outreach_log`.
 
 ### `daily_stats` table — NOT used
-This table may not exist or be populated. **Do not query it.** Use `activity_log` and `outreach_log` instead.
+This table may not exist or be populated. **Do not query it.**
+
+### `email_reporting_daily` — Dashboard rollup source (new)
+Daily aggregate table keyed by `(org_id, report_date)` and updated at send-time.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `report_date` | date | UTC date bucket |
+| `sent_count` | int | Emails sent on that day |
+| `reply_count` | int | Replies tracked for that day |
+| `bounce_count` | int | Bounces tracked for that day |
 
 ---
 
@@ -378,7 +388,9 @@ Before any email is sent, it goes through a two-step verification:
 
 1. **All queries must filter by `org_id`** — This is a multi-tenant system. Rows without `org_id` are invisible to the frontend dashboards.
 
-2. **`outreach_log` is the source of truth for emails** — Never use the `emails` table or `daily_stats` table for email metrics.
+2. **Gmail is the source of truth for sent mail acceptance**; dashboard prefers live Gmail sent-today when available, then `email_reporting_daily`, then `outreach_log` fallback. Never use the `emails` table or `daily_stats` table for email metrics.
+
+   Deliverability on the main dashboard follows the same pattern for trailing windows: live Gmail sent + bounce-proxy counts first, then `outreach_log` fallback if Gmail stats are unavailable.
 
 3. **Supabase default limit is 1000 rows** — Use `{ count: 'exact', head: true }` for accurate counts, or paginate with `.range()` when fetching actual rows.
 

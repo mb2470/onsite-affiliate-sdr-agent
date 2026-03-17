@@ -69,9 +69,40 @@ export default function AgentMonitor() {
     if (resolvedOrgId) repliesTodayQuery = repliesTodayQuery.eq('org_id', resolvedOrgId);
     const { count: repliesToday } = await repliesTodayQuery;
 
+    let reportingSentToday = null;
+    const reportDate = todayStart.toISOString().slice(0, 10);
+    let reportingQuery = supabase
+      .from('email_reporting_daily')
+      .select('sent_count')
+      .eq('report_date', reportDate)
+      .limit(1)
+      .maybeSingle();
+    if (resolvedOrgId) reportingQuery = reportingQuery.eq('org_id', resolvedOrgId);
+    const { data: reportingToday } = await reportingQuery;
+    reportingSentToday = reportingToday?.sent_count ?? null;
+
+    let gmailSentToday = null;
+    try {
+      const gmailStatsRes = await fetch('/.netlify/functions/gmail-inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stats', org_id: resolvedOrgId }),
+      });
+      if (gmailStatsRes.ok) {
+        const gmailStats = await gmailStatsRes.json();
+        if (Number.isFinite(gmailStats?.gmail_sent_today)) {
+          gmailSentToday = gmailStats.gmail_sent_today;
+        }
+      }
+    } catch {
+      // Live Gmail stats are optional — fallback to reporting/outreach counts
+    }
+
+    const resolvedEmailsToday = gmailSentToday ?? reportingSentToday ?? (emailsToday || 0);
+
     setStats(prev => ({
       ...prev,
-      emailsToday: emailsToday || 0,
+      emailsToday: resolvedEmailsToday,
       repliesToday: repliesToday || 0,
       maxPerDay: s?.max_emails_per_day || 20,
       lastHeartbeat: s?.last_heartbeat,
@@ -259,14 +290,27 @@ export default function AgentMonitor() {
       return q;
     };
 
-    // Query outreach_log for accurate sent count (source of truth per CLAUDE.md)
+    // Reporting table is the primary source for sent counts (aggregated at write-time)
+    const startDate = start.slice(0, 10);
+    const endDate = end.slice(0, 10);
+    let reportingRangeQuery = supabase
+      .from('email_reporting_daily')
+      .select('sent_count')
+      .gte('report_date', startDate)
+      .lte('report_date', endDate);
+    if (activeOrgId) reportingRangeQuery = reportingRangeQuery.eq('org_id', activeOrgId);
+    const { data: reportingRows } = await reportingRangeQuery;
+    const reportingSent = (reportingRows || []).reduce((sum, row) => sum + (parseInt(row.sent_count, 10) || 0), 0);
+
+    // Fallback to outreach_log where reporting rows are not present yet
     let sentQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
       .gte('sent_at', start)
       .lte('sent_at', end);
     if (activeOrgId) sentQuery = sentQuery.eq('org_id', activeOrgId);
-    const { count: sent } = await sentQuery;
+    const { count: sentFallback } = await sentQuery;
+    const sent = reportingRows && reportingRows.length > 0 ? reportingSent : (sentFallback || 0);
 
     // Query outreach_log for accurate reply count — exclude bounces and auto-responders
     let repliesQuery = supabase

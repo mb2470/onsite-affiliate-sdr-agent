@@ -1046,6 +1046,19 @@ class AISDRAgent:
         pool = self._load_sender_pool(settings)
         return sum(int(s.get('remaining', 0)) for s in pool)
 
+    def _increment_reporting_daily(self, org_id: Optional[str], sent_delta: int = 0):
+        if not org_id or sent_delta <= 0:
+            return
+        try:
+            report_date = datetime.now(timezone.utc).date().isoformat()
+            supabase.rpc('increment_email_reporting_daily', {
+                'p_org_id': org_id,
+                'p_report_date': report_date,
+                'p_sent_delta': sent_delta,
+            }).execute()
+        except Exception as e:
+            print(f"  ⚠️ Could not increment email_reporting_daily: {e}")
+
     # ─── STATUS ────────────────────────────────────
 
     def show_status(self):
@@ -1221,6 +1234,7 @@ class AISDRAgent:
         if org_id:
             outreach_row_data["org_id"] = org_id
         supabase.table("outreach_log").insert(outreach_row_data).execute()
+        self._increment_reporting_daily(org_id, 1)
 
         # Mark contacted
         supabase.table("leads").update({
@@ -1818,6 +1832,7 @@ class AISDRAgent:
             if fu_org_id:
                 fu_outreach_data["org_id"] = fu_org_id
             supabase.table("outreach_log").insert(fu_outreach_data).execute()
+            self._increment_reporting_daily(fu_org_id, 1)
 
             self._log('followup_sent', outreach_row.get('lead_id'),
                        f"Follow-up #{fu_number} sent to {contact_name} <{contact_email}> at {website}")
