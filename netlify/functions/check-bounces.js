@@ -6,8 +6,12 @@ const supabase = createClient(
 );
 
 // Refresh OAuth access token using refresh token
-async function getAccessToken() {
-  const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
+// Accepts optional org-level credentials; falls back to env var
+async function getAccessToken(orgCredentials = null) {
+  const credsJson = orgCredentials || process.env.GMAIL_OAUTH_CREDENTIALS;
+  if (!credsJson) throw new Error('No Gmail OAuth credentials available');
+
+  const creds = typeof credsJson === 'string' ? JSON.parse(credsJson) : credsJson;
 
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -23,6 +27,15 @@ async function getAccessToken() {
   const data = await response.json();
   if (!data.access_token) throw new Error('Failed to refresh token: ' + JSON.stringify(data));
   return data.access_token;
+}
+
+async function getOrgOAuthCredentials(orgId) {
+  const { data } = await supabase
+    .from('email_settings')
+    .select('gmail_oauth_credentials')
+    .eq('org_id', orgId)
+    .maybeSingle();
+  return data?.gmail_oauth_credentials || null;
 }
 
 // Gmail API helper
@@ -46,7 +59,8 @@ exports.handler = async (event) => {
     const orgId = body.org_id || event.headers['x-org-id'] || event.headers['X-Org-Id'];
     if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
 
-    const accessToken = await getAccessToken();
+    const orgCreds = await getOrgOAuthCredentials(orgId);
+    const accessToken = await getAccessToken(orgCreds);
 
     // Search for bounce notifications from common Gmail bounce senders in last 30 days
     const bounceQuery = [

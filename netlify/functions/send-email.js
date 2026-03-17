@@ -142,8 +142,11 @@ async function verifyEmail(email, orgId) {
   }
 }
 
-async function getAccessToken() {
-  const creds = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
+async function getAccessToken(orgCredentials = null) {
+  const credsJson = orgCredentials || process.env.GMAIL_OAUTH_CREDENTIALS;
+  if (!credsJson) throw new Error('No Gmail OAuth credentials available (neither org-level nor env var)');
+
+  const creds = typeof credsJson === 'string' ? JSON.parse(credsJson) : credsJson;
 
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -205,7 +208,7 @@ function resolveFromAlias(requestedFromEmail, aliases) {
 async function getEmailSettings(orgId) {
   const { data } = await supabase
     .from('email_settings')
-    .select('gmail_from_email, gmail_from_name')
+    .select('gmail_from_email, gmail_from_name, gmail_oauth_credentials')
     .eq('org_id', orgId)
     .maybeSingle();
   return data || {};
@@ -475,7 +478,7 @@ exports.handler = async (event) => {
     }
 
     const settings = await getEmailSettings(orgId);
-    const accessToken = await getAccessToken();
+    const accessToken = await getAccessToken(settings.gmail_oauth_credentials);
     const aliases = await getSendAsAliases(accessToken);
     const acceptedAliasSet = new Set(
       aliases
