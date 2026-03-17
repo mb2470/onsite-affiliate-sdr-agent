@@ -86,7 +86,12 @@ export default function AgentMonitor() {
       const gmailStatsRes = await fetch('/.netlify/functions/gmail-inbox', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'stats', org_id: resolvedOrgId }),
+        body: JSON.stringify({
+          action: 'stats',
+          org_id: resolvedOrgId,
+          trailing_days: 1,
+          tz_offset_minutes: new Date().getTimezoneOffset(),
+        }),
       });
       if (gmailStatsRes.ok) {
         const gmailStats = await gmailStatsRes.json();
