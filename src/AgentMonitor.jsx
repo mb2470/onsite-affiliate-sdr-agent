@@ -51,11 +51,11 @@ export default function AgentMonitor() {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
+    // Query outreach_log for accurate sent count (source of truth per CLAUDE.md)
     let emailsTodayQuery = supabase
-      .from('activity_log')
+      .from('outreach_log')
       .select('*', { count: 'exact', head: true })
-      .in('activity_type', ['email_sent', 'email_exported'])
-      .gte('created_at', todayStart.toISOString());
+      .gte('sent_at', todayStart.toISOString());
     if (resolvedOrgId) emailsTodayQuery = emailsTodayQuery.eq('org_id', resolvedOrgId);
     const { count: emailsToday } = await emailsTodayQuery;
 
@@ -242,7 +242,7 @@ export default function AgentMonitor() {
   const loadRangeStats = async () => {
     const { start, end } = getDateRange();
 
-    const rangeQuery = (activityType) => {
+    const activityRangeQuery = (activityType) => {
       let q = supabase
         .from('activity_log')
         .select('*', { count: 'exact', head: true })
@@ -257,9 +257,17 @@ export default function AgentMonitor() {
       return q;
     };
 
-    const { count: sent } = await rangeQuery(['email_sent', 'email_exported']);
-    const { count: replies } = await rangeQuery('email_reply');
-    const { count: bounces } = await rangeQuery('email_bounced');
+    // Query outreach_log for accurate sent count (source of truth per CLAUDE.md)
+    let sentQuery = supabase
+      .from('outreach_log')
+      .select('*', { count: 'exact', head: true })
+      .gte('sent_at', start)
+      .lte('sent_at', end);
+    if (activeOrgId) sentQuery = sentQuery.eq('org_id', activeOrgId);
+    const { count: sent } = await sentQuery;
+
+    const { count: replies } = await activityRangeQuery('email_reply');
+    const { count: bounces } = await activityRangeQuery('email_bounced');
 
     const replyRate = sent > 0 ? ((replies || 0) / sent * 100).toFixed(1) : 0;
 
