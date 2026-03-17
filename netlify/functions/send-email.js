@@ -567,6 +567,7 @@ exports.handler = async (event) => {
     if (selectedSender) {
       fromEmail = selectedSender.email_address;
       fromName = selectedSender.display_name || settings.gmail_from_name || 'Sam Reid';
+      console.log(`📧 Selected sender account: ${fromEmail} (${selectedSender.current_daily_sent || 0}/${selectedSender.daily_send_limit} sent today)`);
     } else {
       // No email_accounts configured — try to use a non-primary accepted alias
       const nonPrimaryAliases = acceptedAliases.filter((a) => !a.isPrimary);
