@@ -345,19 +345,6 @@ function buildRawEmail({ to, bcc, subject, body, fromEmail, fromName }) {
     .replace(/=+$/, '');
 }
 
-async function incrementReportingDaily(orgId, sentDelta = 0) {
-  if (!orgId || sentDelta <= 0) return;
-  const reportDate = new Date().toISOString().slice(0, 10);
-  const { error } = await supabase.rpc('increment_email_reporting_daily', {
-    p_org_id: orgId,
-    p_report_date: reportDate,
-    p_sent_delta: sentDelta,
-  });
-
-  if (error) {
-    console.warn('⚠️ Failed to increment email_reporting_daily:', error.message || error);
-  }
-}
 
 const { corsHeaders } = require('./lib/cors');
 
@@ -690,8 +677,6 @@ exports.handler = async (event) => {
       console.error(`❌ CRITICAL: outreach_log insert failed after 3 attempts for gmail_message_id=${sendData.id}. `
         + `Email WAS sent to ${safeEmails.join(', ')} but has no DB record.`);
     }
-
-    await incrementReportingDaily(orgId, safeEmails.length);
 
     if (leadId) {
       const firstContact = outreachRows[0] || {};

@@ -52,7 +52,6 @@ export default function AgentMonitor() {
     todayStart.setHours(0, 0, 0, 0);
 
     // outreach_log is the SINGLE source of truth for all email stats.
-    // No Gmail API cross-check, no email_reporting_daily fallback needed.
     let emailsTodayQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
