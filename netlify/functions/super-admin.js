@@ -13,6 +13,12 @@ const isMissingTableError = (error) => (
   || /organization_env_vars/i.test(error?.message || '')
 );
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 const parseBody = (event) => {
   try {
     return JSON.parse(event.body || '{}');
@@ -28,27 +34,31 @@ const getToken = (event) => {
 };
 
 exports.handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers: corsHeaders, body: '' };
+  }
+
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+    return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
   if (!supabaseUrl || !serviceKey) {
-    return { statusCode: 500, body: JSON.stringify({ error: 'Supabase server environment variables missing' }) };
+    return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: 'Supabase server environment variables missing' }) };
   }
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
     const token = getToken(event);
-    if (!token) return { statusCode: 401, body: JSON.stringify({ error: 'Missing bearer token' }) };
+    if (!token) return { statusCode: 401, headers: corsHeaders, body: JSON.stringify({ error: 'Missing bearer token' }) };
 
     const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
     if (authError || !authData?.user) {
-      return { statusCode: 401, body: JSON.stringify({ error: 'Invalid auth token' }) };
+      return { statusCode: 401, headers: corsHeaders, body: JSON.stringify({ error: 'Invalid auth token' }) };
     }
 
     const requesterEmail = (authData.user.email || '').toLowerCase();
     if (requesterEmail !== SUPER_ADMIN_EMAIL) {
-      return { statusCode: 403, body: JSON.stringify({ error: 'Super admin access required' }) };
+      return { statusCode: 403, headers: corsHeaders, body: JSON.stringify({ error: 'Super admin access required' }) };
     }
 
     const body = parseBody(event);
@@ -60,13 +70,13 @@ exports.handler = async (event) => {
         .select('id, name, slug, created_at')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return { statusCode: 200, body: JSON.stringify({ organizations: data || [] }) };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ organizations: data || [] }) };
     }
 
     if (action === 'create_org') {
       const name = (body.name || '').trim();
       const slug = (body.slug || '').trim().toLowerCase();
-      if (!name || !slug) return { statusCode: 400, body: JSON.stringify({ error: 'name and slug are required' }) };
+      if (!name || !slug) return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'name and slug are required' }) };
 
       const { data, error } = await supabaseAdmin
         .from('organizations')
@@ -75,21 +85,21 @@ exports.handler = async (event) => {
         .single();
       if (error) throw error;
 
-      return { statusCode: 200, body: JSON.stringify({ organization: data }) };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ organization: data }) };
     }
 
     if (action === 'invite_user') {
       const email = (body.email || '').trim().toLowerCase();
       const role = VALID_ROLES.has(body.role) ? body.role : 'member';
       const orgId = body.orgId;
-      if (!email || !orgId) return { statusCode: 400, body: JSON.stringify({ error: 'orgId and email are required' }) };
+      if (!email || !orgId) return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'orgId and email are required' }) };
 
       const { data: org, error: orgError } = await supabaseAdmin
         .from('organizations')
         .select('id, name, slug')
         .eq('id', orgId)
         .single();
-      if (orgError || !org) return { statusCode: 404, body: JSON.stringify({ error: 'Organization not found' }) };
+      if (orgError || !org) return { statusCode: 404, headers: corsHeaders, body: JSON.stringify({ error: 'Organization not found' }) };
 
       let userId;
       const { data: usersResult, error: usersError } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
@@ -107,7 +117,7 @@ exports.handler = async (event) => {
       }
 
       if (!userId) {
-        return { statusCode: 500, body: JSON.stringify({ error: 'Failed resolving user id for invite' }) };
+        return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: 'Failed resolving user id for invite' }) };
       }
 
       const { error: membershipError } = await supabaseAdmin
@@ -115,12 +125,12 @@ exports.handler = async (event) => {
         .upsert({ user_id: userId, org_id: orgId, role }, { onConflict: 'user_id,org_id' });
       if (membershipError) throw membershipError;
 
-      return { statusCode: 200, body: JSON.stringify({ email, role, org }) };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ email, role, org }) };
     }
 
     if (action === 'list_org_env') {
       const orgId = body.orgId;
-      if (!orgId) return { statusCode: 400, body: JSON.stringify({ error: 'orgId is required' }) };
+      if (!orgId) return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'orgId is required' }) };
 
       const { data, error } = await supabaseAdmin
         .from('organization_env_vars')
@@ -131,6 +141,7 @@ exports.handler = async (event) => {
         if (isMissingTableError(error)) {
           return {
             statusCode: 200,
+            headers: corsHeaders,
             body: JSON.stringify({
               variables: [],
               warning: 'organization_env_vars table is not installed yet. Run supabase/add_super_admin_controls.sql.',
@@ -140,14 +151,14 @@ exports.handler = async (event) => {
         throw error;
       }
 
-      return { statusCode: 200, body: JSON.stringify({ variables: data || [] }) };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ variables: data || [] }) };
     }
 
     if (action === 'upsert_org_env') {
       const orgId = body.orgId;
       const key = (body.key || '').trim();
       const value = `${body.value || ''}`;
-      if (!orgId || !key || !value) return { statusCode: 400, body: JSON.stringify({ error: 'orgId, key, value are required' }) };
+      if (!orgId || !key || !value) return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'orgId, key, value are required' }) };
 
       const { error } = await supabaseAdmin
         .from('organization_env_vars')
@@ -157,6 +168,7 @@ exports.handler = async (event) => {
         if (isMissingTableError(error)) {
           return {
             statusCode: 400,
+            headers: corsHeaders,
             body: JSON.stringify({
               error: 'organization_env_vars table is missing. Run supabase/add_super_admin_controls.sql first.',
             }),
@@ -164,13 +176,14 @@ exports.handler = async (event) => {
         }
         throw error;
       }
-      return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ ok: true }) };
     }
 
-    return { statusCode: 400, body: JSON.stringify({ error: 'Unknown action' }) };
+    return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: 'Unknown action' }) };
   } catch (error) {
     return {
       statusCode: 500,
+      headers: corsHeaders,
       body: JSON.stringify({ error: error.message || 'Unexpected error' }),
     };
   }
