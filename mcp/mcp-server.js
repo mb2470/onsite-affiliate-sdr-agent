@@ -293,11 +293,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           .select('*')
           .eq('lead_id', lead.id);
         
-        const { data: emails } = await supabase
-          .from('emails')
+        const { data: outreach } = await supabase
+          .from('outreach_log')
           .select('*')
           .eq('lead_id', lead.id);
-        
+
         return {
           content: [
             {
@@ -305,7 +305,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify({
                 lead,
                 contacts: contacts || [],
-                emails: emails || [],
+                emails: outreach || [],
               }, null, 2),
             },
           ],
@@ -348,30 +348,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_emails': {
-        let query = supabase.from('emails').select('*, leads(website), contacts(full_name, email)');
-        
-        if (args.status) {
-          query = query.eq('status', args.status);
+        // outreach_log is the single source of truth for all email activity
+        let query = supabase.from('outreach_log').select('*, leads(website)');
+
+        if (args.status === 'bounced') {
+          query = query.eq('bounced', true);
+        } else if (args.status === 'replied') {
+          query = query.not('replied_at', 'is', null);
         }
-        
+
         if (args.lead_website) {
           const { data: lead } = await supabase
             .from('leads')
             .select('id')
             .eq('website', args.lead_website)
             .single();
-          
+
           if (lead) {
             query = query.eq('lead_id', lead.id);
           }
         }
-        
-        query = query.order('created_at', { ascending: false }).limit(args.limit || 20);
-        
+
+        query = query.order('sent_at', { ascending: false }).limit(args.limit || 20);
+
         const { data, error } = await query;
-        
+
         if (error) throw error;
-        
+
         return {
           content: [
             {
