@@ -1118,7 +1118,7 @@ class AISDRAgent:
 
     # ─── SEND ONE EMAIL ────────────────────────────
 
-    def _send_one(self, lead, all_emailed, today_by_website, settings, sender: Dict) -> str:
+    def _send_one(self, lead, all_emailed, today_by_website, settings, sender: Dict, bounced_set: set = None) -> str:
         """Try to send one email for a lead. Returns: 'sent', 'skipped', 'failed'."""
         max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
 
@@ -1143,9 +1143,12 @@ class AISDRAgent:
                 pass
             return 'failed'
 
-        # Score and filter already emailed
+        # Score and filter already emailed + bounced
         scored = sorted(contacts, key=lambda c: score_contact(c.get('title', '')), reverse=True)
-        available = [c for c in scored if c.get('email') and c['email'].lower() not in all_emailed]
+        _bounced = bounced_set or set()
+        available = [c for c in scored if c.get('email')
+                     and c['email'].lower() not in all_emailed
+                     and c['email'].lower() not in _bounced]
 
         if not available:
             print(f"  ⏭️  All {len(scored)} contacts already emailed for {lead['website']}")
@@ -1356,6 +1359,9 @@ class AISDRAgent:
         for o in (today_outreach.data or []):
             today_by_website.setdefault(o['website'], []).append(o['contact_email'])
 
+        # Load bounce suppression list as a fallback safety net
+        bounced_set = self._load_bounce_suppression()
+
         print(f"📋 {len(all_leads)} candidate leads ({n_enriched} enriched, {n_contacted} contacted), {len(all_emailed)} contacts already emailed\n")
 
         sent = 0
@@ -1385,7 +1391,7 @@ class AISDRAgent:
                 break
 
             print(f"  ✉️ Using sender: {sender.get('email_address')} ({sender.get('remaining')} left)")
-            result = self._send_one(lead, all_emailed, today_by_website, settings, sender)
+            result = self._send_one(lead, all_emailed, today_by_website, settings, sender, bounced_set)
 
             if result == 'sent':
                 sent += 1
@@ -1407,6 +1413,26 @@ class AISDRAgent:
 
         print(f"\n🏁 BATCH: {sent} sent, {failed} failed, {skipped} skipped")
         return sent
+
+    # ─── BOUNCE SUPPRESSION ─────────────────────────
+
+    def _load_bounce_suppression(self) -> set:
+        """Load set of bounced email addresses from activity_log.bounced_email column."""
+        try:
+            org_id = self._resolve_org_id()
+            query = supabase.table('activity_log').select('bounced_email').eq(
+                'activity_type', 'email_bounced'
+            ).not_.is_('bounced_email', 'null')
+            if org_id:
+                query = query.eq('org_id', org_id)
+            rows = query.execute().data or []
+            suppressed = set(r['bounced_email'].lower() for r in rows if r.get('bounced_email'))
+            if suppressed:
+                print(f"🚫 Loaded {len(suppressed)} bounced email(s) for suppression")
+            return suppressed
+        except Exception as e:
+            print(f"  ⚠️ Could not load bounce suppression list: {e}")
+            return set()
 
     # ─── CHECK BOUNCES ─────────────────────────────
 
@@ -1735,15 +1761,22 @@ class AISDRAgent:
             elif row['followup_number'] == 2:
                 has_followup2.add(key)
 
+        # Load bounce suppression list as a fallback safety net
+        bounced_set = self._load_bounce_suppression()
+
         # Merge candidates: (outreach_row, followup_number_to_send)
         candidates = []
 
         for row in (initial_emails.data or []):
+            if row.get('contact_email', '').lower() in bounced_set:
+                continue
             key = (row['contact_email'].lower(), row['website'].lower())
             if key not in has_followup1:
                 candidates.append((row, 1))
 
         for row in (followup1_emails.data or []):
+            if row.get('contact_email', '').lower() in bounced_set:
+                continue
             key = (row['contact_email'].lower(), row['website'].lower())
             if key not in has_followup2:
                 # Need the original email for context — find the initial outreach
