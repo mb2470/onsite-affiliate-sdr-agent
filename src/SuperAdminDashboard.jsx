@@ -9,7 +9,7 @@ const cardStyle = {
   marginBottom: '14px',
 };
 
-export default function SuperAdminDashboard() {
+export default function SuperAdminDashboard({ onOrgCreated } = {}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -94,6 +94,7 @@ export default function SuperAdminDashboard() {
       setNewOrgName('');
       setNewOrgSlug('');
       await loadOrganizations();
+      if (onOrgCreated) onOrgCreated();
     } catch (e) {
       setError(e.message);
     } finally {
