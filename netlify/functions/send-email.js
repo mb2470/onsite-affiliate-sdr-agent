@@ -226,13 +226,35 @@ async function getEmailSettings(orgId) {
   return data || {};
 }
 
+/**
+ * Compute how many emails each sender has sent today from outreach_log
+ * (the single source of truth). Returns a Map of email_address -> count.
+ */
+async function getSenderSentToday(orgId) {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const { data } = await supabase
+    .from('outreach_log')
+    .select('sender_email')
+    .eq('org_id', orgId)
+    .not('sender_email', 'is', null)
+    .gte('sent_at', todayStart.toISOString());
+
+  const counts = new Map();
+  for (const row of (data || [])) {
+    const addr = (row.sender_email || '').trim().toLowerCase();
+    if (addr) counts.set(addr, (counts.get(addr) || 0) + 1);
+  }
+  return counts;
+}
+
 async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAliasSet = null) {
   const activeQuery = () => supabase
     .from('email_accounts')
-    .select('id, email_address, display_name, daily_send_limit, current_daily_sent, status')
+    .select('id, email_address, display_name, daily_send_limit, status')
     .eq('org_id', orgId)
     .in('status', ['active', 'ready'])
-    .order('current_daily_sent', { ascending: true })
     .order('created_at', { ascending: true });
 
   const anyConfiguredQuery = () => supabase
@@ -240,12 +262,21 @@ async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAli
     .select('id, status')
     .eq('org_id', orgId);
 
+  // Derive per-sender sent counts from outreach_log (single source of truth)
+  const senderSentToday = await getSenderSentToday(orgId);
+
   const hasCapacity = (account) => {
-    const sent = account?.current_daily_sent || 0;
+    const addr = (account?.email_address || '').trim().toLowerCase();
+    const sent = senderSentToday.get(addr) || 0;
     const limit = Number.isFinite(account?.daily_send_limit)
       ? account.daily_send_limit
       : parseInt(account?.daily_send_limit, 10);
     return Number.isFinite(limit) && limit > 0 && sent < limit;
+  };
+
+  const getSentToday = (account) => {
+    const addr = (account?.email_address || '').trim().toLowerCase();
+    return senderSentToday.get(addr) || 0;
   };
 
   const hasAcceptedAlias = (account) => {
@@ -256,13 +287,16 @@ async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAli
   if (preferredAccountId) {
     const { data: preferred } = await activeQuery().eq('id', preferredAccountId).limit(1);
     const account = (preferred || [])[0] || null;
-    if (account && hasCapacity(account) && hasAcceptedAlias(account)) {
-      return {
-        account,
-        hasConfiguredAccounts: true,
-        hasActiveOrReadyAccounts: true,
-        hasAliasEligibleAccounts: true,
-      };
+    if (account) {
+      account.current_daily_sent = getSentToday(account);
+      if (hasCapacity(account) && hasAcceptedAlias(account)) {
+        return {
+          account,
+          hasConfiguredAccounts: true,
+          hasActiveOrReadyAccounts: true,
+          hasAliasEligibleAccounts: true,
+        };
+      }
     }
   }
 
@@ -272,7 +306,12 @@ async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAli
   ]);
 
   const configuredList = allConfigured || [];
-  const list = activeAccounts || [];
+  const list = (activeAccounts || []).map(a => ({
+    ...a,
+    current_daily_sent: getSentToday(a),
+  }));
+  // Sort by fewest sent today (round-robin fairness)
+  list.sort((a, b) => a.current_daily_sent - b.current_daily_sent);
   const aliasEligible = list.filter(hasAcceptedAlias);
   const available = aliasEligible.find(hasCapacity) || null;
 
@@ -284,23 +323,6 @@ async function selectSenderAccount(orgId, preferredAccountId = null, acceptedAli
   };
 }
 
-async function incrementSenderDailySent(accountId, amount = 1) {
-  if (!accountId || amount < 1) return;
-
-  const { data: account } = await supabase
-    .from('email_accounts')
-    .select('id, current_daily_sent')
-    .eq('id', accountId)
-    .limit(1)
-    .maybeSingle();
-
-  if (!account) return;
-
-  await supabase
-    .from('email_accounts')
-    .update({ current_daily_sent: (account.current_daily_sent || 0) + amount })
-    .eq('id', accountId);
-}
 function buildRawEmail({ to, bcc, subject, body, fromEmail, fromName }) {
   const lines = [
     `From: ${fromName} <${fromEmail}>`,
@@ -633,6 +655,8 @@ exports.handler = async (event) => {
     console.log(`✅ Email sent to ${safeEmails.join(', ')} (message ID: ${sendData.id})`);
 
     // Log outreach for verified recipients only — include Gmail message/thread IDs
+    // sender_email is written here so outreach_log is the single source of truth
+    // for per-sender daily capacity (no stale counters needed).
     const outreachRows = safeEmails.map(email => {
       const contact = (contactDetails || []).find(c => c.email === email);
       return {
@@ -646,15 +670,28 @@ exports.handler = async (event) => {
         org_id: orgId,
         gmail_message_id: sendData.id || '',
         gmail_thread_id: sendData.threadId || '',
+        sender_email: resolvedFromEmail,
       };
     });
 
-    await supabase.from('outreach_log').insert(outreachRows);
-    await incrementReportingDaily(orgId, safeEmails.length);
-
-    if (selectedSender?.id) {
-      await incrementSenderDailySent(selectedSender.id, safeEmails.length);
+    // CRITICAL: The email IS already sent at this point. If this insert fails,
+    // we'd have a "ghost send" with no record. Retry to prevent that.
+    let outreachInsertOk = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error: insertErr } = await supabase.from('outreach_log').insert(outreachRows);
+      if (!insertErr) {
+        outreachInsertOk = true;
+        break;
+      }
+      console.error(`⚠️ outreach_log insert failed (attempt ${attempt + 1}/3): ${insertErr.message}`);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
     }
+    if (!outreachInsertOk) {
+      console.error(`❌ CRITICAL: outreach_log insert failed after 3 attempts for gmail_message_id=${sendData.id}. `
+        + `Email WAS sent to ${safeEmails.join(', ')} but has no DB record.`);
+    }
+
+    await incrementReportingDaily(orgId, safeEmails.length);
 
     if (leadId) {
       const firstContact = outreachRows[0] || {};

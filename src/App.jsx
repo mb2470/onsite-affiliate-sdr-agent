@@ -278,7 +278,6 @@ function AuthenticatedApp({ session }) {
     } catch (e) { console.error(e); }
 
     // Emails sent (lifetime): total outreach minus bounced
-    // Use outreach_log.bounced flag directly — no fragile regex on activity_log.summary
     try {
       const [{ count: totalOutreach }, { count: bouncedOutreachCount }] = await Promise.all([
         supabase

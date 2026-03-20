@@ -70,6 +70,30 @@ exports.handler = async (event) => {
       };
     }
 
+    // Collect the sender's own email so we can exclude it from bounce results
+    const senderEmail = (process.env.GMAIL_FROM_EMAIL || '').toLowerCase();
+    let senderEmails = new Set();
+    if (senderEmail) senderEmails.add(senderEmail);
+
+    // Also pull org sender addresses from email_settings / email_accounts
+    try {
+      const { data: emailSettings } = await supabase
+        .from('email_settings')
+        .select('gmail_from_email')
+        .eq('org_id', orgId)
+        .single();
+      if (emailSettings?.gmail_from_email) senderEmails.add(emailSettings.gmail_from_email.toLowerCase());
+    } catch { /* ignore */ }
+    try {
+      const { data: emailAccounts } = await supabase
+        .from('email_accounts')
+        .select('email_address')
+        .eq('org_id', orgId);
+      for (const acct of (emailAccounts || [])) {
+        if (acct.email_address) senderEmails.add(acct.email_address.toLowerCase());
+      }
+    } catch { /* ignore */ }
+
     // Map of email -> bounce date (from the Gmail message)
     let bounceMap = {};
 
@@ -84,15 +108,14 @@ exports.handler = async (event) => {
         );
         const bounceDate = dateHeader ? new Date(dateHeader.value).toISOString() : new Date(parseInt(detail.internalDate)).toISOString();
 
-        // Extract bounced email addresses
+        // Extract bounced email addresses — tighter patterns to avoid false positives
+        // Each pattern captures the RECIPIENT address that failed delivery
         const emailPatterns = [
           /wasn'?t delivered to\s+(\S+@\S+\.\S+)/gi,
-          /delivery to.*?(\S+@\S+\.\S+).*?failed/gi,
-          /rejected.*?(\S+@\S+\.\S+)/gi,
           /could not be delivered to\s+(\S+@\S+\.\S+)/gi,
-          /address not found.*?(\S+@\S+\.\S+)/gi,
-          /does not exist.*?(\S+@\S+\.\S+)/gi,
-          /(\S+@\S+\.\S+).*?address not found/gi,
+          /delivery to the following recipient[s]? failed.*?(\S+@\S+\.\S+)/gi,
+          /failed to deliver.*?to\s+(\S+@\S+\.\S+)/gi,
+          /undeliverable.*?to[:\s]+(\S+@\S+\.\S+)/gi,
         ];
 
         const foundEmails = [];
@@ -102,22 +125,31 @@ exports.handler = async (event) => {
           h => h.name.toLowerCase() === 'x-failed-recipients'
         );
         if (failedHeader) {
-          foundEmails.push(failedHeader.value.trim().toLowerCase());
+          // Header can contain multiple comma-separated addresses
+          for (const addr of failedHeader.value.split(',')) {
+            const cleaned = addr.trim().toLowerCase().replace(/[<>]/g, '');
+            if (cleaned.includes('@')) foundEmails.push(cleaned);
+          }
         }
 
-        // Extract from body
-        for (const pattern of emailPatterns) {
-          let match;
-          while ((match = pattern.exec(body)) !== null) {
-            const email = match[1].replace(/[<>.,;'"()]/g, '').toLowerCase();
-            if (email.includes('@') && !email.includes('mailer-daemon') && !email.includes('googlemail')) {
-              foundEmails.push(email);
+        // Only fall back to body regex if X-Failed-Recipients wasn't found
+        if (foundEmails.length === 0) {
+          for (const pattern of emailPatterns) {
+            let match;
+            while ((match = pattern.exec(body)) !== null) {
+              const email = match[1].replace(/[<>.,;'"()]/g, '').toLowerCase();
+              if (email.includes('@') && !email.includes('mailer-daemon') && !email.includes('googlemail')) {
+                foundEmails.push(email);
+              }
             }
           }
         }
 
         // Store with the bounce date (keep earliest date per email)
+        // Exclude sender's own addresses and common system addresses
         for (const email of foundEmails) {
+          if (senderEmails.has(email)) continue;
+          if (email.includes('postmaster@') || email.includes('noreply@')) continue;
           if (!bounceMap[email] || bounceDate < bounceMap[email]) {
             bounceMap[email] = bounceDate;
           }
@@ -160,12 +192,22 @@ exports.handler = async (event) => {
     for (const email of newBounces) {
       const bounceDate = bounceMap[email] || new Date().toISOString();
 
-      // 1. Mark all outreach_log rows for this email as bounced
-      await supabase
+      // 1. Mark only the most recent outreach_log row for this email as bounced.
+      //    A bounce is one event — it corresponds to the last email sent to this address.
+      const { data: latestRow } = await supabase
         .from('outreach_log')
-        .update({ bounced: true, bounced_at: bounceDate })
+        .select('id')
         .eq('org_id', orgId)
-        .eq('contact_email', email);
+        .eq('contact_email', email)
+        .order('sent_at', { ascending: false })
+        .limit(1);
+
+      if (latestRow && latestRow.length > 0) {
+        await supabase
+          .from('outreach_log')
+          .update({ bounced: true, bounced_at: bounceDate })
+          .eq('id', latestRow[0].id);
+      }
 
       // 2. Stop any active campaign sequences for this email
       //    Find leads with this contact email and mark campaign_leads as bounced
