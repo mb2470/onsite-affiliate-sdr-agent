@@ -65,11 +65,11 @@ async function isPermanentlySuppressed(email, orgId) {
 
 /**
  * Check if a contact already has a valid (non-expired) ELV verification cached
- * in the contacts table. Returns the cached result or null.
+ * in contact_database (single source of truth for contact data).
  */
 async function getCachedVerification(email, orgId) {
   const { data } = await supabase
-    .from('contacts')
+    .from('contact_database')
     .select('elv_status, elv_verified_at')
     .eq('org_id', orgId)
     .eq('email', email)
@@ -94,16 +94,10 @@ async function getCachedVerification(email, orgId) {
 }
 
 /**
- * Save verification result to both contacts and contact_database tables.
+ * Save ELV verification result to contact_database (single source of truth).
  */
 async function saveVerification(email, status, orgId) {
   const now = new Date().toISOString();
-
-  await supabase
-    .from('contacts')
-    .update({ elv_status: status, elv_verified_at: now })
-    .eq('org_id', orgId)
-    .eq('email', email);
 
   await supabase
     .from('contact_database')

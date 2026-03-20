@@ -56,11 +56,11 @@ async function isPermanentlySuppressed(email, orgId) {
 }
 
 /**
- * Check cached ELV status from contacts table.
+ * Check cached ELV status from contact_database (single source of truth).
  */
 async function getCachedElvStatus(email, orgId) {
   const { data } = await supabase
-    .from('contacts')
+    .from('contact_database')
     .select('elv_status, elv_verified_at')
     .eq('org_id', orgId)
     .eq('email', email)
@@ -93,14 +93,7 @@ async function verifyViaElv(email, orgId) {
     const safe = SAFE_ELV_STATUSES.includes(status);
     const now = new Date().toISOString();
 
-    // Cache in contacts table
-    await supabase
-      .from('contacts')
-      .update({ elv_status: status, elv_verified_at: now })
-      .eq('org_id', orgId)
-      .eq('email', email);
-
-    // Also cache in contact_database
+    // Cache in contact_database (single source of truth)
     await supabase
       .from('contact_database')
       .update({ elv_status: status, elv_verified_at: now })

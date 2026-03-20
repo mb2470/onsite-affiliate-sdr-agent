@@ -39,10 +39,9 @@ export default function AgentMonitor() {
     // Load sender accounts + per-account limits for agent routing
     const { data: accounts } = await supabase
       .from('email_accounts')
-      .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, current_daily_sent, status')
+      .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, status')
       .order('created_at', { ascending: false });
     const nextAccounts = accounts || [];
-    setSenderAccounts(nextAccounts);
 
     const resolvedOrgId = s?.org_id || nextAccounts[0]?.org_id || null;
     setActiveOrgId(resolvedOrgId);
@@ -50,6 +49,21 @@ export default function AgentMonitor() {
     // Load today's stats — scoped by org_id
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
+
+    // Compute per-sender sent counts from outreach_log (single source of truth)
+    let senderQuery = supabase.from('outreach_log').select('sender_email').gte('sent_at', todayStart.toISOString());
+    if (resolvedOrgId) senderQuery = senderQuery.eq('org_id', resolvedOrgId);
+    const { data: senderRows } = await senderQuery;
+    const senderCounts = {};
+    for (const row of (senderRows || [])) {
+      const addr = (row.sender_email || '').trim().toLowerCase();
+      if (addr) senderCounts[addr] = (senderCounts[addr] || 0) + 1;
+    }
+    const enrichedAccounts = nextAccounts.map(a => ({
+      ...a,
+      current_daily_sent: senderCounts[(a.email_address || '').trim().toLowerCase()] || 0,
+    }));
+    setSenderAccounts(enrichedAccounts);
 
     // outreach_log is the SINGLE source of truth for all email stats.
     let emailsTodayQuery = supabase
@@ -207,10 +221,9 @@ export default function AgentMonitor() {
         display_name: (newSender.displayName || 'Sam Reid').trim(),
         first_name: (newSender.displayName || 'Sam').trim().split(' ')[0],
         daily_send_limit: dailyLimit,
-        current_daily_sent: 0,
         status: 'active',
       })
-      .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, current_daily_sent, status')
+      .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, status')
       .single();
 
     if (insertError) {
