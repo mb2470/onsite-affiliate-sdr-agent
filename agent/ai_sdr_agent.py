@@ -1079,18 +1079,6 @@ class AISDRAgent:
         pool = self._load_sender_pool(settings)
         return sum(int(s.get('remaining', 0)) for s in pool)
 
-    def _increment_reporting_daily(self, org_id: Optional[str], sent_delta: int = 0):
-        if not org_id or sent_delta <= 0:
-            return
-        try:
-            report_date = datetime.now(timezone.utc).date().isoformat()
-            supabase.rpc('increment_email_reporting_daily', {
-                'p_org_id': org_id,
-                'p_report_date': report_date,
-                'p_sent_delta': sent_delta,
-            }).execute()
-        except Exception as e:
-            print(f"  ⚠️ Could not increment email_reporting_daily: {e}")
 
     # ─── STATUS ────────────────────────────────────
 
@@ -1299,8 +1287,6 @@ class AISDRAgent:
                     self._log('outreach_log_write_failed', lead['id'],
                               f"CRITICAL: Sent email {gmail_msg_id} to {contact['email']} but DB write failed: {e}",
                               'failed')
-
-        self._increment_reporting_daily(org_id, 1)
 
         # Mark contacted
         supabase.table("leads").update({
@@ -1927,7 +1913,6 @@ class AISDRAgent:
                         self._log('outreach_log_write_failed', outreach_row.get('lead_id'),
                                   f"CRITICAL: Follow-up #{fu_number} sent {fu_gmail_msg_id} to {contact_email} but DB write failed: {e}",
                                   'failed')
-            self._increment_reporting_daily(fu_org_id, 1)
 
             self._log('followup_sent', outreach_row.get('lead_id'),
                        f"Follow-up #{fu_number} sent to {contact_name} <{contact_email}> at {website}")
