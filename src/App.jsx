@@ -277,23 +277,21 @@ function AuthenticatedApp({ session }) {
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
-    // Emails sent (lifetime): total outreach minus unique bounced addresses
-    // Count unique bounced emails from activity_log (1 row per address) to avoid
-    // inflated counts from outreach_log (multiple rows per bounced address)
+    // Emails sent (lifetime): total outreach minus bounced
     try {
-      const [{ count: totalOutreach }, { count: uniqueBouncedCount }] = await Promise.all([
+      const [{ count: totalOutreach }, { count: bouncedOutreachCount }] = await Promise.all([
         supabase
           .from('outreach_log')
           .select('*', { count: 'exact', head: true })
           .eq('org_id', orgId),
         supabase
-          .from('activity_log')
+          .from('outreach_log')
           .select('*', { count: 'exact', head: true })
           .eq('org_id', orgId)
-          .eq('activity_type', 'email_bounced'),
+          .eq('bounced', true),
       ]);
 
-      setEmailsSent((totalOutreach || 0) - (uniqueBouncedCount || 0));
+      setEmailsSent((totalOutreach || 0) - (bouncedOutreachCount || 0));
     } catch (e) { console.error(e); }
 
     // Outreach stats: contacted/replied leads & contacts from outreach_log
@@ -376,14 +374,12 @@ function AuthenticatedApp({ session }) {
 
         if (sentError) console.error('Deliverability sent query error:', sentError);
 
-        // Count unique bounced emails from activity_log (one row per bounced address)
-        // instead of outreach_log rows (multiple rows per address inflate the count)
         const { count: bouncedCountRaw, error: bounceError } = await supabase
-          .from('activity_log')
+          .from('outreach_log')
           .select('*', { count: 'exact', head: true })
           .eq('org_id', orgId)
-          .eq('activity_type', 'email_bounced')
-          .gte('created_at', trailingStartIso);
+          .eq('bounced', true)
+          .gte('bounced_at', trailingStartIso);
 
         if (bounceError) console.error('Deliverability bounce query error:', bounceError);
 

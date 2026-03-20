@@ -739,7 +739,7 @@ async function handleStats(orgId, creds, body = {}) {
     // Silently fail — live count is optional
   }
 
-  // Bounce count from DB (activity_log) — one row per unique bounced email, accurate by design.
+  // Bounce count from DB — one outreach_log row per bounce event (bounced_at is immutable).
   // Gmail's resultSizeEstimate is unreliable and can wildly over-count.
   let gmailBouncesTrailing = null;
   try {
@@ -751,11 +751,11 @@ async function handleStats(orgId, creds, body = {}) {
     const trailingStartIso = new Date(startUtcMs).toISOString();
 
     const { count: bounceCount } = await supabase
-      .from('activity_log')
+      .from('outreach_log')
       .select('*', { count: 'exact', head: true })
       .eq('org_id', orgId)
-      .eq('activity_type', 'email_bounced')
-      .gte('created_at', trailingStartIso);
+      .eq('bounced', true)
+      .gte('bounced_at', trailingStartIso);
 
     gmailBouncesTrailing = bounceCount || 0;
   } catch {

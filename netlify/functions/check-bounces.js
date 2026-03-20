@@ -192,12 +192,22 @@ exports.handler = async (event) => {
     for (const email of newBounces) {
       const bounceDate = bounceMap[email] || new Date().toISOString();
 
-      // 1. Mark all outreach_log rows for this email as bounced
-      await supabase
+      // 1. Mark only the most recent outreach_log row for this email as bounced.
+      //    A bounce is one event — it corresponds to the last email sent to this address.
+      const { data: latestRow } = await supabase
         .from('outreach_log')
-        .update({ bounced: true, bounced_at: bounceDate })
+        .select('id')
         .eq('org_id', orgId)
-        .eq('contact_email', email);
+        .eq('contact_email', email)
+        .order('sent_at', { ascending: false })
+        .limit(1);
+
+      if (latestRow && latestRow.length > 0) {
+        await supabase
+          .from('outreach_log')
+          .update({ bounced: true, bounced_at: bounceDate })
+          .eq('id', latestRow[0].id);
+      }
 
       // 2. Stop any active campaign sequences for this email
       //    Find leads with this contact email and mark campaign_leads as bounced
