@@ -1222,6 +1222,20 @@ class AISDRAgent:
             print(f"  ❌ Email gen failed: {e}")
             return 'failed'
 
+        # Pre-send dedup: verify outreach_log one more time right before sending.
+        # Catches edge cases where a previous run sent the email but the
+        # in-memory all_emailed set was lost (process crash, restart, etc.).
+        try:
+            dedup_check = supabase.table('outreach_log').select(
+                'id', count='exact', head=True
+            ).eq('contact_email', contact['email']).eq('lead_id', lead['id']).execute()
+            if dedup_check.count and dedup_check.count > 0:
+                print(f"  ⏭️  Dedup: {contact['email']} already has outreach for this lead — skipping")
+                all_emailed.add(contact['email'].lower())
+                return 'skipped'
+        except Exception as e:
+            print(f"  ⚠️ Dedup check failed (proceeding with send): {e}")
+
         # Send
         try:
             result = self.gmail.send_email(
@@ -1251,6 +1265,8 @@ class AISDRAgent:
 
         # Log outreach — sender_email is written so outreach_log is the single
         # source of truth for per-sender daily capacity.
+        # CRITICAL: If this insert fails, the email WAS already sent by Gmail.
+        # Retry to avoid a "ghost send" with no record (which could cause double-sends).
         org_id = self._resolve_org_id()
         outreach_row_data = {
             "lead_id": lead['id'],
@@ -1268,7 +1284,22 @@ class AISDRAgent:
         }
         if org_id:
             outreach_row_data["org_id"] = org_id
-        supabase.table("outreach_log").insert(outreach_row_data).execute()
+
+        for attempt in range(3):
+            try:
+                supabase.table("outreach_log").insert(outreach_row_data).execute()
+                break
+            except Exception as e:
+                if attempt < 2:
+                    print(f"  ⚠️ outreach_log insert failed (attempt {attempt + 1}/3), retrying: {e}")
+                    time.sleep(1)
+                else:
+                    print(f"  ❌ CRITICAL: outreach_log insert failed after 3 attempts for gmail_message_id={gmail_msg_id}. "
+                          f"Email WAS sent but has no DB record. Manual reconciliation needed.")
+                    self._log('outreach_log_write_failed', lead['id'],
+                              f"CRITICAL: Sent email {gmail_msg_id} to {contact['email']} but DB write failed: {e}",
+                              'failed')
+
         self._increment_reporting_daily(org_id, 1)
 
         # Mark contacted
@@ -1862,8 +1893,8 @@ class AISDRAgent:
                     pass
 
             # Log the follow-up in outreach_log (sender_email for single source of truth)
+            # Retry on failure — the email WAS sent, we must record it.
             fu_org_id = self._resolve_org_id()
-            fu_sender_email = self.gmail.get_from_email()
             fu_outreach_data = {
                 "lead_id": outreach_row.get('lead_id'),
                 "website": website,
@@ -1881,7 +1912,21 @@ class AISDRAgent:
             }
             if fu_org_id:
                 fu_outreach_data["org_id"] = fu_org_id
-            supabase.table("outreach_log").insert(fu_outreach_data).execute()
+
+            for attempt in range(3):
+                try:
+                    supabase.table("outreach_log").insert(fu_outreach_data).execute()
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        print(f"  ⚠️ Follow-up outreach_log insert failed (attempt {attempt + 1}/3), retrying: {e}")
+                        time.sleep(1)
+                    else:
+                        print(f"  ❌ CRITICAL: Follow-up outreach_log insert failed for gmail_message_id={fu_gmail_msg_id}. "
+                              f"Email WAS sent but has no DB record.")
+                        self._log('outreach_log_write_failed', outreach_row.get('lead_id'),
+                                  f"CRITICAL: Follow-up #{fu_number} sent {fu_gmail_msg_id} to {contact_email} but DB write failed: {e}",
+                                  'failed')
             self._increment_reporting_daily(fu_org_id, 1)
 
             self._log('followup_sent', outreach_row.get('lead_id'),

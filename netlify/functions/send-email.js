@@ -674,7 +674,23 @@ exports.handler = async (event) => {
       };
     });
 
-    await supabase.from('outreach_log').insert(outreachRows);
+    // CRITICAL: The email IS already sent at this point. If this insert fails,
+    // we'd have a "ghost send" with no record. Retry to prevent that.
+    let outreachInsertOk = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error: insertErr } = await supabase.from('outreach_log').insert(outreachRows);
+      if (!insertErr) {
+        outreachInsertOk = true;
+        break;
+      }
+      console.error(`⚠️ outreach_log insert failed (attempt ${attempt + 1}/3): ${insertErr.message}`);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+    }
+    if (!outreachInsertOk) {
+      console.error(`❌ CRITICAL: outreach_log insert failed after 3 attempts for gmail_message_id=${sendData.id}. `
+        + `Email WAS sent to ${safeEmails.join(', ')} but has no DB record.`);
+    }
+
     await incrementReportingDaily(orgId, safeEmails.length);
 
     if (leadId) {
