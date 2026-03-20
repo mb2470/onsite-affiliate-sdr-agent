@@ -208,37 +208,39 @@ function AuthenticatedApp({ session }) {
   // DATA LOADING
   // ═══════════════════════════════════════════
 
+  const loadOrganizations = async () => {
+    setOrgLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('user_organizations')
+        .select('org_id, organizations(id, name, slug)')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      const orgs = (data || []).map((r) => ({
+        id: r.org_id,
+        name: r.organizations?.name || 'Organization',
+        slug: r.organizations?.slug || '',
+      }));
+
+      setOrganizations(orgs);
+
+      const storedOrgId = localStorage.getItem('selected_org_id');
+      const hasStored = storedOrgId && orgs.some((o) => o.id === storedOrgId);
+      const selected = hasStored ? storedOrgId : (orgs[0]?.id || null);
+      setOrgId(selected);
+    } catch (e) {
+      console.error('Failed loading organizations:', e);
+      setOrganizations([]);
+      setOrgId(null);
+    }
+    setOrgLoading(false);
+  };
+
   useEffect(() => {
-    (async () => {
-      setOrgLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('user_organizations')
-          .select('org_id, organizations(id, name, slug)')
-          .eq('user_id', session.user.id)
-          .order('created_at', { ascending: true });
-
-        if (error) throw error;
-
-        const orgs = (data || []).map((r) => ({
-          id: r.org_id,
-          name: r.organizations?.name || 'Organization',
-          slug: r.organizations?.slug || '',
-        }));
-
-        setOrganizations(orgs);
-
-        const storedOrgId = localStorage.getItem('selected_org_id');
-        const hasStored = storedOrgId && orgs.some((o) => o.id === storedOrgId);
-        const selected = hasStored ? storedOrgId : (orgs[0]?.id || null);
-        setOrgId(selected);
-      } catch (e) {
-        console.error('Failed loading organizations:', e);
-        setOrganizations([]);
-        setOrgId(null);
-      }
-      setOrgLoading(false);
-    })();
+    loadOrganizations();
   }, [session.user.id]);
 
   useEffect(() => {
@@ -3430,7 +3432,7 @@ function AuthenticatedApp({ session }) {
 
           {activeView === 'super_admin' && isSuperAdmin && (
             <div className="view-container">
-              <SuperAdminDashboard />
+              <SuperAdminDashboard onOrgCreated={loadOrganizations} />
             </div>
           )}
 
