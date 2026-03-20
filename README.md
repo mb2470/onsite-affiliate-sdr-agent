@@ -164,4 +164,3 @@ Use this when you want unattended cadence outside of the manual UI workflows.
 - `supabase/schema.sql` — baseline schema
 - `docs/GMAIL_SETUP.md` — Gmail integration setup
 - `APOLLO_SETUP.md` — Apollo setup notes
-- `GOOGLE_SHEETS_GUIDE.md` / `PRIVATE_SHEETS_SETUP.md` — sheet integration options

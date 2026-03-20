@@ -583,7 +583,7 @@ exports.handler = async (event) => {
 
     if (selectedSender) {
       fromEmail = selectedSender.email_address;
-      fromName = selectedSender.display_name || settings.gmail_from_name || 'Sam Reid';
+      fromName = selectedSender.display_name || settings.gmail_from_name || 'Sales Team';
       console.log(`📧 Selected sender account: ${fromEmail} (${selectedSender.current_daily_sent || 0}/${selectedSender.daily_send_limit} sent today)`);
     } else {
       // No email_accounts configured — try to use a non-primary accepted alias
@@ -593,13 +593,20 @@ exports.handler = async (event) => {
         const idx = new Date().getMinutes() % nonPrimaryAliases.length;
         const alias = nonPrimaryAliases[idx];
         fromEmail = alias.sendAsEmail;
-        fromName = alias.displayName || settings.gmail_from_name || 'Sam Reid';
+        fromName = alias.displayName || settings.gmail_from_name || 'Sales Team';
         console.log(`📧 No email_accounts configured — using Gmail alias: ${fromEmail}`);
       } else {
         fromEmail = settings.gmail_from_email
-          || process.env.GMAIL_FROM_EMAIL
-          || 'sam@onsiteaffiliate.com';
-        fromName = settings.gmail_from_name || 'Sam Reid';
+          || process.env.GMAIL_FROM_EMAIL;
+        fromName = settings.gmail_from_name || 'Sales Team';
+        if (!fromEmail) {
+          console.error('❌ No sender email configured. Set gmail_from_email in settings or GMAIL_FROM_EMAIL env var.');
+          return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ error: 'No sender email configured. Set gmail_from_email in Email Settings.' }),
+          };
+        }
       }
     }
 

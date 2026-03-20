@@ -9,7 +9,7 @@ export default function AgentMonitor() {
   const [addingSender, setAddingSender] = useState(false);
   const [senderError, setSenderError] = useState('');
   const [senderSuccess, setSenderSuccess] = useState('');
-  const [newSender, setNewSender] = useState({ email: '', displayName: 'Sam Reid', dailyLimit: 30 });
+  const [newSender, setNewSender] = useState({ email: '', displayName: '', dailyLimit: 30 });
   const [activeOrgId, setActiveOrgId] = useState(null);
   const [isCheckingReplies, setIsCheckingReplies] = useState(false);
   const [replyResult, setReplyResult] = useState(null);
@@ -218,8 +218,8 @@ export default function AgentMonitor() {
         org_id: activeOrgId,
         domain_id: resolvedDomainId,
         email_address: email,
-        display_name: (newSender.displayName || 'Sam Reid').trim(),
-        first_name: (newSender.displayName || 'Sam').trim().split(' ')[0],
+        display_name: newSender.displayName.trim() || null,
+        first_name: newSender.displayName.trim().split(' ')[0] || null,
         daily_send_limit: dailyLimit,
         status: 'active',
       })
@@ -233,7 +233,7 @@ export default function AgentMonitor() {
     }
 
     setSenderAccounts((prev) => [inserted, ...prev]);
-    setNewSender({ email: '', displayName: newSender.displayName || 'Sam Reid', dailyLimit: 30 });
+    setNewSender({ email: '', displayName: '', dailyLimit: 30 });
     setSenderSuccess(
       fallbackLinkedDomain
         ? `${inserted.email_address} added successfully and linked to your default sender account. Active at ${dailyLimit}/day.`
@@ -608,7 +608,7 @@ export default function AgentMonitor() {
                   <label style={{ ...settingLabelStyle, opacity: 0.5 }}>Display Name</label>
                   <input
                     value={newSender.displayName}
-                    placeholder="Sam Reid"
+                    placeholder="Display name"
                     onChange={(e) => setNewSender((prev) => ({ ...prev, displayName: e.target.value }))}
                     style={inputStyle}
                   />

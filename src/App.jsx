@@ -2095,7 +2095,7 @@ function AuthenticatedApp({ session }) {
                         type="text"
                         value={icpProfile.sender_name}
                         onChange={(e) => updateIcpField('sender_name', e.target.value)}
-                        placeholder="e.g., Sam Reid"
+                        placeholder="e.g., Your Name"
                         style={{
                           width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
                           backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
@@ -2110,7 +2110,7 @@ function AuthenticatedApp({ session }) {
                         type="text"
                         value={icpProfile.sender_url}
                         onChange={(e) => updateIcpField('sender_url', e.target.value)}
-                        placeholder="e.g., OnsiteAffiliate.com"
+                        placeholder="e.g., YourCompany.com"
                         style={{
                           width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
                           backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
@@ -2243,7 +2243,7 @@ function AuthenticatedApp({ session }) {
                     <textarea
                       value={icpProfile.email_example}
                       onChange={(e) => updateIcpField('email_example', e.target.value)}
-                      placeholder={`Hey Sarah -\n\nSpending thousands upfront on creator UGC before knowing if it converts?\n\nAmazon cracked this with onsite commissions - creators review products, only get paid after their videos drive actual sales. Zero upfront risk.\n\nWe help home brands copy that exact onsite commission structure for their own site. Same model Amazon uses, but for your lighting products.\n\nQuick call to walk through how it works?\n\nSam Reid\nOnsiteAffiliate.com`}
+                      placeholder={`Hey Sarah -\n\nPaste a real outreach email you've sent that worked well.\n\nThe AI will analyze the tone, structure, and approach to match your style when generating new emails.\n\nYour Name\nYourCompany.com`}
                       rows={10}
                       style={{
                         width: '100%', padding: '14px 16px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)',
