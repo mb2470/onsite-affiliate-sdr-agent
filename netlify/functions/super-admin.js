@@ -85,6 +85,15 @@ exports.handler = async (event) => {
         .single();
       if (error) throw error;
 
+      // Link the super admin as owner of the new organization
+      const { error: linkError } = await supabaseAdmin
+        .from('user_organizations')
+        .upsert(
+          { user_id: authData.user.id, org_id: data.id, role: 'owner' },
+          { onConflict: 'user_id,org_id' }
+        );
+      if (linkError) throw linkError;
+
       return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ organization: data }) };
     }
 
