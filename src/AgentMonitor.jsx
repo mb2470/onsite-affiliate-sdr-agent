@@ -51,7 +51,8 @@ export default function AgentMonitor() {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    // Query outreach_log for accurate sent count (source of truth per CLAUDE.md)
+    // outreach_log is the SINGLE source of truth for all email stats.
+    // No Gmail API cross-check, no email_reporting_daily fallback needed.
     let emailsTodayQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
@@ -59,8 +60,7 @@ export default function AgentMonitor() {
     if (resolvedOrgId) emailsTodayQuery = emailsTodayQuery.eq('org_id', resolvedOrgId);
     const { count: emailsToday } = await emailsTodayQuery;
 
-    // Query outreach_log for accurate reply count — exclude bounces and auto-responders
-    // (auto-responders have replied_at cleared by check-replies; bounces have bounced=true)
+    // Reply count — exclude bounces and auto-responders
     let repliesTodayQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
@@ -69,42 +69,8 @@ export default function AgentMonitor() {
     if (resolvedOrgId) repliesTodayQuery = repliesTodayQuery.eq('org_id', resolvedOrgId);
     const { count: repliesToday } = await repliesTodayQuery;
 
-    let reportingSentToday = null;
-    const reportDate = todayStart.toISOString().slice(0, 10);
-    let reportingQuery = supabase
-      .from('email_reporting_daily')
-      .select('sent_count')
-      .eq('report_date', reportDate)
-      .limit(1)
-      .maybeSingle();
-    if (resolvedOrgId) reportingQuery = reportingQuery.eq('org_id', resolvedOrgId);
-    const { data: reportingToday } = await reportingQuery;
-    reportingSentToday = reportingToday?.sent_count ?? null;
-
-    let gmailSentToday = null;
-    try {
-      const gmailStatsRes = await fetch('/.netlify/functions/gmail-inbox', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'stats',
-          org_id: resolvedOrgId,
-          trailing_days: 1,
-          tz_offset_minutes: new Date().getTimezoneOffset(),
-        }),
-      });
-      if (gmailStatsRes.ok) {
-        const gmailStats = await gmailStatsRes.json();
-        if (Number.isFinite(gmailStats?.gmail_sent_today)) {
-          gmailSentToday = gmailStats.gmail_sent_today;
-        }
-      }
-    } catch {
-      // Live Gmail stats are optional — fallback to reporting/outreach counts
-    }
-
-    const resolvedEmailsToday = gmailSentToday ?? reportingSentToday ?? (emailsToday || 0);
-
+    // Capacity = min(global cap, sum of per-sender limits)
+    // The agent can never exceed either ceiling.
     const baseDailyLimit = Number.isFinite(s?.max_emails_per_day)
       ? s.max_emails_per_day
       : parseInt(s?.max_emails_per_day, 10) || 20;
@@ -114,12 +80,17 @@ export default function AgentMonitor() {
         : parseInt(account?.daily_send_limit, 10);
       return sum + (Number.isFinite(parsed) && parsed > 0 ? parsed : 0);
     }, 0);
+    // If no sender accounts configured, the global limit is the ceiling.
+    // Otherwise the effective max is the lower of global cap vs total sender capacity.
+    const effectiveMax = senderAliasLimit > 0
+      ? Math.min(baseDailyLimit, senderAliasLimit)
+      : baseDailyLimit;
 
     setStats(prev => ({
       ...prev,
-      emailsToday: resolvedEmailsToday,
+      emailsToday: emailsToday || 0,
       repliesToday: repliesToday || 0,
-      maxPerDay: baseDailyLimit + senderAliasLimit,
+      maxPerDay: effectiveMax,
       lastHeartbeat: s?.last_heartbeat,
     }));
 
@@ -290,44 +261,18 @@ export default function AgentMonitor() {
   const loadRangeStats = async () => {
     const { start, end } = getDateRange();
 
-    const activityRangeQuery = (activityType) => {
-      let q = supabase
-        .from('activity_log')
-        .select('*', { count: 'exact', head: true })
-        .gte('created_at', start)
-        .lte('created_at', end);
-      if (activeOrgId) q = q.eq('org_id', activeOrgId);
-      if (Array.isArray(activityType)) {
-        q = q.in('activity_type', activityType);
-      } else {
-        q = q.eq('activity_type', activityType);
-      }
-      return q;
-    };
+    // ALL stats come from outreach_log — the single source of truth.
 
-    // Reporting table is the primary source for sent counts (aggregated at write-time)
-    const startDate = start.slice(0, 10);
-    const endDate = end.slice(0, 10);
-    let reportingRangeQuery = supabase
-      .from('email_reporting_daily')
-      .select('sent_count')
-      .gte('report_date', startDate)
-      .lte('report_date', endDate);
-    if (activeOrgId) reportingRangeQuery = reportingRangeQuery.eq('org_id', activeOrgId);
-    const { data: reportingRows } = await reportingRangeQuery;
-    const reportingSent = (reportingRows || []).reduce((sum, row) => sum + (parseInt(row.sent_count, 10) || 0), 0);
-
-    // Fallback to outreach_log where reporting rows are not present yet
+    // Sent count
     let sentQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
       .gte('sent_at', start)
       .lte('sent_at', end);
     if (activeOrgId) sentQuery = sentQuery.eq('org_id', activeOrgId);
-    const { count: sentFallback } = await sentQuery;
-    const sent = reportingRows && reportingRows.length > 0 ? reportingSent : (sentFallback || 0);
+    const { count: sent } = await sentQuery;
 
-    // Query outreach_log for accurate reply count — exclude bounces and auto-responders
+    // Reply count — exclude bounces and auto-responders
     let repliesQuery = supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
@@ -337,9 +282,17 @@ export default function AgentMonitor() {
     if (activeOrgId) repliesQuery = repliesQuery.eq('org_id', activeOrgId);
     const { count: replies } = await repliesQuery;
 
-    const { count: bounces } = await activityRangeQuery('email_bounced');
+    // Bounce count — from outreach_log.bounced (not activity_log)
+    let bouncesQuery = supabase
+      .from('outreach_log')
+      .select('*', { count: 'exact', head: true })
+      .eq('bounced', true)
+      .gte('bounced_at', start)
+      .lte('bounced_at', end);
+    if (activeOrgId) bouncesQuery = bouncesQuery.eq('org_id', activeOrgId);
+    const { count: bounces } = await bouncesQuery;
 
-    const replyRate = sent > 0 ? ((replies || 0) / sent * 100).toFixed(1) : 0;
+    const replyRate = (sent || 0) > 0 ? ((replies || 0) / (sent || 1) * 100).toFixed(1) : 0;
 
     setRangeStats({ sent: sent || 0, replies: replies || 0, bounces: bounces || 0, replyRate });
   };

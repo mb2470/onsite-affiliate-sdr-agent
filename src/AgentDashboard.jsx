@@ -73,14 +73,9 @@ function AgentDashboard() {
       const { data: activityData } = await activityQuery;
       setActivityLog(activityData || []);
 
-      // Load pending emails (drafts) — kept for approval flow
-      const { data: emailsData } = await supabase
-        .from('emails')
-        .select('*, leads(website), contacts(full_name, title, email)')
-        .eq('status', 'draft')
-        .order('created_at', { ascending: false })
-        .limit(10);
-      setPendingEmails(emailsData || []);
+      // Pending emails placeholder — the emails table is unused;
+      // outreach_log is the single source of truth for email activity.
+      setPendingEmails([]);
 
       setLoading(false);
     } catch (error) {

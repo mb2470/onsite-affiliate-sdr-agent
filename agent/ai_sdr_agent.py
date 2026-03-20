@@ -944,8 +944,8 @@ class AISDRAgent:
         return True
 
     def _get_remaining_today(self, max_per_day: int) -> int:
-        day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        today = day_start.strftime('%Y-%m-%d')
+        """Return remaining global daily capacity from outreach_log (single source of truth)."""
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         query = supabase.table("outreach_log").select(
             "id", count="exact", head=True
         ).gte("sent_at", f"{today}T00:00:00Z")
@@ -954,24 +954,34 @@ class AISDRAgent:
             query = query.eq("org_id", org_id)
         today_count = query.execute()
 
-        sent_today_db = today_count.count or 0
-
-        sender_aliases = self.gmail.get_accepted_aliases() or set()
-        sender_aliases.add(self.gmail.get_from_email())
-        sent_today_gmail = self.gmail.count_sent_since(day_start, sender_aliases)
-
-        sent_today = max(sent_today_db, sent_today_gmail or 0)
-        if sent_today_gmail is not None and sent_today_gmail != sent_today_db:
-            print(
-                f"  ⚠️ Sent-count mismatch (outreach_log={sent_today_db}, gmail={sent_today_gmail}). "
-                "Using the higher value for safety."
-            )
-
+        sent_today = today_count.count or 0
         return max_per_day - sent_today
 
     def _resolve_org_id(self, settings: Optional[Dict] = None) -> Optional[str]:
         cfg = settings or self._get_settings()
         return cfg.get('org_id') or ORG_ID
+
+    def _get_sender_sent_today(self, org_id: Optional[str]) -> Dict[str, int]:
+        """Get per-sender sent counts for today from outreach_log (single source of truth)."""
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        query = supabase.table('outreach_log').select(
+            'sender_email'
+        ).not_.is_('sender_email', 'null').gte('sent_at', f'{today}T00:00:00Z')
+        if org_id:
+            query = query.eq('org_id', org_id)
+
+        try:
+            rows = query.execute().data or []
+        except Exception as e:
+            print(f"  ⚠️ Could not query outreach_log for sender counts: {e}")
+            return {}
+
+        counts: Dict[str, int] = {}
+        for row in rows:
+            addr = (row.get('sender_email') or '').strip().lower()
+            if addr:
+                counts[addr] = counts.get(addr, 0) + 1
+        return counts
 
     def _load_sender_pool(self, settings: Dict) -> List[Dict]:
         accepted_aliases = self.gmail.get_accepted_aliases()
@@ -983,8 +993,8 @@ class AISDRAgent:
             rows = []
         else:
             query = supabase.table('email_accounts').select(
-                'id, org_id, email_address, display_name, daily_send_limit, current_daily_sent, last_sent_at, status'
-            ).eq('org_id', org_id).in_('status', ['active', 'ready', 'warming']).order('current_daily_sent', desc=False).order('created_at', desc=False)
+                'id, org_id, email_address, display_name, daily_send_limit, status'
+            ).eq('org_id', org_id).in_('status', ['active', 'ready', 'warming']).order('created_at', desc=False)
 
             try:
                 rows = query.execute().data or []
@@ -992,20 +1002,8 @@ class AISDRAgent:
                 print(f"  ⚠️ Could not load email_accounts sender pool: {e}")
                 rows = []
 
-            # Reset stale daily counters — if last_sent_at is not today the count
-            # carries over from a previous session and must be zeroed before use.
-            today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-            for row in rows:
-                last_sent = (row.get('last_sent_at') or '')[:10]  # "YYYY-MM-DD"
-                if last_sent != today_str and row.get('id'):
-                    try:
-                        supabase.table('email_accounts').update(
-                            {'current_daily_sent': 0}
-                        ).eq('id', row['id']).execute()
-                        row['current_daily_sent'] = 0
-                        print(f"  🔄 Reset daily counter for {row.get('email_address')} (last sent: {last_sent or 'never'})")
-                    except Exception as _e:
-                        print(f"  ⚠️ Could not reset counter for {row.get('email_address')}: {_e}")
+        # Derive per-sender sent-today from outreach_log (single source of truth)
+        sender_sent_today = self._get_sender_sent_today(org_id)
 
         pool = []
         for row in rows:
@@ -1021,7 +1019,7 @@ class AISDRAgent:
             except Exception:
                 limit = 0
 
-            sent_today = int(row.get('current_daily_sent') or 0)
+            sent_today = sender_sent_today.get(email, 0)
             remaining = max(0, limit - sent_today)
             if remaining <= 0:
                 continue
@@ -1044,13 +1042,14 @@ class AISDRAgent:
             return []
 
         fallback_email = self.gmail.get_from_email()
+        fallback_sent = sender_sent_today.get(fallback_email, 0)
         return [{
             'id': None,
             'email_address': fallback_email,
             'from_name': 'Sam Reid',
             'daily_send_limit': max_per_day,
-            'current_daily_sent': 0,
-            'remaining': max_per_day,
+            'current_daily_sent': fallback_sent,
+            'remaining': max(0, max_per_day - fallback_sent),
             'sent_in_run': 0,
         }]
 
@@ -1063,23 +1062,18 @@ class AISDRAgent:
         return available[0]
 
     def _record_sender_success(self, sender: Dict):
+        """Update in-memory sender pool counters after a successful send.
+
+        Per-sender daily counts are derived from outreach_log (the single
+        source of truth), so there is no need to update email_accounts here.
+        We only update the in-memory pool for within-run round-robin fairness.
+        """
         if not sender:
             return
 
         sender['remaining'] = max(0, int(sender.get('remaining', 0)) - 1)
         sender['sent_in_run'] = int(sender.get('sent_in_run', 0)) + 1
         sender['current_daily_sent'] = int(sender.get('current_daily_sent', 0)) + 1
-
-        if not sender.get('id'):
-            return
-
-        try:
-            supabase.table('email_accounts').update({
-                'current_daily_sent': sender['current_daily_sent'],
-                'last_sent_at': datetime.now(timezone.utc).isoformat(),
-            }).eq('id', sender['id']).execute()
-        except Exception as e:
-            print(f"  ⚠️ Could not update sender account usage for {sender.get('email_address')}: {e}")
 
     def _get_sender_capacity_remaining(self, settings: Dict) -> int:
         pool = self._load_sender_pool(settings)
@@ -1255,7 +1249,8 @@ class AISDRAgent:
             except Exception as e:
                 print(f"  ⚠️ Could not fetch message headers: {e}")
 
-        # Log outreach
+        # Log outreach — sender_email is written so outreach_log is the single
+        # source of truth for per-sender daily capacity.
         org_id = self._resolve_org_id()
         outreach_row_data = {
             "lead_id": lead['id'],
@@ -1269,6 +1264,7 @@ class AISDRAgent:
             "gmail_message_id": gmail_msg_id,
             "gmail_thread_id": gmail_thread_id,
             "rfc_message_id": rfc_message_id,
+            "sender_email": sender.get('email_address', ''),
         }
         if org_id:
             outreach_row_data["org_id"] = org_id
@@ -1436,7 +1432,20 @@ class AISDRAgent:
             except Exception as e:
                 print(f"  ⚠️ Could not mark outreach_log bounced for {email}: {e}")
 
-            self._log('email_bounced', summary=f"Bounced: {email}", status='failed')
+            # Log bounce with dedicated bounced_email column for suppression lookup
+            try:
+                org_id = self._resolve_org_id()
+                row = {
+                    "activity_type": "email_bounced",
+                    "summary": f"Bounced: {email}",
+                    "status": "failed",
+                    "bounced_email": email,
+                }
+                if org_id:
+                    row["org_id"] = org_id
+                supabase.table("activity_log").insert(row).execute()
+            except Exception as e:
+                print(f"  ⚠️ Log error: {e}")
 
         print(f"\n✅ Cleaned {cleaned} contacts")
 
@@ -1852,8 +1861,9 @@ class AISDRAgent:
                 except Exception:
                     pass
 
-            # Log the follow-up in outreach_log
+            # Log the follow-up in outreach_log (sender_email for single source of truth)
             fu_org_id = self._resolve_org_id()
+            fu_sender_email = self.gmail.get_from_email()
             fu_outreach_data = {
                 "lead_id": outreach_row.get('lead_id'),
                 "website": website,
@@ -1867,6 +1877,7 @@ class AISDRAgent:
                 "gmail_thread_id": fu_gmail_thread_id,
                 "rfc_message_id": fu_rfc_message_id,
                 "parent_outreach_id": outreach_row.get('id'),
+                "sender_email": self.gmail.get_from_email(),
             }
             if fu_org_id:
                 fu_outreach_data["org_id"] = fu_org_id
