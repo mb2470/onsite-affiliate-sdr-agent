@@ -771,10 +771,12 @@ async function executeTool(name, input, orgId, authContext = null) {
         q = q.gte('sent_at', since);
         return extra ? extra(q) : q;
       };
+      // Count unique bounced emails from activity_log (1 row per bounced address)
+      // instead of outreach_log rows which inflate the count (multiple rows per address)
       const bounceQ = () => {
-        let q = supabase.from('outreach_log').select('*', { count: 'exact', head: true });
+        let q = supabase.from('activity_log').select('*', { count: 'exact', head: true });
         if (orgId) q = q.eq('org_id', orgId);
-        q = q.eq('bounced', true).gte('bounced_at', since);
+        q = q.eq('activity_type', 'email_bounced').gte('created_at', since);
         return q;
       };
 

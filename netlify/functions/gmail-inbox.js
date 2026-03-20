@@ -739,7 +739,8 @@ async function handleStats(orgId, creds, body = {}) {
     // Silently fail — live count is optional
   }
 
-  // Gmail bounce proxy from mailbox DSN-style messages in same trailing window
+  // Bounce count from DB (activity_log) — one row per unique bounced email, accurate by design.
+  // Gmail's resultSizeEstimate is unreliable and can wildly over-count.
   let gmailBouncesTrailing = null;
   try {
     const offsetMs = tzOffsetMinutes * 60 * 1000;
@@ -747,16 +748,16 @@ async function handleStats(orgId, creds, body = {}) {
     localNow.setUTCHours(0, 0, 0, 0);
     localNow.setUTCDate(localNow.getUTCDate() - (trailingDays - 1));
     const startUtcMs = localNow.getTime() + offsetMs;
-    const afterEpochSeconds = Math.floor(startUtcMs / 1000);
+    const trailingStartIso = new Date(startUtcMs).toISOString();
 
-    const bounceQuery = `after:${afterEpochSeconds} (from:mailer-daemon OR from:postmaster OR subject:"Delivery Status Notification" OR subject:"Undeliverable" OR subject:"Message blocked" OR subject:"Delivery has failed")`;
-    const bounceData = await gmailRequest(
-      orgId,
-      creds,
-      'GET',
-      `/users/me/messages?q=${encodeURIComponent(bounceQuery)}&maxResults=1`
-    );
-    if (bounceData) gmailBouncesTrailing = bounceData.resultSizeEstimate || 0;
+    const { count: bounceCount } = await supabase
+      .from('activity_log')
+      .select('*', { count: 'exact', head: true })
+      .eq('org_id', orgId)
+      .eq('activity_type', 'email_bounced')
+      .gte('created_at', trailingStartIso);
+
+    gmailBouncesTrailing = bounceCount || 0;
   } catch {
     // Silently fail — live count is optional
   }
