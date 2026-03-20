@@ -695,7 +695,7 @@ function DomainsTab({ orgId }) {
                     <input
                       style={inputStyle}
                       type="email"
-                      placeholder="e.g. sam@onsiteaffiliates.com"
+                      placeholder="e.g. you@yourcompany.com"
                       value={forwardToEmail}
                       onChange={e => setForwardToEmail(e.target.value)}
                     />
