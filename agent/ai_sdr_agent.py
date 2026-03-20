@@ -596,30 +596,6 @@ class GmailService:
         profile = self._gmail_request('GET', 'profile')
         return profile['emailAddress']
 
-    def count_sent_since(self, start_dt: datetime, from_addresses: Optional[set] = None) -> Optional[int]:
-        """Return Gmail's sent count since a UTC datetime. Falls back to None on API issues."""
-        try:
-            after_epoch = int(start_dt.timestamp())
-            query_parts = [f"in:sent after:{after_epoch}"]
-
-            senders = {
-                self._canonicalize_email(addr)
-                for addr in (from_addresses or set())
-                if addr
-            }
-            if senders:
-                sender_filters = ' OR '.join(
-                    f"from:{addr}" for addr in sorted(senders)
-                )
-                query_parts.append(f"({sender_filters})")
-
-            query = ' '.join(query_parts)
-            encoded = urllib.parse.quote(query)
-            search = self._gmail_request('GET', f'messages?q={encoded}&maxResults=1')
-            return int(search.get('resultSizeEstimate', 0) or 0)
-        except Exception as e:
-            print(f"  ⚠️ Could not fetch Gmail sent count: {e}")
-            return None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1447,15 +1423,28 @@ class AISDRAgent:
             print("✅ No bounces found!")
             return
 
-        print(f"🚫 Found {len(bounced)} bounced: {', '.join(bounced)}\n")
+        # Dedup: skip emails already processed (matches JS check-bounces.js behavior)
+        already_processed = self._load_bounce_suppression()
+        new_bounces = [e for e in bounced if e.lower() not in already_processed]
+        if not new_bounces:
+            print(f"✅ {len(bounced)} bounce(s) found but all already processed.")
+            return
 
+        print(f"🚫 Found {len(new_bounces)} new bounced (skipped {len(bounced) - len(new_bounces)} already processed): {', '.join(new_bounces)}\n")
+
+        org_id = self._resolve_org_id()
         cleaned = 0
-        for email in bounced:
-            deleted = supabase.table("contact_database").delete().eq("email", email).execute()
+        for email in new_bounces:
+            # Remove from contact_database to prevent re-discovery
+            q = supabase.table("contact_database").delete().eq("email", email)
+            if org_id:
+                q = q.eq("org_id", org_id)
+            deleted = q.execute()
             if deleted.data:
                 print(f"  🗑️ Removed {email}")
                 cleaned += 1
 
+            # Reset leads to 'enriched' if this was their only contact
             outreach = supabase.table("outreach_log").select("website").eq("contact_email", email).execute()
             for o in (outreach.data or []):
                 other = supabase.table("outreach_log").select(
@@ -1466,7 +1455,7 @@ class AISDRAgent:
                     supabase.table("leads").update({"status": "enriched"}).eq("website", o['website']).execute()
                     print(f"  ↩️ Reset {o['website']} to enriched")
 
-            # Mark all outreach_log rows for this email as bounced
+            # Mark outreach_log rows for this email as bounced
             try:
                 supabase.table('outreach_log').update({
                     'bounced': True,
@@ -1477,10 +1466,9 @@ class AISDRAgent:
 
             # Log bounce with dedicated bounced_email column for suppression lookup
             try:
-                org_id = self._resolve_org_id()
                 row = {
                     "activity_type": "email_bounced",
-                    "summary": f"Bounced: {email}",
+                    "summary": f"Bounced: {email} — removed from contacts",
                     "status": "failed",
                     "bounced_email": email,
                 }

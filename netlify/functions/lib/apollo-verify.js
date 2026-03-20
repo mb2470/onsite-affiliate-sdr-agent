@@ -66,15 +66,10 @@ async function getCachedApolloVerification(supabase, email) {
 }
 
 /**
- * Save Apollo verification result to both contacts and contact_database.
+ * Save Apollo verification result to contact_database (single source of truth).
  */
 async function saveApolloVerification(supabase, email, status) {
   const now = new Date().toISOString();
-
-  await supabase
-    .from('contacts')
-    .update({ apollo_email_status: status, apollo_verified_at: now })
-    .eq('email', email);
 
   await supabase
     .from('contact_database')

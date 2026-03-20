@@ -26,6 +26,27 @@ const DEFAULT_WARMUP_DAYS = 21;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Compute per-sender sent counts for today from outreach_log (single source of truth).
+ * Returns a Map of lowercase email_address -> count.
+ */
+async function getSenderSentToday(orgId) {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const { data } = await supabase
+    .from('outreach_log')
+    .select('sender_email')
+    .eq('org_id', orgId)
+    .not('sender_email', 'is', null)
+    .gte('sent_at', todayStart.toISOString());
+  const counts = new Map();
+  for (const row of (data || [])) {
+    const addr = (row.sender_email || '').trim().toLowerCase();
+    if (addr) counts.set(addr, (counts.get(addr) || 0) + 1);
+  }
+  return counts;
+}
+
 function respond(statusCode, body) {
   return {
     statusCode,
@@ -220,9 +241,13 @@ async function handleListAccounts(orgId) {
 
   if (error) return respond(500, { error: 'Failed to fetch accounts', details: error.message });
 
+  // Compute per-sender sent counts from outreach_log (single source of truth)
+  const senderSentToday = await getSenderSentToday(orgId);
+
   const result = (accounts || []).map(a => {
     const warmupLimit = calculateWarmupLimit(a, settings);
-    const remaining = Math.max(0, warmupLimit - (a.current_daily_sent || 0));
+    const sentToday = senderSentToday.get((a.email_address || '').trim().toLowerCase()) || 0;
+    const remaining = Math.max(0, warmupLimit - sentToday);
     const daysElapsed = a.warmup_started_at
       ? Math.floor((Date.now() - new Date(a.warmup_started_at).getTime()) / (1000 * 60 * 60 * 24))
       : 0;
@@ -237,7 +262,7 @@ async function handleListAccounts(orgId) {
       imap_host: a.imap_host,
       imap_port: a.imap_port,
       daily_send_limit: warmupLimit,
-      current_daily_sent: a.current_daily_sent || 0,
+      current_daily_sent: sentToday,
       remaining_today: remaining,
       warmup_day: daysElapsed,
       warmup_complete: warmupComplete,
@@ -385,9 +410,12 @@ async function handleSendCapacity(orgId) {
 
   if (error) return respond(500, { error: 'Failed to fetch accounts', details: error.message });
 
+  // Compute per-sender sent counts from outreach_log (single source of truth)
+  const senderSentToday = await getSenderSentToday(orgId);
+
   const capacity = (accounts || []).map(a => {
     const warmupLimit = calculateWarmupLimit(a, settings);
-    const sent = a.current_daily_sent || 0;
+    const sent = senderSentToday.get((a.email_address || '').trim().toLowerCase()) || 0;
     const remaining = Math.max(0, warmupLimit - sent);
 
     return {
@@ -414,61 +442,6 @@ async function handleSendCapacity(orgId) {
     accounts: capacity,
     total_remaining: totalRemaining,
     total_accounts: capacity.length,
-  });
-}
-
-/**
- * record-send — Called by the Python agent after successfully sending an email.
- * Increments current_daily_sent and enforces hard cap.
- */
-async function handleRecordSend(orgId, body) {
-  const { account_id, count: sendCount } = body;
-  if (!account_id) return respond(400, { error: 'Missing required field: account_id' });
-
-  const numToRecord = sendCount || 1;
-
-  const settings = await getOrgSettings(orgId);
-
-  const { data: account, error: accErr } = await supabase
-    .from('email_accounts')
-    .select('*')
-    .eq('id', account_id)
-    .eq('org_id', orgId)
-    .single();
-
-  if (accErr || !account) return respond(404, { error: 'Email account not found.' });
-
-  const warmupLimit = calculateWarmupLimit(account, settings);
-  const currentSent = account.current_daily_sent || 0;
-  const newSent = currentSent + numToRecord;
-
-  // Hard cap enforcement
-  if (currentSent >= warmupLimit) {
-    return respond(429, {
-      error: 'Daily send limit reached for this account.',
-      daily_limit: warmupLimit,
-      sent_today: currentSent,
-      remaining: 0,
-    });
-  }
-
-  // Allow partial if they try to record more than remaining
-  const actualRecorded = Math.min(numToRecord, warmupLimit - currentSent);
-
-  await supabase
-    .from('email_accounts')
-    .update({
-      current_daily_sent: currentSent + actualRecorded,
-      last_sent_at: new Date().toISOString(),
-    })
-    .eq('id', account_id);
-
-  return respond(200, {
-    success: true,
-    recorded: actualRecorded,
-    sent_today: currentSent + actualRecorded,
-    daily_limit: warmupLimit,
-    remaining: warmupLimit - (currentSent + actualRecorded),
   });
 }
 
@@ -784,7 +757,6 @@ exports.handler = async (event) => {
 
     // Agent endpoints (send capacity & recording)
     if (action === 'send-capacity') return await handleSendCapacity(orgId);
-    if (action === 'record-send') return await handleRecordSend(orgId, body);
     if (action === 'warmup-tick') return await handleWarmupTick(orgId);
 
     // Account management
@@ -805,7 +777,7 @@ exports.handler = async (event) => {
     if (action === 'inbox-stats') return await handleInboxStats(orgId);
 
     return respond(400, {
-      error: `Unknown action: ${action}. Valid: get-settings, update-settings, list-accounts, create-account, send-capacity, record-send, warmup-tick, list-campaigns, create-campaign, get-campaign, assign-account, list-inbox, get-conversation, mark-read, inbox-stats`,
+      error: `Unknown action: ${action}. Valid: get-settings, update-settings, list-accounts, create-account, send-capacity, warmup-tick, list-campaigns, create-campaign, get-campaign, assign-account, list-inbox, get-conversation, mark-read, inbox-stats`,
     });
   } catch (error) {
     console.error(`email-api error (action=${action}):`, error);

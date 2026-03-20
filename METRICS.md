@@ -229,20 +229,6 @@ bounces = COUNT(activity_log) WHERE activity_type = 'email_bounced'
 replyRate = replies / sent * 100
 ```
 
-### Agent Dashboard Today Stats
-**Displayed in:** AgentDashboard.jsx stats grid
-**State:** `stats`
-**Calculation:** (AgentDashboard.jsx `loadDashboard`)
-```
-emails_sent    = COUNT(activity_log) WHERE activity_type IN ('email_sent', 'email_exported')
-                   AND created_at >= today AND org_id = X
-emails_failed  = COUNT(activity_log) WHERE activity_type = 'email_failed'
-                   AND created_at >= today AND org_id = X
-leads_enriched = COUNT(activity_log) WHERE activity_type = 'lead_enriched'
-                   AND created_at >= today AND org_id = X
-remaining      = max_emails_per_day - emails_sent
-```
-
 ### Daily Limit Enforcement
 **Checked by:** `send-email.js` (line ~322) and Python agent `_get_remaining_today()` (line ~918)
 **Calculation:**
@@ -369,10 +355,6 @@ Before any email is sent, it goes through a two-step verification:
      │    - Replies Today (activity_log count)     │
      │    - Performance by date range              │
      │                                             │
-     │  AgentDashboard.jsx:                        │
-     │    - Today stats (activity_log counts)      │
-     │    - Remaining today (max - sent)           │
-     │    - Recent activity feed                   │
      └─────────────────────────────────────────────┘
 ```
 

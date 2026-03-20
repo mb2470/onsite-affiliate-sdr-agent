@@ -45,7 +45,7 @@ Address missing metrics, data integrity concerns, and structural documentation g
 
 **Changes:**
 - **`send-email.js`** (~lines 569-580): Add `gmail_message_id` to the outreach_log insert (currently missing for frontend sends).
-- **`AgentMonitor.jsx`** and **`AgentDashboard.jsx`**: Switch "Emails Today" to use `outreach_log` with `sent_at >= todayStart` instead of `activity_log`, making all email count metrics consistent.
+- **`AgentMonitor.jsx`**: Switch "Emails Today" to use `outreach_log` with `sent_at >= todayStart` instead of `activity_log`, making all email count metrics consistent. (`AgentDashboard.jsx` has been removed — it was dead code.)
 - **`METRICS.md`**: Document that `outreach_log` is the single source of truth for all sent email counts.
 
 ---
@@ -57,8 +57,6 @@ Address missing metrics, data integrity concerns, and structural documentation g
 
 **Changes:**
 - **`App.jsx`** (in `loadGlobalData`): Add queries to count `email_verified` activity entries. Count total verifications and use bounced_email + blocked statuses to derive pass/fail rates. Surface as a "Verification" stat in the header bar.
-- **`AgentDashboard.jsx`**: Add verification stats to today's stats grid.
-
 ### 2B. Follow-up metrics on frontend
 **Problem:** Follow-up data exists in `outreach_log.followup_number` but dashboards don't surface follow-up-specific stats.
 
@@ -103,5 +101,4 @@ Address missing metrics, data integrity concerns, and structural documentation g
 | `netlify/functions/send-email.js` | Edit | Use `bounced_email` column for suppression; add `gmail_message_id` to outreach_log |
 | `src/App.jsx` | Edit | Use `bounced`/`bounced_email` columns; add verification & follow-up stats; exclude unsubscribes |
 | `src/AgentMonitor.jsx` | Edit | Switch to `outreach_log` for sent counts; add follow-up breakdown |
-| `src/AgentDashboard.jsx` | Edit | Switch to `outreach_log` for sent counts; add verification stats |
 | `METRICS.md` | Edit | Document all schema gaps, error semantics, known gaps, new activity types |
