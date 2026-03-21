@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import './App.css';
 import AgentMonitor from './AgentMonitor';
 import Login from './Login';
+import PublicIcpIntake from './PublicIcpIntake';
 import { supabase } from './supabaseClient';
 import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
 import { enrichLeads, setIcpContext } from './services/enrichService';
@@ -13,6 +14,14 @@ import ChatPanel from './ChatPanel';
 import SuperAdminDashboard from './SuperAdminDashboard';
 
 function App() {
+  const publicIcpParams = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const isPublic = (params.get('icp_public') || '').trim().toLowerCase() === '1';
+    const org = (params.get('org') || params.get('org_slug') || params.get('org_id') || '').trim();
+    return isPublic && org ? { org } : null;
+  }, []);
+
   // Auth state
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -34,7 +43,7 @@ function App() {
   }, []);
 
   // Show loading while checking auth
-  if (authLoading) {
+  if (authLoading && !publicIcpParams) {
     return (
       <div style={{
         minHeight: '100vh',
@@ -54,6 +63,7 @@ function App() {
 
   // Show login if not authenticated
   if (!session) {
+    if (publicIcpParams) return <PublicIcpIntake orgIdentifier={publicIcpParams.org} />;
     return <Login />;
   }
 
@@ -61,6 +71,58 @@ function App() {
 }
 
 function AuthenticatedApp({ session }) {
+  const EMPTY_ICP_PROFILE = useMemo(() => ({
+    // Part 1: Product & Value Propositions
+    elevator_pitch: '',
+    core_problem: '',
+    uvp_1: '',
+    uvp_2: '',
+    uvp_3: '',
+    alternative: '',
+    // Part 2: Firmographics
+    industries: [],
+    company_size: '',
+    geography: [],
+    revenue_range: '',
+    tech_stack: [],
+    trigger_events: [],
+    // Part 2b: Scoring Thresholds
+    min_product_count: 250,
+    min_monthly_sales: 1000000,
+    min_annual_revenue: 12000000,
+    min_employee_count: 50,
+    // Part 3: Buyer Persona
+    primary_titles: [],
+    key_responsibilities: '',
+    daily_obstacles: '',
+    success_metrics: '',
+    user_persona: '',
+    gatekeeper_persona: '',
+    champion_persona: '',
+    // Part 4: Summary
+    perfect_fit_narrative: '',
+    // Part 5: Messaging & Tone
+    sender_name: '',
+    sender_url: '',
+    email_tone: '',
+    social_proof: '',
+    messaging_do: [],
+    messaging_dont: [],
+    email_example: '',
+  }), []);
+
+  const icpLinkParams = useMemo(() => {
+    if (typeof window === 'undefined') return { targetOrg: '', forceBlankTemplate: false, openIcpView: false };
+    const params = new URLSearchParams(window.location.search);
+    const targetOrg = (params.get('org') || params.get('org_id') || params.get('org_slug') || '').trim();
+    const templateParam = (params.get('icp_template') || '').trim().toLowerCase();
+    return {
+      targetOrg,
+      forceBlankTemplate: templateParam === 'blank',
+      openIcpView: (params.get('view') || '').trim().toLowerCase() === 'icp',
+    };
+  }, []);
+
   const isSuperAdmin = (session?.user?.email || '').toLowerCase() === 'mike@onsiteaffiliates.com';
   const [orgLoading, setOrgLoading] = useState(true);
   const [organizations, setOrganizations] = useState([]);
@@ -143,45 +205,7 @@ function AuthenticatedApp({ session }) {
 
   // ICP Profile state
   const [icpStep, setIcpStep] = useState(1);
-  const [icpProfile, setIcpProfile] = useState({
-    // Part 1: Product & Value Propositions
-    elevator_pitch: '',
-    core_problem: '',
-    uvp_1: '',
-    uvp_2: '',
-    uvp_3: '',
-    alternative: '',
-    // Part 2: Firmographics
-    industries: [],
-    company_size: '',
-    geography: [],
-    revenue_range: '',
-    tech_stack: [],
-    trigger_events: [],
-    // Part 2b: Scoring Thresholds
-    min_product_count: 250,
-    min_monthly_sales: 1000000,
-    min_annual_revenue: 12000000,
-    min_employee_count: 50,
-    // Part 3: Buyer Persona
-    primary_titles: [],
-    key_responsibilities: '',
-    daily_obstacles: '',
-    success_metrics: '',
-    user_persona: '',
-    gatekeeper_persona: '',
-    champion_persona: '',
-    // Part 4: Summary
-    perfect_fit_narrative: '',
-    // Part 5: Messaging & Tone
-    sender_name: '',
-    sender_url: '',
-    email_tone: '',
-    social_proof: '',
-    messaging_do: [],
-    messaging_dont: [],
-    email_example: '',
-  });
+  const [icpProfile, setIcpProfile] = useState(EMPTY_ICP_PROFILE);
   const [icpSaving, setIcpSaving] = useState(false);
   const [icpSaved, setIcpSaved] = useState(false);
   const [icpProfileId, setIcpProfileId] = useState(null);
@@ -195,6 +219,7 @@ function AuthenticatedApp({ session }) {
   const [icpTitleInput, setIcpTitleInput] = useState('');
   const [icpMsgDoInput, setIcpMsgDoInput] = useState('');
   const [icpMsgDontInput, setIcpMsgDontInput] = useState('');
+  const [icpLinkCopied, setIcpLinkCopied] = useState(false);
 
   // Create Audience state
   const [audienceFit, setAudienceFit] = useState([]);
@@ -228,9 +253,13 @@ function AuthenticatedApp({ session }) {
       setOrganizations(orgs);
 
       const storedOrgId = localStorage.getItem('selected_org_id');
+      const requestedOrg = icpLinkParams.targetOrg
+        ? orgs.find((o) => o.id === icpLinkParams.targetOrg || o.slug === icpLinkParams.targetOrg)
+        : null;
       const hasStored = storedOrgId && orgs.some((o) => o.id === storedOrgId);
-      const selected = hasStored ? storedOrgId : (orgs[0]?.id || null);
+      const selected = requestedOrg?.id || (hasStored ? storedOrgId : (orgs[0]?.id || null));
       setOrgId(selected);
+      if (icpLinkParams.openIcpView) setActiveView('icp');
     } catch (e) {
       console.error('Failed loading organizations:', e);
       setOrganizations([]);
@@ -241,7 +270,7 @@ function AuthenticatedApp({ session }) {
 
   useEffect(() => {
     loadOrganizations();
-  }, [session.user.id]);
+  }, [session.user.id, icpLinkParams]);
 
   useEffect(() => {
     if (orgId) localStorage.setItem('selected_org_id', orgId);
@@ -1073,7 +1102,16 @@ function AuthenticatedApp({ session }) {
   // ═══════════════════════════════════════════
 
   const loadIcpProfile = async () => {
+    setIcpLoaded(false);
     try {
+      if (icpLinkParams.forceBlankTemplate) {
+        setIcpProfileId(null);
+        setIcpProfile(EMPTY_ICP_PROFILE);
+        setIcpContext(EMPTY_ICP_PROFILE);
+        setEmailIcpContext(EMPTY_ICP_PROFILE);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('icp_profiles')
         .select('*')
@@ -1087,6 +1125,7 @@ function AuthenticatedApp({ session }) {
       if (data) {
         setIcpProfileId(data.id);
         const profile = {
+          ...EMPTY_ICP_PROFILE,
           elevator_pitch: data.elevator_pitch || '',
           core_problem: data.core_problem || '',
           uvp_1: data.uvp_1 || '',
@@ -1099,10 +1138,10 @@ function AuthenticatedApp({ session }) {
           revenue_range: data.revenue_range || '',
           tech_stack: data.tech_stack || [],
           trigger_events: data.trigger_events || [],
-          min_product_count: data.min_product_count ?? 250,
-          min_monthly_sales: data.min_monthly_sales ?? 1000000,
-          min_annual_revenue: data.min_annual_revenue ?? 12000000,
-          min_employee_count: data.min_employee_count ?? 50,
+          min_product_count: data.min_product_count ?? EMPTY_ICP_PROFILE.min_product_count,
+          min_monthly_sales: data.min_monthly_sales ?? EMPTY_ICP_PROFILE.min_monthly_sales,
+          min_annual_revenue: data.min_annual_revenue ?? EMPTY_ICP_PROFILE.min_annual_revenue,
+          min_employee_count: data.min_employee_count ?? EMPTY_ICP_PROFILE.min_employee_count,
           primary_titles: data.primary_titles || [],
           key_responsibilities: data.key_responsibilities || '',
           daily_obstacles: data.daily_obstacles || '',
@@ -1122,6 +1161,11 @@ function AuthenticatedApp({ session }) {
         setIcpProfile(profile);
         setIcpContext(profile);
         setEmailIcpContext(profile);
+      } else {
+        setIcpProfileId(null);
+        setIcpProfile(EMPTY_ICP_PROFILE);
+        setIcpContext(EMPTY_ICP_PROFILE);
+        setEmailIcpContext(EMPTY_ICP_PROFILE);
       }
     } catch (e) { console.error('ICP load error:', e); }
     setIcpLoaded(true);
@@ -1180,6 +1224,28 @@ function AuthenticatedApp({ session }) {
 
     const narrative = `Our ideal customer is a ${size} ${industry} company that is currently struggling with ${problem}. The ${title} is looking for a way to ${kpi} and chooses us because of our ${uvp}.`;
     updateIcpField('perfect_fit_narrative', narrative);
+  };
+
+  const buildIcpTemplateLink = () => {
+    if (typeof window === 'undefined' || !activeOrg) return '';
+    const url = new URL(window.location.origin);
+    url.searchParams.set('org', activeOrg.slug || activeOrg.id);
+    url.searchParams.set('icp_public', '1');
+    url.searchParams.set('icp_template', 'blank');
+    return url.toString();
+  };
+
+  const copyIcpTemplateLink = async () => {
+    const link = buildIcpTemplateLink();
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setIcpLinkCopied(true);
+      setTimeout(() => setIcpLinkCopied(false), 2000);
+    } catch (e) {
+      console.error('Failed copying ICP template link:', e);
+      alert(`Copy failed. Share this link manually:\n${link}`);
+    }
   };
 
   // ═══════════════════════════════════════════
@@ -1490,6 +1556,35 @@ function AuthenticatedApp({ session }) {
                   Profile loaded — edits auto-update downstream scoring & email generation.
                 </p>
               )}
+
+              <div style={{
+                marginBottom: '18px',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: '10px',
+                padding: '10px 12px',
+              }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.72)', marginBottom: '6px' }}>
+                  Share ICP intake link
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    readOnly
+                    value={buildIcpTemplateLink()}
+                    style={{
+                      flex: 1, minWidth: '320px', padding: '8px 10px',
+                      borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)',
+                      background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.75)', fontSize: '12px',
+                    }}
+                  />
+                  <button className="primary-btn" onClick={copyIcpTemplateLink} style={{ padding: '8px 12px', fontSize: '12px' }}>
+                    {icpLinkCopied ? 'Copied' : 'Copy Link'}
+                  </button>
+                </div>
+                <p style={{ marginTop: '6px', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
+                  This opens ICP Setup in the selected org with a blank template.
+                </p>
+              </div>
 
               {/* Step indicators */}
               <div style={{ display: 'flex', gap: '6px', marginBottom: '28px', flexWrap: 'wrap' }}>
