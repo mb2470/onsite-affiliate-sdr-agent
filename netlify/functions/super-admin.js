@@ -70,7 +70,21 @@ exports.handler = async (event) => {
         .select('id, name, slug, created_at')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ organizations: data || [] }) };
+
+      // Ensure super admin is linked to every org
+      const orgs = data || [];
+      if (orgs.length > 0) {
+        const rows = orgs.map((org) => ({
+          user_id: authData.user.id,
+          org_id: org.id,
+          role: 'owner',
+        }));
+        await supabaseAdmin
+          .from('user_organizations')
+          .upsert(rows, { onConflict: 'user_id,org_id', ignoreDuplicates: true });
+      }
+
+      return { statusCode: 200, headers: corsHeaders, body: JSON.stringify({ organizations: orgs }) };
     }
 
     if (action === 'create_org') {
