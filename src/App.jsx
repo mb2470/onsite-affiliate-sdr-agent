@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import './App.css';
 import AgentMonitor from './AgentMonitor';
 import Login from './Login';
+import PublicIcpIntake from './PublicIcpIntake';
 import { supabase } from './supabaseClient';
 import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
 import { enrichLeads, setIcpContext } from './services/enrichService';
@@ -13,6 +14,14 @@ import ChatPanel from './ChatPanel';
 import SuperAdminDashboard from './SuperAdminDashboard';
 
 function App() {
+  const publicIcpParams = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const isPublic = (params.get('icp_public') || '').trim().toLowerCase() === '1';
+    const org = (params.get('org') || params.get('org_slug') || params.get('org_id') || '').trim();
+    return isPublic && org ? { org } : null;
+  }, []);
+
   // Auth state
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -32,6 +41,10 @@ function App() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  if (publicIcpParams) {
+    return <PublicIcpIntake orgIdentifier={publicIcpParams.org} />;
+  }
 
   // Show loading while checking auth
   if (authLoading) {
@@ -102,13 +115,11 @@ function AuthenticatedApp({ session }) {
   }), []);
 
   const icpLinkParams = useMemo(() => {
-    if (typeof window === 'undefined') return { targetOrg: '', forceBlankTemplate: false, openIcpView: false };
+    if (typeof window === 'undefined') return { targetOrg: '', openIcpView: false };
     const params = new URLSearchParams(window.location.search);
     const targetOrg = (params.get('org') || params.get('org_id') || params.get('org_slug') || '').trim();
-    const templateParam = (params.get('icp_template') || '').trim().toLowerCase();
     return {
       targetOrg,
-      forceBlankTemplate: templateParam === 'blank',
       openIcpView: (params.get('view') || '').trim().toLowerCase() === 'icp',
     };
   }, []);
@@ -1239,7 +1250,7 @@ function AuthenticatedApp({ session }) {
     if (typeof window === 'undefined' || !activeOrg) return '';
     const url = new URL(window.location.origin);
     url.searchParams.set('org', activeOrg.slug || activeOrg.id);
-    url.searchParams.set('view', 'icp');
+    url.searchParams.set('icp_public', '1');
     url.searchParams.set('icp_template', 'blank');
     return url.toString();
   };

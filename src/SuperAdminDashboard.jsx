@@ -95,7 +95,7 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
       if (typeof window !== 'undefined') {
         const url = new URL(window.location.origin);
         url.searchParams.set('org', body.organization.slug || body.organization.id);
-        url.searchParams.set('view', 'icp');
+        url.searchParams.set('icp_public', '1');
         url.searchParams.set('icp_template', 'blank');
         setLatestIcpLink(url.toString());
       }
@@ -125,7 +125,7 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
       if (typeof window !== 'undefined') {
         const url = new URL(window.location.origin);
         url.searchParams.set('org', body.org.slug || body.org.id);
-        url.searchParams.set('view', 'icp');
+        url.searchParams.set('icp_public', '1');
         url.searchParams.set('icp_template', 'blank');
         setLatestIcpLink(url.toString());
       }
@@ -169,7 +169,7 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
         <div style={{ ...cardStyle, borderColor: 'rgba(59,130,246,0.35)' }}>
           <h3 style={{ marginTop: 0 }}>ICP setup link</h3>
           <p style={{ marginTop: '6px', fontSize: '12px', opacity: 0.8 }}>
-            Send this to the user so they open ICP Setup in the correct org with a blank template.
+            Send this to the user so they can submit ICP for the correct org without logging in.
           </p>
           <input readOnly value={latestIcpLink} style={{ width: '100%', marginTop: '8px' }} />
         </div>
