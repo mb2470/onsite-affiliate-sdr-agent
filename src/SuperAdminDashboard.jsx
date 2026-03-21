@@ -76,10 +76,7 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
   };
 
   useEffect(() => {
-    loadOrganizations().then(() => {
-      // list_orgs auto-links super admin to all orgs; refresh parent dropdown
-      if (onOrgCreated) onOrgCreated();
-    });
+    loadOrganizations();
   }, []);
 
   useEffect(() => {
