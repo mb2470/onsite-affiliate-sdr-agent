@@ -237,6 +237,25 @@ function AuthenticatedApp({ session }) {
   const loadOrganizations = async () => {
     setOrgLoading(true);
     try {
+      // For super admin, call list_orgs first to auto-link memberships
+      if (isSuperAdmin) {
+        try {
+          const { data: { session: authSession } } = await supabase.auth.getSession();
+          if (authSession?.access_token) {
+            await fetch('/.netlify/functions/super-admin', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${authSession.access_token}`,
+              },
+              body: JSON.stringify({ action: 'list_orgs' }),
+            });
+          }
+        } catch (e) {
+          console.warn('Super admin org sync failed:', e);
+        }
+      }
+
       const { data, error } = await supabase
         .from('user_organizations')
         .select('org_id, organizations(id, name, slug)')
@@ -1105,6 +1124,14 @@ function AuthenticatedApp({ session }) {
   const loadIcpProfile = async () => {
     setIcpLoaded(false);
     try {
+      if (icpLinkParams.forceBlankTemplate) {
+        setIcpProfileId(null);
+        setIcpProfile(EMPTY_ICP_PROFILE);
+        setIcpContext(EMPTY_ICP_PROFILE);
+        setEmailIcpContext(EMPTY_ICP_PROFILE);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('icp_profiles')
         .select('*')
