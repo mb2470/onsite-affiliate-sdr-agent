@@ -23,6 +23,7 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
   const [envKey, setEnvKey] = useState('');
   const [envValue, setEnvValue] = useState('');
   const [orgEnvRows, setOrgEnvRows] = useState([]);
+  const [latestIcpLink, setLatestIcpLink] = useState('');
 
   const callAdmin = async (action, payload = {}) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -94,6 +95,13 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
     try {
       const body = await callAdmin('create_org', { name: newOrgName.trim(), slug: newOrgSlug.trim() });
       setMessage(`Created ${body.organization.name}`);
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.origin);
+        url.searchParams.set('org', body.organization.slug || body.organization.id);
+        url.searchParams.set('view', 'icp');
+        url.searchParams.set('icp_template', 'blank');
+        setLatestIcpLink(url.toString());
+      }
       setNewOrgName('');
       setNewOrgSlug('');
       await loadOrganizations();
@@ -117,6 +125,13 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
         role: inviteRole,
       });
       setMessage(`Invited ${body.email} to ${body.org.name}`);
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.origin);
+        url.searchParams.set('org', body.org.slug || body.org.id);
+        url.searchParams.set('view', 'icp');
+        url.searchParams.set('icp_template', 'blank');
+        setLatestIcpLink(url.toString());
+      }
       setInviteEmail('');
     } catch (e) {
       setError(e.message);
@@ -153,6 +168,15 @@ export default function SuperAdminDashboard({ onOrgCreated } = {}) {
 
       {error && <div style={{ ...cardStyle, borderColor: 'rgba(248,113,113,0.35)', color: '#f87171' }}>{error}</div>}
       {message && <div style={{ ...cardStyle, borderColor: 'rgba(74,222,128,0.35)', color: '#4ade80' }}>{message}</div>}
+      {latestIcpLink && (
+        <div style={{ ...cardStyle, borderColor: 'rgba(59,130,246,0.35)' }}>
+          <h3 style={{ marginTop: 0 }}>ICP setup link</h3>
+          <p style={{ marginTop: '6px', fontSize: '12px', opacity: 0.8 }}>
+            Send this to the user so they open ICP Setup in the correct org with a blank template.
+          </p>
+          <input readOnly value={latestIcpLink} style={{ width: '100%', marginTop: '8px' }} />
+        </div>
+      )}
 
       <div style={cardStyle}>
         <h3>Create organization</h3>
