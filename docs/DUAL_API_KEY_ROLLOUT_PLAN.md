@@ -7,11 +7,11 @@ Add a dual-key provisioning flow so the SDK and integrations do not share one al
 - `frontend_events_key`
   - scopes: `["write_events"]`
   - intended for browser-exposed SDK usage only
-- `backend_orders_key`
-  - scopes: `["write_events", "write_orders"]`
+- `backend_api_key`
+  - scopes: `["write_events", "write_orders", "manage.brands"]`
   - intended for trusted server/backend usage only
 
-The frontend key must never be able to write orders. The backend key may write both events and orders.
+The frontend key must never be able to write orders or brand settings. The backend key may write events, write orders, and update brand-level portal settings.
 
 ## Why This Change
 
@@ -69,7 +69,7 @@ Minimum fields:
 Suggested key names:
 
 - `frontend_events`
-- `backend_orders`
+- `backend_api`
 
 ### 2. Provisioning response
 
@@ -89,6 +89,7 @@ Notes:
 - `frontend_api_key` is used by the browser SDK
 - `backend_api_key` is used by the Shopify app or other trusted backend
 - `api_key` can temporarily alias the backend key for backward compatibility if any consumer still expects a single key
+- avoid the old `backend_orders_key` label because the backend key is expected to do more than orders once the Shopify admin starts managing creator landing-page settings
 
 ### 3. Scope model
 
@@ -96,11 +97,13 @@ Initial scope set for this rollout:
 
 - `write_events`
 - `write_orders`
+- `manage.brands`
 
 Required mapping:
 
 - SDK/browser event ingestion endpoints require `write_events`
 - order ingestion endpoints require `write_orders`
+- creator portal / brand landing-page settings writes require `manage.brands`
 
 ### 4. Security posture
 
@@ -114,8 +117,31 @@ Frontend key controls:
 
 Backend key controls:
 
-- `write_events` and `write_orders`
+- `write_events`, `write_orders`, and `manage.brands`
 - stored only server-side
+
+## Creator Landing Page Integration
+
+The sibling `onsite-affiliate` repo already exposes a brand landing-page settings endpoint:
+
+- [`/Users/rastakit/tga-workspace/repos/onsite-affiliate/supabase/functions/creator-portal-settings/index.ts`](/Users/rastakit/tga-workspace/repos/onsite-affiliate/supabase/functions/creator-portal-settings/index.ts)
+
+That endpoint supports:
+
+- public `GET` by `brand_slug` for the creator-facing `/join/:brandSlug` page
+- authenticated `POST` requiring `manage.brands` for writes
+
+Current editable fields in that system:
+
+- `logo_url`
+- `primary_color`
+- `accent_color`
+- `headline`
+- `description`
+- `cta_text`
+- `custom_css`
+
+This means the new backend key process should be designed to support not only order sync but also Shopify-admin-driven landing-page customization.
 
 ## Planned Work
 
@@ -138,6 +164,7 @@ Tasks:
 - create or extend a trusted provisioning endpoint
 - create two keys for the same org during provisioning
 - return both keys once in the response
+- ensure the backend key includes `manage.brands` so the Shopify app can save creator landing-page settings through a trusted server path
 
 Deliverable:
 
@@ -150,7 +177,9 @@ Tasks:
 - add domain actions or endpoint guards for:
   - events write
   - orders write
+- brand settings / creator portal settings write
 - reject order writes from frontend key with `403`
+- reject brand-settings writes from frontend key with `403`
 
 Deliverable:
 
@@ -162,6 +191,7 @@ Tasks:
 
 - update frontend SDK integration to use only `frontend_api_key`
 - update backend/shop integration to store and use `backend_api_key`
+- allow the trusted backend key to manage creator landing-page settings through the OCE/OA portal settings write endpoint
 - keep temporary backward compatibility where needed
 
 Deliverable:
@@ -174,8 +204,10 @@ Required checks:
 
 - frontend key can write events
 - frontend key cannot write orders
+- frontend key cannot update creator portal settings
 - backend key can write events
 - backend key can write orders
+- backend key can update creator portal settings
 - revoked key fails
 - provisioning returns two distinct keys for the same org
 
@@ -192,6 +224,7 @@ Required checks:
 
 - Do not let the SDK request or mint keys directly.
 - Do not expose the backend key in client-rendered HTML, browser storage, or public config.
+- Do not expose `manage.brands` capability to browser code.
 - Keep the first rollout additive and backward compatible.
 - Remove the legacy single-key response only after downstream consumers are migrated.
 
