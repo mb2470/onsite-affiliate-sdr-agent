@@ -1119,8 +1119,8 @@ function AuthenticatedApp({ session }) {
       if (icpLinkParams.forceBlankTemplate) {
         setIcpProfileId(null);
         setIcpProfile(EMPTY_ICP_PROFILE);
-        setIcpContext(EMPTY_ICP_PROFILE);
-        setEmailIcpContext(EMPTY_ICP_PROFILE);
+        setIcpContext(null);
+        setEmailIcpContext(null);
         return;
       }
 
