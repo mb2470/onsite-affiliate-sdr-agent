@@ -23,7 +23,7 @@ exports.handler = async () => {
   const orgId = await resolveOrgId(supabase);
 
   try {
-    const config = await getIcpScoringConfig(supabase);
+    const config = await getIcpScoringConfig(supabase, orgId);
 
     let allLeads = [];
     let from = 0;
@@ -106,18 +106,20 @@ exports.handler = async () => {
           await upsertStoreLeadsRecord(supabase, orgId, { result: d });
           cached += 1;
 
-          let icpScore = scoreStoreLeads(d, config);
-          let fitReason = buildStoreLeadsFitReason(d, config);
-          const { fastTrack, reason: ftReason } = checkFastTrack(d);
-          if (fastTrack) {
-            icpScore = 'HIGH';
-            fitReason = ftReason;
+          let icpScore = config ? scoreStoreLeads(d, config) : null;
+          let fitReason = config ? buildStoreLeadsFitReason(d, config) : null;
+          if (config) {
+            const { fastTrack, reason: ftReason } = checkFastTrack(d);
+            if (fastTrack) {
+              icpScore = 'HIGH';
+              fitReason = ftReason;
+            }
           }
 
           const update = {
             icp_fit: icpScore,
             industry: (d.categories || []).join('; ') || null,
-            catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
+            catalog_size: catalogSizeLabel(d.product_count, config ? config.minProductCount : 250),
             sells_d2c: d.platform ? 'YES' : 'UNKNOWN',
             headquarters: [d.city, d.state, d.country].filter(Boolean).join(', ') || null,
             country: d.country || null,

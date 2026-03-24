@@ -1184,8 +1184,8 @@ function AuthenticatedApp({ session }) {
       } else {
         setIcpProfileId(null);
         setIcpProfile(EMPTY_ICP_PROFILE);
-        setIcpContext(EMPTY_ICP_PROFILE);
-        setEmailIcpContext(EMPTY_ICP_PROFILE);
+        setIcpContext(null);
+        setEmailIcpContext(null);
       }
     } catch (e) { console.error('ICP load error:', e); }
     setIcpLoaded(true);

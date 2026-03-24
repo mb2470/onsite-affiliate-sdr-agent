@@ -49,7 +49,11 @@ exports.handler = async (event) => {
 
     // Load scoring config from ICP profile
     const config = await getIcpScoringConfig(supabase, orgId);
-    console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
+    if (config) {
+      console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
+    } else {
+      console.log('📐 No ICP profile found — enriching data only, skipping scoring');
+    }
 
     // Get existing websites
     let existingWebsites = new Set();
@@ -87,15 +91,17 @@ exports.handler = async (event) => {
           continue;
         }
 
-        let icpScore = scoreStoreLeads(d, config);
-        let fitReason = buildStoreLeadsFitReason(d, config);
+        let icpScore = config ? scoreStoreLeads(d, config) : null;
+        let fitReason = config ? buildStoreLeadsFitReason(d, config) : null;
 
-        // Opt 2: Fast-track check — technographic signals override to HIGH
-        const { fastTrack, reason: ftReason } = checkFastTrack(d);
-        if (fastTrack) {
-          icpScore = 'HIGH';
-          fitReason = ftReason;
-          console.log(`  ⚡ Fast-tracked ${cleanName}: ${ftReason}`);
+        // Opt 2: Fast-track check — technographic signals override to HIGH (only if ICP profile exists)
+        if (config) {
+          const { fastTrack, reason: ftReason } = checkFastTrack(d);
+          if (fastTrack) {
+            icpScore = 'HIGH';
+            fitReason = ftReason;
+            console.log(`  ⚡ Fast-tracked ${cleanName}: ${ftReason}`);
+          }
         }
 
         const { error: insertError } = await supabase.from('leads').insert({
@@ -105,7 +111,7 @@ exports.handler = async (event) => {
           source: 'storeleads_top500',
           icp_fit: icpScore,
           industry: (d.categories || []).join('; ') || null,
-          catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
+          catalog_size: catalogSizeLabel(d.product_count, config ? config.minProductCount : 250),
           sells_d2c: d.platform ? 'YES' : 'UNKNOWN',
           headquarters: [d.city, d.state, d.country].filter(Boolean).join(', ') || null,
           country: d.country || null,

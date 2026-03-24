@@ -152,23 +152,29 @@ async function tryApollo(domain) {
     const industry = (org.industry || '').toLowerCase();
     const keywords = (org.keywords || []).join(' ').toLowerCase();
 
-    const factors = [];
-    const fitReason = [];
-    const minRevenue = getThreshold('min_annual_revenue');
-    const minEmployees = getThreshold('min_employee_count');
-    if (revenue >= minRevenue) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
-    if (getTargetCategories().some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
-    if (employees >= minEmployees) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
+    // Only score if ICP profile has been set up
+    let icp_fit = null;
+    let fit_reason_str = null;
+    if (_icpContext) {
+      const factors = [];
+      const fitReason = [];
+      const minRevenue = getThreshold('min_annual_revenue');
+      const minEmployees = getThreshold('min_employee_count');
+      if (revenue >= minRevenue) { factors.push('revenue'); fitReason.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`); }
+      if (getTargetCategories().some(c => (industry + ' ' + keywords).includes(c))) { factors.push('category'); fitReason.push(`Industry: ${org.industry}`); }
+      if (employees >= minEmployees) { factors.push('size'); fitReason.push(`Employees: ${employees}`); }
 
-    const c = (org.country || '').toUpperCase();
-    const targetGeo = getTargetGeography();
-    const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
-    let icp_fit = factors.length >= 3 && isTargetGeo ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
+      const c = (org.country || '').toUpperCase();
+      const targetGeo = getTargetGeography();
+      const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
+      icp_fit = factors.length >= 3 && isTargetGeo ? 'HIGH' : factors.length >= 2 ? 'MEDIUM' : 'LOW';
+      fit_reason_str = fitReason.join('; ');
+    }
 
     return {
       source: 'apollo',
       icp_fit,
-      fit_reason: fitReason.join('; '),
+      fit_reason: fit_reason_str,
       industry: org.industry || null,
       country: org.country || null,
       city: org.city || null,
@@ -204,13 +210,13 @@ async function tryClaude(lead) {
   }
 
   const parsed = {
-    icp_fit: parseField(research, 'ICP Fit')?.toUpperCase() || null,
+    icp_fit: _icpContext ? (parseField(research, 'ICP Fit')?.toUpperCase() || null) : null,
     industry: parseField(research, 'Industry'),
     catalog_size: parseField(research, 'Catalog Size'),
     sells_d2c: parseField(research, 'Sells D2C'),
     headquarters: parseField(research, 'Headquarters'),
     google_shopping: parseField(research, 'Google Shopping'),
-    fit_reason: parseField(research, 'Fit Reason'),
+    fit_reason: _icpContext ? (parseField(research, 'Fit Reason')) : null,
     decision_makers: parseField(research, 'Decision Makers')?.replace(/[{}]/g, '').replace(/,/g, ';') || null,
     pain_points: parseField(research, 'Pain Points')?.replace(/[{}]/g, '').replace(/,/g, ';') || null,
   };

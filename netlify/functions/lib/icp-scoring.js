@@ -34,8 +34,8 @@ async function getIcpScoringConfig(supabase, orgId) {
       .maybeSingle();
 
     if (error || !data) {
-      console.log(`ICP profile not found for org ${orgId}, using default scoring thresholds`);
-      return DEFAULTS;
+      console.log(`ICP profile not found for org ${orgId}, skipping scoring`);
+      return null;
     }
 
     // Build target categories from ICP industries
@@ -66,7 +66,7 @@ async function getIcpScoringConfig(supabase, orgId) {
     return buildConfig(data, targetCategories, targetGeography);
   } catch (e) {
     console.error('Error fetching ICP scoring config:', e.message);
-    return DEFAULTS;
+    return null;
   }
 }
 
