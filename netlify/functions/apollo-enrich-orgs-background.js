@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { getIcpScoringConfig, scoreApollo } = require('./lib/icp-scoring');
+const { resolveOrgId } = require('./lib/org-id');
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -35,9 +36,14 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    // Load scoring config from ICP profile
-    const config = await getIcpScoringConfig(supabase);
-    console.log(`📐 Scoring thresholds: revenue≥$${config.minAnnualRevenue/1000000}M/yr, employees≥${config.minEmployeeCount}, categories: ${config.targetCategories.length} keywords`);
+    const orgId = await resolveOrgId(supabase);
+    // Load scoring config from ICP profile (null if no profile exists)
+    const config = await getIcpScoringConfig(supabase, orgId);
+    if (config) {
+      console.log(`📐 Scoring thresholds: revenue≥$${config.minAnnualRevenue/1000000}M/yr, employees≥${config.minEmployeeCount}, categories: ${config.targetCategories.length} keywords`);
+    } else {
+      console.log('📐 No ICP profile found — enriching data only, skipping scoring');
+    }
 
     // Get leads that StoreLeads couldn't enrich (status = 'new')
     const { data: leads, error } = await supabase
@@ -65,7 +71,7 @@ exports.handler = async (event, context) => {
     // Process in batches of 10 (Apollo bulk limit)
     for (let i = 0; i < leads.length; i += 10) {
       const batch = leads.slice(i, i + 10);
-      const domains = batch.map(l => l.website.replace(/^www\./, ''));
+      const domains = batch.map(l => l.website.replace(/^www\./, '').replace(/\/.*$/, ''));
 
       console.log(`\n📦 Batch ${Math.floor(i / 10) + 1}/${Math.ceil(leads.length / 10)} — ${domains.length} domains`);
 
@@ -87,7 +93,7 @@ exports.handler = async (event, context) => {
         }
 
         for (const lead of batch) {
-          const domain = lead.website.replace(/^www\./, '').toLowerCase();
+          const domain = lead.website.replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
           const org = orgMap[domain];
 
           if (!org) {
@@ -95,8 +101,10 @@ exports.handler = async (event, context) => {
             continue;
           }
 
-          // Score ICP using shared config
-          const { icp_fit, fitReason, factors } = scoreApollo(org, lead.country, config);
+          // Score ICP using shared config (skip if no ICP profile)
+          const { icp_fit, fitReason, factors } = config
+            ? scoreApollo(org, lead.country, config)
+            : { icp_fit: null, fitReason: null, factors: 0 };
 
           if (icp_fit === 'HIGH') highCount++;
           else if (icp_fit === 'MEDIUM') medCount++;

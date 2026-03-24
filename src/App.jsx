@@ -1184,8 +1184,8 @@ function AuthenticatedApp({ session }) {
       } else {
         setIcpProfileId(null);
         setIcpProfile(EMPTY_ICP_PROFILE);
-        setIcpContext(EMPTY_ICP_PROFILE);
-        setEmailIcpContext(EMPTY_ICP_PROFILE);
+        setIcpContext(null);
+        setEmailIcpContext(null);
       }
     } catch (e) { console.error('ICP load error:', e); }
     setIcpLoaded(true);
@@ -1347,9 +1347,20 @@ function AuthenticatedApp({ session }) {
       </div>
       {lead.industry && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry}</div>}
       {lead.fit_reason && <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.fit_reason}</div>}
-      {!lead.fit_reason && lead.research_notes && (
-        <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.research_notes.substring(0, 80)}...</div>
-      )}
+      {!lead.fit_reason && lead.research_notes && (() => {
+        try {
+          const notes = JSON.parse(lead.research_notes);
+          const parts = [];
+          if (notes.employees) parts.push(`${notes.employees} employees`);
+          if (notes.revenue) parts.push(`$${(notes.revenue / 1e6).toFixed(1)}M rev`);
+          if (notes.industry) parts.push(notes.industry);
+          return parts.length > 0
+            ? <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{parts.join(' · ')}</div>
+            : null;
+        } catch {
+          return <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.research_notes.substring(0, 80)}</div>;
+        }
+      })()}
       {(lead.catalog_size || lead.google_shopping) && (
         <div style={{ marginTop: '4px', fontSize: '10px', opacity: 0.4 }}>
           {lead.sells_d2c && `D2C: ${lead.sells_d2c}`}
@@ -2543,7 +2554,7 @@ function AuthenticatedApp({ session }) {
                       <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'white', position: 'absolute', top: '3px', left: autoEnrich ? '21px' : '3px', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
                     </div>
                     <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>
-                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — runs StoreLeads → Apollo → Claude waterfall + contact matching
+                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — runs Apollo → Claude waterfall + contact matching
                     </span>
                   </div>
                 </div>

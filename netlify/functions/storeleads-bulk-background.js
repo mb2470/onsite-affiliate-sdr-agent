@@ -24,9 +24,13 @@ exports.handler = async (event) => {
   const orgId = await resolveOrgId(supabase);
 
   try {
-    // Load scoring config from ICP profile
-    const config = await getIcpScoringConfig(supabase);
-    console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo, categories: ${config.targetCategories.length} keywords`);
+    // Load scoring config from ICP profile (null if no profile exists)
+    const config = await getIcpScoringConfig(supabase, orgId);
+    if (config) {
+      console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo, categories: ${config.targetCategories.length} keywords`);
+    } else {
+      console.log('📐 No ICP profile found — enriching data only, skipping scoring');
+    }
 
     // Get all unenriched leads
     let allLeads = [];
@@ -123,15 +127,17 @@ exports.handler = async (event) => {
             console.error(`StoreLeads cache upsert failed for ${lead.website}:`, cacheError.message);
           }
 
-          let icpScore = scoreStoreLeads(d, config);
-          let fitReason = buildStoreLeadsFitReason(d, config);
+          let icpScore = config ? scoreStoreLeads(d, config) : null;
+          let fitReason = config ? buildStoreLeadsFitReason(d, config) : null;
 
-          // Opt 2: Fast-track check — technographic signals override to HIGH
-          const { fastTrack, reason: ftReason } = checkFastTrack(d);
-          if (fastTrack) {
-            icpScore = 'HIGH';
-            fitReason = ftReason;
-            console.log(`  ⚡ Fast-tracked ${lead.website}: ${ftReason}`);
+          // Opt 2: Fast-track check — technographic signals override to HIGH (only if ICP profile exists)
+          if (config) {
+            const { fastTrack, reason: ftReason } = checkFastTrack(d);
+            if (fastTrack) {
+              icpScore = 'HIGH';
+              fitReason = ftReason;
+              console.log(`  ⚡ Fast-tracked ${lead.website}: ${ftReason}`);
+            }
           }
 
           // Infer country from location if not set
@@ -152,7 +158,7 @@ exports.handler = async (event) => {
             status: 'enriched',
             icp_fit: icpScore,
             industry: (d.categories || []).join('; ') || null,
-            catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
+            catalog_size: catalogSizeLabel(d.product_count, config ? config.minProductCount : 250),
             sells_d2c: d.platform ? 'YES' : 'UNKNOWN',
             headquarters: [d.city, d.state, d.country].filter(Boolean).join(', ') || null,
             country: inferredCountry,

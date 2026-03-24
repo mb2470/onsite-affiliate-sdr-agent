@@ -166,9 +166,13 @@ exports.handler = async (event) => {
   const orgId = await resolveOrgId(supabase);
 
   try {
-    // Load scoring config from ICP profile
-    const config = await getIcpScoringConfig(supabase);
-    console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
+    // Load scoring config from ICP profile (null if no profile exists)
+    const config = await getIcpScoringConfig(supabase, orgId);
+    if (config) {
+      console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo`);
+    } else {
+      console.log('📐 No ICP profile found — enriching data only, skipping scoring');
+    }
 
     // Get all existing websites to check for duplicates
     let existingWebsites = new Set();
@@ -204,7 +208,7 @@ exports.handler = async (event) => {
         console.log(`🔍 Searching: ${category} in ${country}...`);
 
         try {
-          const domains = await fetchTopDomains(category, country, 50, 0, config.minProductCount);
+          const domains = await fetchTopDomains(category, country, 50, 0, config ? config.minProductCount : 250);
           console.log(`   Found ${domains.length} domains`);
 
           for (const d of domains) {
@@ -218,16 +222,18 @@ exports.handler = async (event) => {
               continue;
             }
 
-            // Score ICP using shared config
-            let icpFit = scoreStoreLeads(d, config);
-            let fitReason = buildStoreLeadsFitReason(d, config);
+            // Score ICP using shared config (skip if no ICP profile)
+            let icpFit = config ? scoreStoreLeads(d, config) : null;
+            let fitReason = config ? buildStoreLeadsFitReason(d, config) : null;
 
-            // Opt 2: Fast-track check
-            const { fastTrack, reason: ftReason } = checkFastTrack(d);
-            if (fastTrack) {
-              icpFit = 'HIGH';
-              fitReason = ftReason;
-              console.log(`  ⚡ Fast-tracked ${cleanName}: ${ftReason}`);
+            // Opt 2: Fast-track check (only if ICP profile exists)
+            if (config) {
+              const { fastTrack, reason: ftReason } = checkFastTrack(d);
+              if (fastTrack) {
+                icpFit = 'HIGH';
+                fitReason = ftReason;
+                console.log(`  ⚡ Fast-tracked ${cleanName}: ${ftReason}`);
+              }
             }
 
             const { data: inserted, error: insertError } = await supabase.from('leads').insert({
@@ -237,7 +243,7 @@ exports.handler = async (event) => {
               org_id: orgId,
               icp_fit: icpFit,
               industry: (d.categories || []).join('; ') || null,
-              catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
+              catalog_size: catalogSizeLabel(d.product_count, config ? config.minProductCount : 250),
               sells_d2c: d.platform ? 'YES' : 'UNKNOWN',
               headquarters: [d.city, d.state, d.country].filter(Boolean).join(', ') || null,
               country: d.country || null,

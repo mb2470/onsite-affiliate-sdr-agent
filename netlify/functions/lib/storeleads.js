@@ -1,5 +1,5 @@
 function normalizeDomain(domain = '') {
-  return String(domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+  return String(domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').replace(/[?#].*$/, '');
 }
 
 function toNullableNumber(value) {

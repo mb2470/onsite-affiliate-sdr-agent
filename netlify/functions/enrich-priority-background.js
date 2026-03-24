@@ -37,9 +37,13 @@ exports.handler = async (event, context) => {
   const orgId = await resolveOrgId(supabase);
 
   try {
-    // Load scoring config from ICP profile
-    const config = await getIcpScoringConfig(supabase);
-    console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo, categories: ${config.targetCategories.length} keywords`);
+    // Load scoring config from ICP profile (null if no profile exists)
+    const config = await getIcpScoringConfig(supabase, orgId);
+    if (config) {
+      console.log(`📐 Scoring thresholds: products≥${config.minProductCount}, sales≥$${config.minMonthlySalesCents/100}/mo, categories: ${config.targetCategories.length} keywords`);
+    } else {
+      console.log('📐 No ICP profile found — enriching data only, skipping scoring');
+    }
 
     // Get leads with contacts but no ICP score
     let leads = [];
@@ -76,7 +80,7 @@ exports.handler = async (event, context) => {
     // Process in batches of 50
     for (let i = 0; i < leads.length; i += 50) {
       const batch = leads.slice(i, i + 50);
-      const domains = batch.map(l => l.website.replace(/^www\./, ''));
+      const domains = batch.map(l => l.website.replace(/^www\./, '').replace(/\/.*$/, ''));
       const batchNum = Math.floor(i / 50) + 1;
       const totalBatches = Math.ceil(leads.length / 50);
 
@@ -86,27 +90,27 @@ exports.handler = async (event, context) => {
         const result = await enrichBatch(domains);
 
         for (const lead of batch) {
-          const domain = lead.website.replace(/^www\./, '');
+          const domain = lead.website.replace(/^www\./, '').replace(/\/.*$/, '');
           const d = result[domain];
 
           if (!d) {
             notFound++;
             await supabase.from('leads').update({
-              icp_fit: 'LOW',
+              icp_fit: config ? 'LOW' : null,
               status: 'enriched',
-              fit_reason: '❌ Not found in StoreLeads',
+              fit_reason: config ? '❌ Not found in StoreLeads' : null,
             }).eq('id', lead.id);
             continue;
           }
 
-          const icpScore = scoreStoreLeads(d, config);
-          const fitReason = buildStoreLeadsFitReason(d, config);
+          const icpScore = config ? scoreStoreLeads(d, config) : null;
+          const fitReason = config ? buildStoreLeadsFitReason(d, config) : null;
 
           await supabase.from('leads').update({
             status: 'enriched',
             icp_fit: icpScore,
             industry: (d.categories || []).join('; ') || null,
-            catalog_size: catalogSizeLabel(d.product_count, config.minProductCount),
+            catalog_size: catalogSizeLabel(d.product_count, config ? config.minProductCount : 250),
             country: d.country || null,
             fit_reason: fitReason,
             platform: d.platform || null,

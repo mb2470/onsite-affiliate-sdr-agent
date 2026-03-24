@@ -128,9 +128,16 @@ export const markLeadContacted = async (leadId, orgId) => {
 // Add single lead
 export const addLead = async (website, orgId) => {
   const scopedOrgId = await resolveOrgId(orgId);
+  const cleanWebsite = website
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '')
+    .replace(/[?#].*$/, '');
   const { data, error } = await supabase
     .from('leads')
-    .insert([{ website: website.trim(), source: 'manual', status: 'new', org_id: scopedOrgId }])
+    .insert([{ website: cleanWebsite, source: 'manual', status: 'new', org_id: scopedOrgId }])
     .select();
   
   if (error) {
@@ -151,7 +158,8 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
       .toLowerCase()
       .replace(/^https?:\/\//, '')
       .replace(/^www\./, '')
-      .replace(/\/$/, '');
+      .replace(/\/.*$/, '')
+      .replace(/[?#].*$/, '');
   };
 
   // Support both array of strings (legacy) and array of objects (new)
