@@ -1347,9 +1347,20 @@ function AuthenticatedApp({ session }) {
       </div>
       {lead.industry && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry}</div>}
       {lead.fit_reason && <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.fit_reason}</div>}
-      {!lead.fit_reason && lead.research_notes && (
-        <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.research_notes.substring(0, 80)}...</div>
-      )}
+      {!lead.fit_reason && lead.research_notes && (() => {
+        try {
+          const notes = JSON.parse(lead.research_notes);
+          const parts = [];
+          if (notes.employees) parts.push(`${notes.employees} employees`);
+          if (notes.revenue) parts.push(`$${(notes.revenue / 1e6).toFixed(1)}M rev`);
+          if (notes.industry) parts.push(notes.industry);
+          return parts.length > 0
+            ? <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{parts.join(' · ')}</div>
+            : null;
+        } catch {
+          return <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.research_notes.substring(0, 80)}</div>;
+        }
+      })()}
       {(lead.catalog_size || lead.google_shopping) && (
         <div style={{ marginTop: '4px', fontSize: '10px', opacity: 0.4 }}>
           {lead.sells_d2c && `D2C: ${lead.sells_d2c}`}
