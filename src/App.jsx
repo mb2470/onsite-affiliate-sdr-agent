@@ -2543,7 +2543,7 @@ function AuthenticatedApp({ session }) {
                       <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'white', position: 'absolute', top: '3px', left: autoEnrich ? '21px' : '3px', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
                     </div>
                     <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>
-                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — runs StoreLeads → Apollo → Claude waterfall + contact matching
+                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — runs Apollo → Claude waterfall + contact matching
                     </span>
                   </div>
                 </div>

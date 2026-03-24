@@ -134,71 +134,7 @@ function getTargetGeography() {
   return DEFAULT_GEOGRAPHY;
 }
 
-function scoreICP(productCount, estimatedSales, categories, country) {
-  const targetCategories = getTargetCategories();
-  const targetGeo = getTargetGeography();
-  const minProducts = getThreshold('min_product_count');
-  const minSalesCents = getThreshold('min_monthly_sales') * 100; // DB stores dollars, StoreLeads uses cents
-
-  const factors = [];
-  const fitReason = [];
-
-  if (productCount >= minProducts) { factors.push('products'); fitReason.push(`Products: ${productCount}`); }
-  if (estimatedSales >= minSalesCents) { factors.push('sales'); fitReason.push(`Sales: $${(estimatedSales / 100).toLocaleString()}/mo`); }
-
-  const catText = (categories || []).join(' ').toLowerCase();
-  if (targetCategories.some(c => catText.includes(c))) { factors.push('category'); fitReason.push(`Category match`); }
-
-  const c = (country || '').toUpperCase();
-  // If targetGeo is null, accept all geographies (global)
-  const isTargetGeo = targetGeo === null || targetGeo.some(x => c.includes(x));
-
-  let icp_fit;
-  if (factors.length >= 3 && isTargetGeo) icp_fit = 'HIGH';
-  else if (factors.length >= 2) icp_fit = 'MEDIUM';
-  else icp_fit = 'LOW';
-
-  return { icp_fit, fitReason: fitReason.join('; ') };
-}
-
-// ═══ STEP 1: Try StoreLeads ═══
-async function tryStoreLeads(domain) {
-  try {
-    const res = await fetch(`/.netlify/functions/storeleads-single?domain=${encodeURIComponent(domain)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data || !data.domain) return null;
-
-    const productCount = data.product_count || 0;
-    const estimatedSales = data.estimated_sales || 0;
-    const categories = data.categories || [];
-    const country = data.country || '';
-
-    const { icp_fit, fitReason } = scoreICP(productCount, estimatedSales, categories, country);
-
-    return {
-      source: 'storeleads',
-      icp_fit,
-      fit_reason: fitReason,
-      industry: (categories[0] || '').replace(/^.*>/, '').trim() || null,
-      catalog_size: productCount >= 250 ? `Large (${productCount})` : productCount >= 100 ? `Medium (${productCount})` : `Small (${productCount})`,
-      country: country || null,
-      city: data.city || null,
-      state: data.state || null,
-      platform: data.platform || null,
-      product_count: productCount,
-      store_rank: data.rank || null,
-      estimated_sales: estimatedSales,
-      headquarters: [data.city, data.state, data.country].filter(Boolean).join(', ') || null,
-      research_notes: JSON.stringify({ source: 'storeleads', ...data }),
-    };
-  } catch (e) {
-    console.log(`StoreLeads miss for ${domain}:`, e.message);
-    return null;
-  }
-}
-
-// ═══ STEP 2: Try Apollo Org Enrichment ═══
+// ═══ STEP 1: Try Apollo Org Enrichment ═══
 async function tryApollo(domain) {
   try {
     const res = await fetch(`/.netlify/functions/apollo-enrich-single`, {
@@ -282,66 +218,20 @@ async function tryClaude(lead) {
   return { source: 'claude', ...parsed, research_notes: research };
 }
 
-/**
- * Frontend fast-track check (mirrors lib/icp-scoring.js checkFastTrack).
- * Detects high-signal technographic data from StoreLeads that indicates
- * an obvious HIGH lead — skips expensive Claude research.
- */
-function checkFastTrackFrontend(storeLeadsResult) {
-  if (!storeLeadsResult || !storeLeadsResult.research_notes) return { fastTrack: false, reason: '' };
-
-  const notes = storeLeadsResult.research_notes;
-  let parsed;
-  try { parsed = typeof notes === 'string' ? JSON.parse(notes) : notes; } catch { return { fastTrack: false, reason: '' }; }
-
-  const plan = (parsed.plan || '').toLowerCase();
-  const platform = (parsed.platform || '').toLowerCase();
-  const productCount = parsed.product_count || storeLeadsResult.product_count || 0;
-  const estSales = parsed.estimated_sales || storeLeadsResult.estimated_sales || 0;
-
-  if (plan.includes('shopify plus') || plan.includes('enterprise')) {
-    return { fastTrack: true, reason: `Fast-track: ${parsed.plan} plan` };
-  }
-
-  if (platform.includes('shopify') && productCount >= 500 && estSales >= 50000000) {
-    return { fastTrack: true, reason: `Fast-track: High-volume Shopify (${productCount} products)` };
-  }
-
-  return { fastTrack: false, reason: '' };
-}
-
-// ═══ WATERFALL ENRICH: StoreLeads → Fast-Track? → Apollo → Claude ═══
+// ═══ WATERFALL ENRICH: Apollo → Claude ═══
 export const enrichLead = async (lead, orgId) => {
   const domain = lead.website.replace(/^www\./, '');
   let result = null;
   let source = '';
 
-  // Step 1: StoreLeads (free, fast)
-  result = await tryStoreLeads(domain);
+  // Step 1: Apollo (fast, good company data)
+  result = await tryApollo(domain);
   if (result) {
-    source = 'storeleads';
-    console.log(`✅ ${domain} enriched via StoreLeads → ${result.icp_fit}`);
-
-    // Opt 2: Fast-track check — technographic signals skip Claude research
-    const { fastTrack, reason } = checkFastTrackFrontend(result);
-    if (fastTrack) {
-      result.icp_fit = 'HIGH';
-      result.fit_reason = reason;
-      console.log(`⚡ ${domain} fast-tracked to HIGH: ${reason}`);
-      // Skip Apollo org enrichment and Claude — go straight to save
-    }
+    source = 'apollo';
+    console.log(`✅ ${domain} enriched via Apollo → ${result.icp_fit}`);
   }
 
-  // Step 2: Apollo (cheap, good company data)
-  if (!result) {
-    result = await tryApollo(domain);
-    if (result) {
-      source = 'apollo';
-      console.log(`✅ ${domain} enriched via Apollo → ${result.icp_fit}`);
-    }
-  }
-
-  // Step 3: Claude AI (expensive, most thorough)
+  // Step 2: Claude AI (expensive, most thorough)
   if (!result) {
     result = await tryClaude(lead);
     source = 'claude';
