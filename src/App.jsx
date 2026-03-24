@@ -825,16 +825,24 @@ function AuthenticatedApp({ session }) {
 
         // Map common column name variations
         const colMap = {
-          'website': ['website', 'domain', 'url', 'site'],
+          'website': ['website', 'domain', 'url', 'site', 'website_url'],
+          'company_name': ['company_name', 'company', 'organization_name', 'org_name', 'name', 'business_name'],
           'industry': ['industry', 'vertical', 'category', 'niche'],
           'country': ['country', 'location', 'region'],
           'sells_d2c': ['sells_d2c', 'selss_d2c', 'd2c', 'dtc', 'sells_dtc'],
           'icp_fit': ['icp_fit', 'icp', 'fit', 'score'],
-          'headquarters': ['headquarters', 'hq', 'address'],
+          'headquarters': ['headquarters', 'hq'],
           'platform': ['platform', 'ecommerce_platform'],
           'catalog_size': ['catalog_size', 'products', 'product_count'],
           'city': ['city'],
           'state': ['state', 'province'],
+          'email': ['email', 'email_address', 'contact_email'],
+          'address': ['address', 'street_address', 'location_address'],
+          'phone': ['phone', 'phone_number', 'telephone'],
+          'facebook_url': ['facebook_url', 'facebook', 'fb_url'],
+          'linkedin_url': ['linkedin_url', 'linkedin', 'li_url'],
+          'services': ['services', 'service'],
+          'verticals': ['verticals'],
         };
 
         // Find column indices

@@ -190,21 +190,35 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
 
   const newRows = uniqueRows
     .filter(r => r.website && !existingSet.has(r.website))
-    .map(r => ({
-      website: r.website,
-      source,
-      status: 'new',
-      industry: r.industry || null,
-      country: r.country || null,
-      sells_d2c: r.sells_d2c || null,
-      icp_fit: r.icp_fit || null,
-      headquarters: r.headquarters || null,
-      platform: r.platform || null,
-      catalog_size: r.catalog_size || null,
-      city: r.city || null,
-      state: r.state || null,
-      org_id: scopedOrgId,
-    }));
+    .map(r => {
+      // Build metadata from extra fields not in schema
+      const metadata = {};
+      if (r.email) metadata.email = r.email;
+      if (r.address) metadata.address = r.address;
+      if (r.phone) metadata.phone = r.phone;
+      if (r.facebook_url) metadata.facebook_url = r.facebook_url;
+      if (r.linkedin_url) metadata.linkedin_url = r.linkedin_url;
+      if (r.services) metadata.services = r.services;
+      if (r.verticals) metadata.verticals = r.verticals;
+
+      return {
+        website: r.website,
+        source,
+        status: 'new',
+        company_name: r.company_name || null,
+        industry: r.industry || r.verticals || null,
+        country: r.country || null,
+        sells_d2c: r.sells_d2c || null,
+        icp_fit: r.icp_fit || null,
+        headquarters: r.headquarters || null,
+        platform: r.platform || null,
+        catalog_size: r.catalog_size || null,
+        city: r.city || null,
+        state: r.state || null,
+        org_id: scopedOrgId,
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+      };
+    });
 
   if (newRows.length === 0) return { added: 0, skipped: websites.length };
 

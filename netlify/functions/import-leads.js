@@ -45,14 +45,27 @@ exports.handler = async (event) => {
         continue;
       }
 
+      // Build metadata from extra fields not in schema
+      const metadata = {};
+      if (lead.email) metadata.email = lead.email;
+      if (lead.address) metadata.address = lead.address;
+      if (lead.phone) metadata.phone = lead.phone;
+      if (lead.facebook_url) metadata.facebook_url = lead.facebook_url;
+      if (lead.linkedin_url) metadata.linkedin_url = lead.linkedin_url;
+      if (lead.services) metadata.services = lead.services;
+      if (lead.verticals) metadata.verticals = lead.verticals;
+
       const { error } = await supabase.from('leads').insert({
         website: clean,
         status: 'new',
         source: 'csv_import',
-        industry: lead.industry || null,
+        company_name: lead.company_name || lead.organization_name || null,
+        industry: lead.industry || lead.category || lead.verticals || null,
+        city: lead.city || null,
         country: lead.country || null,
         sells_d2c: lead.sells_d2c || null,
         org_id: orgId,
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       });
 
       if (error) {
