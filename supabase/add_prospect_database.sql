@@ -288,7 +288,56 @@ CREATE TRIGGER trg_prospect_embeddings_updated_at
   EXECUTE FUNCTION update_prospect_tables_updated_at();
 
 -- ============================================
--- 8. ROW LEVEL SECURITY
+-- 8. WEBSITE NORMALIZATION TRIGGER
+-- ============================================
+-- On INSERT/UPDATE: preserve raw input in website_raw, normalize website.
+-- Normalization: strip protocol, strip www., strip trailing slash, lowercase.
+-- Reuses normalize_company_domain() from add_company_identity.sql if present,
+-- otherwise defines an equivalent inline.
+
+CREATE OR REPLACE FUNCTION normalize_prospect_website()
+RETURNS TRIGGER AS $$
+DECLARE
+  raw_val TEXT;
+  normalized TEXT;
+BEGIN
+  -- Determine the incoming raw value
+  raw_val := NEW.website;
+
+  -- Preserve the original input in website_raw (only on first write or if website changed)
+  IF TG_OP = 'INSERT' OR OLD.website IS DISTINCT FROM NEW.website THEN
+    NEW.website_raw := raw_val;
+  END IF;
+
+  -- Normalize: lowercase, strip protocol, strip www., strip trailing slash
+  IF raw_val IS NOT NULL THEN
+    normalized := lower(trim(raw_val));
+    normalized := regexp_replace(normalized, '^https?://', '');
+    normalized := regexp_replace(normalized, '^www\.', '');
+    normalized := regexp_replace(normalized, '/+$', '');
+    -- Strip query string and fragment
+    normalized := split_part(normalized, '?', 1);
+    normalized := split_part(normalized, '#', 1);
+    normalized := trim(normalized);
+
+    IF normalized = '' THEN
+      normalized := raw_val;  -- fallback: keep original if normalization empties it
+    END IF;
+
+    NEW.website := normalized;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_prospects_normalize_website
+  BEFORE INSERT OR UPDATE OF website ON prospects
+  FOR EACH ROW
+  EXECUTE FUNCTION normalize_prospect_website();
+
+-- ============================================
+-- 9. ROW LEVEL SECURITY
 -- ============================================
 
 ALTER TABLE prospects ENABLE ROW LEVEL SECURITY;
