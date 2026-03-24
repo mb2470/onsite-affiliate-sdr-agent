@@ -76,7 +76,7 @@ exports.handler = async (event, context) => {
     // Process in batches of 50
     for (let i = 0; i < leads.length; i += 50) {
       const batch = leads.slice(i, i + 50);
-      const domains = batch.map(l => l.website.replace(/^www\./, ''));
+      const domains = batch.map(l => l.website.replace(/^www\./, '').replace(/\/.*$/, ''));
       const batchNum = Math.floor(i / 50) + 1;
       const totalBatches = Math.ceil(leads.length / 50);
 
@@ -86,7 +86,7 @@ exports.handler = async (event, context) => {
         const result = await enrichBatch(domains);
 
         for (const lead of batch) {
-          const domain = lead.website.replace(/^www\./, '');
+          const domain = lead.website.replace(/^www\./, '').replace(/\/.*$/, '');
           const d = result[domain];
 
           if (!d) {

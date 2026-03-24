@@ -65,7 +65,7 @@ exports.handler = async (event, context) => {
     // Process in batches of 10 (Apollo bulk limit)
     for (let i = 0; i < leads.length; i += 10) {
       const batch = leads.slice(i, i + 10);
-      const domains = batch.map(l => l.website.replace(/^www\./, ''));
+      const domains = batch.map(l => l.website.replace(/^www\./, '').replace(/\/.*$/, ''));
 
       console.log(`\n📦 Batch ${Math.floor(i / 10) + 1}/${Math.ceil(leads.length / 10)} — ${domains.length} domains`);
 
@@ -87,7 +87,7 @@ exports.handler = async (event, context) => {
         }
 
         for (const lead of batch) {
-          const domain = lead.website.replace(/^www\./, '').toLowerCase();
+          const domain = lead.website.replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
           const org = orgMap[domain];
 
           if (!org) {

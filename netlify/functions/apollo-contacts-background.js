@@ -128,7 +128,7 @@ exports.handler = async (event, context) => {
     let totalCreditsUsed = 0;
 
     for (const lead of leads) {
-      const domain = lead.website.replace(/^www\./, '');
+      const domain = lead.website.replace(/^www\./, '').replace(/\/.*$/, '');
       console.log(`\n${'─'.repeat(50)}`);
       console.log(`🔍 Searching: ${domain}`);
 

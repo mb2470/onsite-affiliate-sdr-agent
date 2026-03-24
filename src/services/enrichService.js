@@ -220,7 +220,7 @@ async function tryClaude(lead) {
 
 // ═══ WATERFALL ENRICH: Apollo → Claude ═══
 export const enrichLead = async (lead, orgId) => {
-  const domain = lead.website.replace(/^www\./, '');
+  const domain = lead.website.replace(/^www\./, '').replace(/\/.*$/, '');
   let result = null;
   let source = '';
 

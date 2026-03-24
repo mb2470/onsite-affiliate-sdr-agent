@@ -63,7 +63,7 @@ exports.handler = async (event) => {
     if (!domain) return { statusCode: 400, headers, body: JSON.stringify({ error: 'No domain provided' }) };
     if (!orgId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required field: org_id' }) };
 
-    const cleanDomain = domain.toLowerCase().replace(/^www\./, '');
+    const cleanDomain = domain.toLowerCase().replace(/^www\./, '').replace(/\/.*$/, '');
     console.log(`🚀 Apollo contact search for: ${cleanDomain}`);
 
     // Step 1: Search for people at this company
