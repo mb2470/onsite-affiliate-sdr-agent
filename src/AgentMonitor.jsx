@@ -11,6 +11,7 @@ export default function AgentMonitor() {
   const [senderSuccess, setSenderSuccess] = useState('');
   const [newSender, setNewSender] = useState({ email: '', displayName: '', dailyLimit: 30 });
   const [activeOrgId, setActiveOrgId] = useState(null);
+  const [useProspectDb, setUseProspectDb] = useState(false);
   const [isCheckingReplies, setIsCheckingReplies] = useState(false);
   const [replyResult, setReplyResult] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
@@ -34,7 +35,10 @@ export default function AgentMonitor() {
   const loadData = async () => {
     // Load agent settings
     const { data: s } = await supabase.from('agent_settings').select('*').limit(1).single();
+    console.log('[AgentMonitor] agent_settings loaded:', s);
+    console.log('[AgentMonitor] use_prospect_db value:', s?.use_prospect_db);
     setSettings(s);
+    setUseProspectDb(!!s?.use_prospect_db);
 
     // Load sender accounts + per-account limits for agent routing
     const { data: accounts } = await supabase
@@ -377,6 +381,53 @@ export default function AgentMonitor() {
         </button>
       </div>
 
+      {/* ── Use Prospect Database Toggle ── */}
+      {console.log('[AgentMonitor] Rendering use_prospect_db toggle, useProspectDb=', useProspectDb, 'settings=', settings?.use_prospect_db)}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '16px',
+        padding: '14px 18px', borderRadius: '10px', marginBottom: '16px',
+        background: useProspectDb ? 'rgba(34,211,238,0.08)' : 'rgba(255,255,255,0.03)',
+        border: useProspectDb ? '1px solid rgba(34,211,238,0.25)' : '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <button onClick={async () => {
+          const newVal = !useProspectDb;
+          console.log('[AgentMonitor] Toggling use_prospect_db to', newVal, 'org_id=', activeOrgId);
+          setUseProspectDb(newVal);
+          const { error } = await supabase
+            .from('agent_settings')
+            .update({ use_prospect_db: newVal })
+            .eq('org_id', activeOrgId);
+          if (error) {
+            console.error('[AgentMonitor] Failed to update use_prospect_db:', error);
+            setUseProspectDb(!newVal); // revert on error
+          } else {
+            setSettings(prev => ({ ...prev, use_prospect_db: newVal }));
+          }
+        }}
+          style={{
+            position: 'relative', width: '48px', height: '26px', borderRadius: '13px', border: 'none', cursor: 'pointer',
+            backgroundColor: useProspectDb ? '#22d3ee' : 'rgba(255,255,255,0.15)',
+            transition: 'background-color 0.2s',
+            flexShrink: 0,
+          }}>
+          <span style={{
+            position: 'absolute', top: '3px',
+            left: useProspectDb ? '24px' : '3px',
+            width: '20px', height: '20px', borderRadius: '50%',
+            backgroundColor: '#fff',
+            transition: 'left 0.2s',
+          }} />
+        </button>
+        <div>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: useProspectDb ? '#22d3ee' : 'rgba(255,255,255,0.7)' }}>
+            Use Prospect Database {useProspectDb ? '(Active)' : '(Off)'}
+          </div>
+          <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>
+            When enabled, the agent sources prospects from the new prospect pipeline instead of the leads table.
+          </div>
+        </div>
+      </div>
+
       {/* ── Top Stats Row ── */}
       <div style={{ ...cardStyle, marginBottom: '20px' }}>
         <div style={{ display: 'flex', gap: '12px' }}>
@@ -470,38 +521,6 @@ export default function AgentMonitor() {
       {settings && (
         <div style={{ ...cardStyle, marginBottom: '20px' }}>
           <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>⚙️ Agent Settings</h3>
-
-          {/* ── Data Source Toggle (top-level mode switch) ── */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '16px',
-            padding: '14px 18px', borderRadius: '10px', marginBottom: '16px',
-            background: settings.use_prospect_db ? 'rgba(34,211,238,0.08)' : 'rgba(255,255,255,0.03)',
-            border: settings.use_prospect_db ? '1px solid rgba(34,211,238,0.25)' : '1px solid rgba(255,255,255,0.08)',
-          }}>
-            <button onClick={() => handleSaveSettings({ use_prospect_db: !settings.use_prospect_db })}
-              style={{
-                position: 'relative', width: '48px', height: '26px', borderRadius: '13px', border: 'none', cursor: 'pointer',
-                backgroundColor: settings.use_prospect_db ? '#22d3ee' : 'rgba(255,255,255,0.15)',
-                transition: 'background-color 0.2s',
-                flexShrink: 0,
-              }}>
-              <span style={{
-                position: 'absolute', top: '3px',
-                left: settings.use_prospect_db ? '24px' : '3px',
-                width: '20px', height: '20px', borderRadius: '50%',
-                backgroundColor: '#fff',
-                transition: 'left 0.2s',
-              }} />
-            </button>
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: 600, color: settings.use_prospect_db ? '#22d3ee' : 'rgba(255,255,255,0.7)' }}>
-                {settings.use_prospect_db ? 'Prospect Pipeline Active' : 'Using Leads Table'}
-              </div>
-              <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>
-                When enabled, the agent sources prospects from the new prospect pipeline instead of the leads table.
-              </div>
-            </div>
-          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             {/* Send Hours */}
