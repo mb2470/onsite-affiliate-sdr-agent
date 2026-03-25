@@ -66,6 +66,16 @@
   padding: 0;
 }
 
+/* ── Global dropdown fix: dark background for option menus ── */
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background: #0d1530;
+  color: #f6f6f7;
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
