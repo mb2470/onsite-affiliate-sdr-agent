@@ -1,6 +1,16 @@
+-- ============================================
 -- Prospect Database Migration
--- Medallion Architecture: Gold layer (prospects table)
+-- Medallion Architecture: Bronze → Silver → Gold
 -- Multi-tenant with org_id per CLAUDE.md architecture rules
+--
+-- Tables created (purely additive — no existing tables modified):
+--   1. prospects          (Gold)   — enriched company profiles
+--   2. search_signals     (Bronze) — raw search results
+--   3. company_crawls     (Silver) — crawled & cleaned page data
+--   4. prospect_embeddings         — vector chunks for similarity search
+--   5. prospect_contacts  (Gold)   — people at prospect companies
+-- ============================================
+
 
 -- ============================================
 -- 0. EXTENSIONS
@@ -9,25 +19,28 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 
+
 -- ============================================
 -- 1. PROSPECTS TABLE (Gold Layer)
 -- ============================================
+-- Enriched, deduplicated company records. One row per company per org.
+-- Website is normalized on write via trigger (section 8).
 
 CREATE TABLE IF NOT EXISTS prospects (
   -- Primary Key
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  -- Multi-Tenant (required per architecture)
+  -- Multi-Tenant (required per architecture — not in original spec)
   org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
 
-  -- Hierarchy
+  -- Hierarchy (for parent/subsidiary relationships)
   parent_id UUID REFERENCES prospects(id) ON DELETE SET NULL,
 
   -- ============================================
   -- Identity
   -- ============================================
-  website TEXT NOT NULL,
-  website_raw TEXT,
+  website TEXT NOT NULL,                -- normalized by trigger
+  website_raw TEXT,                     -- original input preserved by trigger
   company_name TEXT NOT NULL,
   physical_address TEXT,
   city TEXT,
@@ -94,163 +107,7 @@ CREATE TABLE IF NOT EXISTS prospects (
   UNIQUE(org_id, website)
 );
 
--- ============================================
--- 2. SEARCH_SIGNALS TABLE (Bronze Layer)
--- ============================================
-
-CREATE TABLE IF NOT EXISTS search_signals (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  prospect_id UUID REFERENCES prospects(id) ON DELETE CASCADE,
-
-  -- Signal source
-  signal_type TEXT NOT NULL CHECK (signal_type IN (
-    'job_posting', 'funding_round', 'news_mention', 'tech_adoption',
-    'social_post', 'review', 'partnership', 'expansion', 'other'
-  )),
-  source TEXT NOT NULL,
-  source_url TEXT,
-
-  -- Signal content
-  title TEXT,
-  snippet TEXT,
-  raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-  -- Relevance
-  relevance_score NUMERIC(3,2) CHECK (relevance_score >= 0 AND relevance_score <= 1),
-  detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ,
-
-  -- System
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_search_signals_org_id ON search_signals(org_id);
-CREATE INDEX idx_search_signals_prospect_id ON search_signals(prospect_id);
-CREATE INDEX idx_search_signals_type ON search_signals(org_id, signal_type);
-CREATE INDEX idx_search_signals_detected ON search_signals(detected_at DESC);
-
--- ============================================
--- 3. COMPANY_CRAWLS TABLE (Bronze Layer)
--- ============================================
-
-CREATE TABLE IF NOT EXISTS company_crawls (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  prospect_id UUID REFERENCES prospects(id) ON DELETE CASCADE,
-
-  -- Crawl target
-  url TEXT NOT NULL,
-  page_type TEXT CHECK (page_type IN (
-    'homepage', 'about', 'pricing', 'blog', 'careers', 'contact', 'product', 'other'
-  )),
-
-  -- Crawl result
-  status_code INTEGER,
-  content_text TEXT,
-  content_html TEXT,
-  extracted_data JSONB DEFAULT '{}'::jsonb,
-
-  -- Metadata
-  crawled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  crawl_duration_ms INTEGER,
-  error_message TEXT,
-
-  -- System
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_company_crawls_org_id ON company_crawls(org_id);
-CREATE INDEX idx_company_crawls_prospect_id ON company_crawls(prospect_id);
-CREATE INDEX idx_company_crawls_url ON company_crawls(url);
-CREATE INDEX idx_company_crawls_crawled ON company_crawls(crawled_at DESC);
-
--- ============================================
--- 4. PROSPECT_EMBEDDINGS TABLE
--- ============================================
-
-CREATE TABLE IF NOT EXISTS prospect_embeddings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  prospect_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
-
-  -- Embedding
-  embedding_type TEXT NOT NULL CHECK (embedding_type IN (
-    'company_profile', 'product_description', 'icp_match', 'crawl_content'
-  )),
-  embedding vector(1536),
-  model TEXT NOT NULL,
-
-  -- Source reference
-  source_text TEXT,
-  source_metadata JSONB DEFAULT '{}'::jsonb,
-
-  -- System
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-  UNIQUE(prospect_id, embedding_type)
-);
-
-CREATE INDEX idx_prospect_embeddings_org_id ON prospect_embeddings(org_id);
-CREATE INDEX idx_prospect_embeddings_prospect_id ON prospect_embeddings(prospect_id);
-CREATE INDEX idx_prospect_embeddings_type ON prospect_embeddings(embedding_type);
-
--- ============================================
--- 5. PROSPECT_CONTACTS TABLE (Gold Layer)
--- ============================================
-
-CREATE TABLE IF NOT EXISTS prospect_contacts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  prospect_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
-
-  -- Contact Info
-  first_name TEXT,
-  last_name TEXT,
-  full_name TEXT NOT NULL,
-  email TEXT NOT NULL,
-  phone TEXT,
-  title TEXT,
-
-  -- LinkedIn
-  linkedin_url TEXT,
-
-  -- Scoring
-  match_score INTEGER DEFAULT 0,
-  match_level TEXT CHECK (match_level IN ('Best Match', 'Great Match', 'Good Match', 'Possible Match')),
-  match_reason TEXT,
-
-  -- Verification
-  elv_status TEXT,
-  elv_verified_at TIMESTAMPTZ,
-  apollo_email_status TEXT,
-  apollo_verified_at TIMESTAMPTZ,
-
-  -- Outreach state
-  contacted BOOLEAN DEFAULT FALSE,
-  contacted_at TIMESTAMPTZ,
-
-  -- Source
-  source TEXT DEFAULT 'migration',
-  source_metadata JSONB DEFAULT '{}'::jsonb,
-
-  -- System
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-  UNIQUE(prospect_id, email)
-);
-
-CREATE INDEX idx_prospect_contacts_org_id ON prospect_contacts(org_id);
-CREATE INDEX idx_prospect_contacts_prospect_id ON prospect_contacts(prospect_id);
-CREATE INDEX idx_prospect_contacts_email ON prospect_contacts(email);
-CREATE INDEX idx_prospect_contacts_match_score ON prospect_contacts(match_score DESC);
-
--- ============================================
--- 6. PROSPECTS INDEXES
--- ============================================
-
+-- Prospects indexes
 CREATE INDEX idx_prospects_org_id ON prospects(org_id);
 CREATE INDEX idx_prospects_status ON prospects(org_id, status);
 CREATE INDEX idx_prospects_website ON prospects(website);
@@ -260,9 +117,178 @@ CREATE INDEX idx_prospects_confidence ON prospects(org_id, confidence_score DESC
 CREATE INDEX idx_prospects_parent_id ON prospects(parent_id);
 CREATE INDEX idx_prospects_last_enriched ON prospects(last_enriched_at);
 
+
 -- ============================================
--- 7. UPDATED_AT TRIGGERS
+-- 2. SEARCH_SIGNALS TABLE (Bronze Layer)
 -- ============================================
+-- Raw search results captured before enrichment.
+-- No org_id — scoped to org via prospect_id → prospects.org_id.
+-- prospect_id is nullable (signals can exist before prospect linkage)
+-- and ON DELETE SET NULL (preserve signal history if prospect is removed).
+
+CREATE TABLE IF NOT EXISTS search_signals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Link to prospect (nullable — may be unlinked initially)
+  prospect_id UUID REFERENCES prospects(id) ON DELETE SET NULL,
+
+  -- Search context
+  search_query TEXT NOT NULL,
+  source_platform TEXT,                 -- e.g. 'google', 'linkedin', 'crunchbase'
+  search_type TEXT,                     -- e.g. 'company_discovery', 'contact_search'
+
+  -- Raw result data
+  raw_response JSONB NOT NULL,
+  result_position INTEGER,              -- rank in search results
+  result_snippet TEXT,                  -- preview text from result
+
+  -- System
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes per spec: prospect_id and search_query
+CREATE INDEX idx_search_signals_prospect_id ON search_signals(prospect_id);
+CREATE INDEX idx_search_signals_search_query ON search_signals(search_query);
+
+
+-- ============================================
+-- 3. COMPANY_CRAWLS TABLE (Silver Layer)
+-- ============================================
+-- Crawled and partially cleaned web page data for a prospect.
+-- No org_id — scoped to org via prospect_id → prospects.org_id.
+-- prospect_id is NOT NULL (every crawl belongs to a prospect).
+
+CREATE TABLE IF NOT EXISTS company_crawls (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Parent prospect (required)
+  prospect_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+
+  -- Crawl target & result
+  url_crawled TEXT NOT NULL,
+  raw_markdown TEXT,                    -- raw markdown conversion of page
+  cleaned_text TEXT,                    -- cleaned/stripped text content
+  meta_description TEXT,                -- <meta name="description"> content
+  detected_keywords TEXT[],             -- keywords extracted from page
+  word_count INTEGER,
+  http_status INTEGER,                  -- HTTP response status code
+
+  -- System
+  crawled_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Index per spec: prospect_id
+CREATE INDEX idx_company_crawls_prospect_id ON company_crawls(prospect_id);
+
+
+-- ============================================
+-- 4. PROSPECT_EMBEDDINGS TABLE
+-- ============================================
+-- Vector chunks for semantic search / ICP matching.
+-- No org_id — scoped to org via prospect_id → prospects.org_id.
+-- Each row is one chunk from a crawled page.
+
+CREATE TABLE IF NOT EXISTS prospect_embeddings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Parent references
+  prospect_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+  crawl_id UUID REFERENCES company_crawls(id) ON DELETE CASCADE,
+
+  -- Chunk data
+  chunk_text TEXT,
+  chunk_index INTEGER,
+  page_source TEXT,                     -- URL or identifier of source page
+
+  -- Vector embedding (OpenAI ada-002 / text-embedding-3-small dimension)
+  embedding vector(1536),
+
+  -- System
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Standard indexes
+CREATE INDEX idx_prospect_embeddings_prospect_id ON prospect_embeddings(prospect_id);
+
+-- HNSW index for fast approximate nearest-neighbor cosine search
+-- m=16 (max connections per node), ef_construction=64 (build-time search width)
+CREATE INDEX idx_prospect_embeddings_hnsw ON prospect_embeddings
+  USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+
+-- ============================================
+-- 5. PROSPECT_CONTACTS TABLE (Gold Layer)
+-- ============================================
+-- People associated with prospect companies.
+-- Mirrors the existing contacts table structure but FK to prospects(id)
+-- instead of leads(id). Has its own org_id for direct RLS scoping.
+
+CREATE TABLE IF NOT EXISTS prospect_contacts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Multi-Tenant
+  org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+
+  -- Parent prospect
+  prospect_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+
+  -- Contact Info
+  first_name TEXT,
+  last_name TEXT,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  title TEXT,
+
+  -- Company Info (denormalized from prospect for convenience)
+  company_name TEXT,
+  company_website TEXT,
+
+  -- Scoring
+  match_score INTEGER DEFAULT 0,
+  match_level TEXT CHECK (match_level IN ('Best Match', 'Great Match', 'Good Match', 'Possible Match')),
+  match_reason TEXT,
+
+  -- LinkedIn
+  linkedin_url TEXT,
+
+  -- Outreach state
+  contacted BOOLEAN DEFAULT FALSE,
+  contacted_at TIMESTAMPTZ,
+
+  -- Source
+  source TEXT DEFAULT 'csv_database',
+
+  -- Verification (EmailListVerify)
+  elv_status TEXT,
+  elv_verified_at TIMESTAMPTZ,
+
+  -- Verification (Apollo People Match)
+  apollo_email_status TEXT,
+  apollo_verified_at TIMESTAMPTZ,
+
+  -- Metadata
+  metadata JSONB DEFAULT '{}'::jsonb,
+
+  -- System
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- One contact email per prospect
+  UNIQUE(prospect_id, email)
+);
+
+-- Indexes per spec: prospect_id, email, match_score DESC, org_id
+CREATE INDEX idx_prospect_contacts_org_id ON prospect_contacts(org_id);
+CREATE INDEX idx_prospect_contacts_prospect_id ON prospect_contacts(prospect_id);
+CREATE INDEX idx_prospect_contacts_email ON prospect_contacts(email);
+CREATE INDEX idx_prospect_contacts_match_score ON prospect_contacts(match_score DESC);
+
+
+-- ============================================
+-- 6. UPDATED_AT AUTO-UPDATE TRIGGER
+-- ============================================
+-- Shared trigger function for all tables with updated_at column.
 
 CREATE OR REPLACE FUNCTION update_prospect_tables_updated_at()
 RETURNS TRIGGER AS $$
@@ -272,28 +298,26 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- prospects.updated_at
 CREATE TRIGGER trg_prospects_updated_at
   BEFORE UPDATE ON prospects
   FOR EACH ROW
   EXECUTE FUNCTION update_prospect_tables_updated_at();
 
+-- prospect_contacts.updated_at
 CREATE TRIGGER trg_prospect_contacts_updated_at
   BEFORE UPDATE ON prospect_contacts
   FOR EACH ROW
   EXECUTE FUNCTION update_prospect_tables_updated_at();
 
-CREATE TRIGGER trg_prospect_embeddings_updated_at
-  BEFORE UPDATE ON prospect_embeddings
-  FOR EACH ROW
-  EXECUTE FUNCTION update_prospect_tables_updated_at();
 
 -- ============================================
--- 8. WEBSITE NORMALIZATION TRIGGER
+-- 7. WEBSITE NORMALIZATION TRIGGER
 -- ============================================
--- On INSERT/UPDATE: preserve raw input in website_raw, normalize website.
--- Normalization: strip protocol, strip www., strip trailing slash, lowercase.
--- Reuses normalize_company_domain() from add_company_identity.sql if present,
--- otherwise defines an equivalent inline.
+-- On INSERT/UPDATE of website: preserve raw input in website_raw,
+-- then normalize website field.
+-- Normalization steps: lowercase → strip protocol → strip www. → strip trailing slash
+-- Consistent with normalize_company_domain() in add_company_identity.sql.
 
 CREATE OR REPLACE FUNCTION normalize_prospect_website()
 RETURNS TRIGGER AS $$
@@ -301,10 +325,9 @@ DECLARE
   raw_val TEXT;
   normalized TEXT;
 BEGIN
-  -- Determine the incoming raw value
   raw_val := NEW.website;
 
-  -- Preserve the original input in website_raw (only on first write or if website changed)
+  -- Preserve the original input in website_raw (on insert, or when website changes)
   IF TG_OP = 'INSERT' OR OLD.website IS DISTINCT FROM NEW.website THEN
     NEW.website_raw := raw_val;
   END IF;
@@ -336,9 +359,11 @@ CREATE TRIGGER trg_prospects_normalize_website
   FOR EACH ROW
   EXECUTE FUNCTION normalize_prospect_website();
 
+
 -- ============================================
--- 9. ROW LEVEL SECURITY
+-- 8. ROW LEVEL SECURITY
 -- ============================================
+-- Enable RLS on all five new tables.
 
 ALTER TABLE prospects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE search_signals ENABLE ROW LEVEL SECURITY;
@@ -346,28 +371,154 @@ ALTER TABLE company_crawls ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prospect_embeddings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prospect_contacts ENABLE ROW LEVEL SECURITY;
 
--- Org-isolation policies for all prospect tables
-CREATE POLICY prospects_org_isolation ON prospects
-  FOR ALL
-  USING (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()))
-  WITH CHECK (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()));
 
-CREATE POLICY search_signals_org_isolation ON search_signals
-  FOR ALL
-  USING (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()))
-  WITH CHECK (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()));
+-- ============================================
+-- 9. RLS POLICIES
+-- ============================================
+-- Pattern: matches existing add_rls_policies.sql using get_user_org_ids().
+--
+-- Tables WITH org_id (prospects, prospect_contacts):
+--   Direct org_id check.
+--
+-- Tables WITHOUT org_id (search_signals, company_crawls, prospect_embeddings):
+--   Scoped via JOIN to prospects.org_id through prospect_id FK.
+-- ============================================
 
-CREATE POLICY company_crawls_org_isolation ON company_crawls
-  FOR ALL
-  USING (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()))
-  WITH CHECK (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()));
+-- ----- PROSPECTS (has org_id) -----
+CREATE POLICY "Users can view their org prospects"
+  ON prospects FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
 
-CREATE POLICY prospect_embeddings_org_isolation ON prospect_embeddings
-  FOR ALL
-  USING (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()))
-  WITH CHECK (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()));
+CREATE POLICY "Users can insert prospects into their org"
+  ON prospects FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
 
-CREATE POLICY prospect_contacts_org_isolation ON prospect_contacts
-  FOR ALL
-  USING (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()))
-  WITH CHECK (org_id IN (SELECT org_id FROM user_organizations WHERE user_id = auth.uid()));
+CREATE POLICY "Users can update their org prospects"
+  ON prospects FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+
+CREATE POLICY "Users can delete their org prospects"
+  ON prospects FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
+
+-- ----- PROSPECT_CONTACTS (has org_id) -----
+CREATE POLICY "Users can view their org prospect contacts"
+  ON prospect_contacts FOR SELECT
+  USING (org_id IN (SELECT get_user_org_ids()));
+
+CREATE POLICY "Users can insert prospect contacts into their org"
+  ON prospect_contacts FOR INSERT
+  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
+
+CREATE POLICY "Users can update their org prospect contacts"
+  ON prospect_contacts FOR UPDATE
+  USING (org_id IN (SELECT get_user_org_ids()));
+
+CREATE POLICY "Users can delete their org prospect contacts"
+  ON prospect_contacts FOR DELETE
+  USING (org_id IN (SELECT get_user_org_ids()));
+
+-- ----- SEARCH_SIGNALS (no org_id — scope via prospects.org_id) -----
+CREATE POLICY "Users can view their org search signals"
+  ON search_signals FOR SELECT
+  USING (
+    prospect_id IS NULL  -- unlinked signals are visible (pre-assignment)
+    OR prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can insert search signals for their org prospects"
+  ON search_signals FOR INSERT
+  WITH CHECK (
+    prospect_id IS NULL
+    OR prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can update their org search signals"
+  ON search_signals FOR UPDATE
+  USING (
+    prospect_id IS NULL
+    OR prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can delete their org search signals"
+  ON search_signals FOR DELETE
+  USING (
+    prospect_id IS NULL
+    OR prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+-- ----- COMPANY_CRAWLS (no org_id — scope via prospects.org_id) -----
+-- prospect_id is NOT NULL so no null check needed.
+CREATE POLICY "Users can view their org company crawls"
+  ON company_crawls FOR SELECT
+  USING (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can insert company crawls for their org prospects"
+  ON company_crawls FOR INSERT
+  WITH CHECK (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can update their org company crawls"
+  ON company_crawls FOR UPDATE
+  USING (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can delete their org company crawls"
+  ON company_crawls FOR DELETE
+  USING (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+-- ----- PROSPECT_EMBEDDINGS (no org_id — scope via prospects.org_id) -----
+-- prospect_id is NOT NULL so no null check needed.
+CREATE POLICY "Users can view their org prospect embeddings"
+  ON prospect_embeddings FOR SELECT
+  USING (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can insert prospect embeddings for their org"
+  ON prospect_embeddings FOR INSERT
+  WITH CHECK (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can update their org prospect embeddings"
+  ON prospect_embeddings FOR UPDATE
+  USING (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
+
+CREATE POLICY "Users can delete their org prospect embeddings"
+  ON prospect_embeddings FOR DELETE
+  USING (
+    prospect_id IN (
+      SELECT id FROM prospects WHERE org_id IN (SELECT get_user_org_ids())
+    )
+  );
