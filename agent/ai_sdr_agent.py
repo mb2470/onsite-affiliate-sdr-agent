@@ -672,6 +672,73 @@ Subject: [subject]
     return {'subject': subject, 'body': body}
 
 
+def generate_email_prospect(prospect: Dict, contact_name: str) -> Dict:
+    """Generate email using richer prospect firmographic data for personalization."""
+    first_name = contact_name.split(' ')[0] if contact_name else 'there'
+
+    # Build rich context from prospect data
+    context_parts = []
+    if prospect.get('industry_primary'):
+        context_parts.append(f"Industry: {prospect['industry_primary']}")
+    if prospect.get('industry_sub'):
+        context_parts.append(f"Sub-industry: {prospect['industry_sub']}")
+    if prospect.get('business_model'):
+        context_parts.append(f"Business model: {prospect['business_model']}")
+    if prospect.get('target_market'):
+        context_parts.append(f"Target market: {prospect['target_market']}")
+    if prospect.get('employee_range'):
+        context_parts.append(f"Company size: {prospect['employee_range']} employees")
+    if prospect.get('technographics'):
+        techs = prospect['technographics']
+        if isinstance(techs, list):
+            context_parts.append(f"Tech stack: {', '.join(techs[:5])}")
+    if prospect.get('keywords'):
+        kws = prospect['keywords']
+        if isinstance(kws, list):
+            context_parts.append(f"Keywords: {', '.join(kws[:5])}")
+
+    context_block = '\n'.join(context_parts) if context_parts else ''
+
+    prompt = f"""Write a casual outreach email for {prospect['website']}.
+The contact's first name is "{first_name}" — ALWAYS address them as "Hey {first_name} -"
+
+Company: {prospect.get('company_name', prospect['website'])}
+{context_block}
+
+Requirements:
+- Under 90 words total
+- Start with "Hey {first_name} -"
+- Personalize based on their industry and business model above
+- Ask about upfront creator costs OR gifting logistics
+- Explain: Amazon proved onsite commissions eliminate upfront costs
+- Key point: We help brands COPY that model for their OWN site
+- End with: Sam Reid / OnsiteAffiliate.com
+- Include subject line
+
+Format:
+Subject: [subject]
+
+[body]"""
+
+    response = anthropic_client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=500,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+        timeout=30.0,
+    )
+
+    email_text = response.content[0].text
+
+    subject_match = re.search(r'Subject:\s*(.+)', email_text, re.IGNORECASE)
+    subject = subject_match.group(1).strip() if subject_match else f"Creator UGC for {prospect['website']}"
+
+    body_start = email_text.find('\n', email_text.find('Subject:'))
+    body = email_text[body_start:].strip() if body_start > -1 else email_text
+
+    return {'subject': subject, 'body': body}
+
+
 # ═══════════════════════════════════════════════════════════
 # FOLLOW-UP EMAIL GENERATION
 # ═══════════════════════════════════════════════════════════
@@ -1091,6 +1158,11 @@ class AISDRAgent:
         print(f"    Follow-up #1:     {fu1_count}")
         print(f"    Follow-up #2:     {fu2_count}")
         print(f"{'=' * 60}\n")
+
+        # Show prospect stats if use_prospect_db is enabled
+        settings = self._get_settings()
+        if settings.get('use_prospect_db', False):
+            self._show_prospect_stats()
 
     # ─── SEND ONE EMAIL ────────────────────────────
 
@@ -1566,6 +1638,408 @@ class AISDRAgent:
         print(f"\n  ✅ Found {new_replies} new {'reply' if new_replies == 1 else 'replies'}")
         return new_replies
 
+    # ─── PROSPECT-BASED METHODS ─────────────────────
+
+    def _send_one_prospect(self, prospect, all_emailed, today_by_website, settings, sender: Dict, bounced_set: set = None) -> str:
+        """Try to send one email for a prospect. Returns: 'sent', 'skipped', 'failed'."""
+        max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
+        org_id = self._resolve_org_id()
+
+        # Check per-prospect daily limit
+        today_contacts = today_by_website.get(prospect['website'], [])
+        if len(today_contacts) >= max_contacts_per_lead_per_day:
+            return 'skipped'
+
+        # Find contacts from prospect_contacts (already scored and linked)
+        result = supabase.table('prospect_contacts').select('*').eq(
+            'prospect_id', prospect['id']
+        ).eq('org_id', org_id).order(
+            'match_score', desc=True
+        ).limit(50).execute()
+
+        contacts = result.data or []
+        if not contacts:
+            print(f"  ⚠️ No prospect_contacts for {prospect['website']}")
+            return 'failed'
+
+        # Filter already emailed + bounced
+        _bounced = bounced_set or set()
+        available = [c for c in contacts if c.get('email')
+                     and c['email'].lower() not in all_emailed
+                     and c['email'].lower() not in _bounced]
+
+        if not available:
+            print(f"  ⏭️  All contacts already emailed for {prospect['website']}")
+            return 'skipped'
+
+        contact_raw = available[0]
+        contact = {
+            'name': contact_raw.get('full_name') or f"{contact_raw.get('first_name', '')} {contact_raw.get('last_name', '')}".strip(),
+            'email': contact_raw['email'],
+            'title': contact_raw.get('title', ''),
+            'score': contact_raw.get('match_score', 0),
+        }
+
+        print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
+        print(f"  📧 {contact['email']}")
+
+        # Apollo email verification
+        email_domain = contact['email'].split('@')[1] if '@' in contact['email'] else ''
+        apollo_result = verify_via_apollo(
+            contact['email'],
+            first_name=contact_raw.get('first_name'),
+            last_name=contact_raw.get('last_name'),
+            domain=email_domain,
+        )
+
+        if apollo_result['action'] == 'discard':
+            print(f"  🚫 Apollo blocked: {apollo_result['apollo_status']}")
+            all_emailed.add(contact['email'].lower())
+            self._log('email_verified', summary=f"Apollo BLOCKED {contact['email']}: {apollo_result['apollo_status']}")
+            return 'failed'
+
+        # ELV secondary verification (if not Apollo-verified)
+        if apollo_result['action'] == 'send':
+            print(f"  ✅ Apollo verified — skipping ELV")
+        else:
+            print(f"  🔶 Apollo: {apollo_result['apollo_status']} — routing to ELV")
+            verification = verify_email(contact['email'])
+            if not verification['safe']:
+                print(f"  🚫 ELV failed verification: {verification['status']}")
+                all_emailed.add(contact['email'].lower())
+                return 'failed'
+
+        # Generate email with rich prospect data
+        try:
+            email_data = generate_email_prospect(prospect, contact['name'])
+            print(f"  ✍️  Subject: {email_data['subject']}")
+        except Exception as e:
+            print(f"  ❌ Email gen failed: {e}")
+            return 'failed'
+
+        # Pre-send dedup
+        try:
+            dedup_check = supabase.table('outreach_log').select(
+                'id', count='exact', head=True
+            ).eq('contact_email', contact['email']).eq('website', prospect['website']).execute()
+            if dedup_check.count and dedup_check.count > 0:
+                print(f"  ⏭️  Dedup: {contact['email']} already has outreach for this prospect — skipping")
+                all_emailed.add(contact['email'].lower())
+                return 'skipped'
+        except Exception as e:
+            print(f"  ⚠️ Dedup check failed (proceeding with send): {e}")
+
+        # Send
+        try:
+            result = self.gmail.send_email(
+                to=contact['email'],
+                subject=email_data['subject'],
+                body=email_data['body'],
+                from_email=sender.get('email_address'),
+                from_name=sender.get('from_name', 'Sam Reid'),
+            )
+            gmail_msg_id = result.get('id', '')
+            print(f"  ✅ SENT! ID: {gmail_msg_id}")
+        except Exception as e:
+            print(f"  ❌ Send failed: {e}")
+            self._log('email_failed', summary=f"Failed: {contact['email']} - {e}", status='failed')
+            return 'failed'
+
+        # Retrieve thread ID and Message-ID for follow-up threading
+        gmail_thread_id = result.get('threadId', '')
+        rfc_message_id = ''
+        if gmail_msg_id:
+            try:
+                headers = self.gmail.get_message_headers(gmail_msg_id)
+                gmail_thread_id = gmail_thread_id or headers.get('threadId', '')
+                rfc_message_id = headers.get('Message-ID', headers.get('Message-Id', ''))
+            except Exception as e:
+                print(f"  ⚠️ Could not fetch message headers: {e}")
+
+        # Log outreach (retry on failure — email WAS sent)
+        outreach_row_data = {
+            "website": prospect['website'],
+            "contact_email": contact['email'],
+            "contact_name": contact['name'],
+            "email_subject": email_data['subject'],
+            "email_body": email_data['body'],
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "followup_number": 0,
+            "gmail_message_id": gmail_msg_id,
+            "gmail_thread_id": gmail_thread_id,
+            "rfc_message_id": rfc_message_id,
+            "sender_email": sender.get('email_address', ''),
+        }
+        if org_id:
+            outreach_row_data["org_id"] = org_id
+
+        for attempt in range(3):
+            try:
+                supabase.table("outreach_log").insert(outreach_row_data).execute()
+                break
+            except Exception as e:
+                if attempt < 2:
+                    print(f"  ⚠️ outreach_log insert failed (attempt {attempt + 1}/3), retrying: {e}")
+                    time.sleep(1)
+                else:
+                    print(f"  ❌ CRITICAL: outreach_log insert failed after 3 attempts for gmail_message_id={gmail_msg_id}.")
+                    self._log('outreach_log_write_failed',
+                              summary=f"CRITICAL: Sent {gmail_msg_id} to {contact['email']} but DB write failed: {e}",
+                              status='failed')
+
+        # Mark prospect as contacted
+        supabase.table("prospects").update({
+            "status": "contacted",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", prospect['id']).eq("org_id", org_id).execute()
+
+        # Mark prospect_contact as contacted
+        try:
+            supabase.table("prospect_contacts").update({
+                "contacted": True,
+                "contacted_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("prospect_id", prospect['id']).eq("email", contact['email']).execute()
+        except Exception:
+            pass
+
+        # Track
+        all_emailed.add(contact['email'].lower())
+        today_by_website.setdefault(prospect['website'], []).append(contact['email'])
+
+        self._log('email_sent',
+                   summary=f"[prospect] Sent from {sender.get('email_address')} to {contact['name']} <{contact['email']}> at {prospect['website']}")
+
+        return 'sent'
+
+    def send_batch_prospects(self, count: int = 10, sender_pool: list = None, deadline: datetime = None):
+        """Send a batch of emails using the prospects pipeline instead of leads."""
+        print(f"\n{'=' * 60}")
+        print(f"📤 SENDING BATCH (PROSPECTS): up to {count} emails")
+        print(f"{'=' * 60}\n")
+
+        settings = self._get_settings(refresh=True)
+        if not settings.get('agent_enabled', False):
+            print("⏸️  Agent is PAUSED.")
+            return 0
+
+        org_id = self._resolve_org_id()
+
+        # Query qualified prospects with high confidence
+        prospects_result = supabase.table("prospects").select("*").eq(
+            "org_id", org_id
+        ).eq("status", "qualified").gte(
+            "confidence_score", 0.7
+        ).order("revenue_annual", desc=True, nullsfirst=False).limit(50).execute()
+
+        # Also include contacted prospects (may have un-emailed contacts)
+        contacted_result = supabase.table("prospects").select("*").eq(
+            "org_id", org_id
+        ).eq("status", "contacted").gte(
+            "confidence_score", 0.7
+        ).order("created_at", desc=False).limit(50).execute()
+
+        all_prospects = (prospects_result.data or []) + (contacted_result.data or [])
+
+        if not all_prospects:
+            print("📭 No qualified prospects ready.")
+            return 0
+
+        n_qualified = len(prospects_result.data or [])
+        n_contacted = len(contacted_result.data or [])
+
+        # Load already-emailed contacts
+        all_outreach = supabase.table("outreach_log").select("contact_email").execute()
+        all_emailed = set(o['contact_email'].lower() for o in (all_outreach.data or []) if o.get('contact_email'))
+
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        today_outreach = supabase.table("outreach_log").select(
+            "website, contact_email"
+        ).gte("sent_at", f"{today}T00:00:00Z").execute()
+
+        today_by_website = {}
+        for o in (today_outreach.data or []):
+            today_by_website.setdefault(o['website'], []).append(o['contact_email'])
+
+        bounced_set = self._load_bounce_suppression()
+
+        print(f"📋 {len(all_prospects)} candidate prospects ({n_qualified} qualified, {n_contacted} contacted), {len(all_emailed)} contacts already emailed\n")
+
+        sent = 0
+        failed = 0
+        skipped = 0
+        min_gap = settings.get('min_minutes_between_emails', 2)
+
+        if sender_pool is None:
+            sender_pool = self._load_sender_pool(settings)
+        total_sender_remaining = sum(int(s.get('remaining', 0)) for s in sender_pool)
+        print(f"📮 Sender pool: {len(sender_pool)} inbox(es), {total_sender_remaining} remaining sends today")
+
+        for prospect in all_prospects:
+            if sent >= count:
+                break
+
+            if deadline and datetime.now(timezone.utc) >= deadline:
+                print(f"\n⏰ Deadline reached — stopping batch.")
+                break
+
+            print(f"\n{'─' * 50}")
+            print(f"[{sent + 1}/{count}] {prospect.get('company_name', prospect['website'])} ({prospect['website']})")
+
+            sender = self._pick_sender(sender_pool)
+            if not sender:
+                print("  🛑 No sender accounts with remaining daily capacity.")
+                break
+
+            print(f"  ✉️ Using sender: {sender.get('email_address')} ({sender.get('remaining')} left)")
+            result = self._send_one_prospect(prospect, all_emailed, today_by_website, settings, sender, bounced_set)
+
+            if result == 'sent':
+                sent += 1
+                self._record_sender_success(sender)
+                if sent < count:
+                    wait = (min_gap * 60) + random.randint(10, 60)
+                    if deadline:
+                        secs_left = (deadline - datetime.now(timezone.utc)).total_seconds()
+                        if secs_left <= wait + 60:
+                            print(f"  ⏰ Only {secs_left:.0f}s left — skipping wait.")
+                            continue
+                    print(f"  ⏳ Waiting {wait // 60}m {wait % 60}s...")
+                    time.sleep(wait)
+            elif result == 'failed':
+                failed += 1
+            else:
+                skipped += 1
+
+        print(f"\n🏁 BATCH (PROSPECTS): {sent} sent, {failed} failed, {skipped} skipped")
+        return sent
+
+    def check_replies_prospects(self, lookback_days: int = 60) -> int:
+        """Scan sent email threads for replies, updating prospects.status instead of leads.status."""
+        print(f"\n{'=' * 60}")
+        print("💬 CHECKING REPLIES (PROSPECTS)")
+        print(f"{'=' * 60}\n")
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+        org_id = self._resolve_org_id()
+
+        # Get unreplied outreach rows — filter to prospect-based rows (no lead_id)
+        results = supabase.table('outreach_log').select(
+            'id, contact_email, contact_name, website, gmail_thread_id, replied_at'
+        ).is_('replied_at', 'null').not_.is_('gmail_thread_id', 'null').neq(
+            'gmail_thread_id', ''
+        ).gte('sent_at', cutoff).order('sent_at', desc=True).execute()
+
+        rows = results.data or []
+        if not rows:
+            print("  📭 No unreplied threads to check.")
+            return 0
+
+        print(f"  Checking {len(rows)} threads...")
+        our_email = self.gmail.get_from_email()
+        new_replies = 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        seen_threads: set = set()
+        for row in rows:
+            thread_id = row.get('gmail_thread_id', '')
+            if not thread_id or thread_id in seen_threads:
+                continue
+            seen_threads.add(thread_id)
+
+            try:
+                has_reply = self.gmail.check_thread_for_replies(thread_id, our_email)
+            except Exception as e:
+                print(f"  ⚠️ Thread check error ({row.get('contact_email')}): {e}")
+                continue
+
+            if not has_reply:
+                continue
+
+            contact_email = row.get('contact_email', '')
+            website = row.get('website', '')
+            print(f"  💬 Reply detected: {contact_email} ({website})")
+            new_replies += 1
+
+            # Update outreach_log
+            try:
+                supabase.table('outreach_log').update({
+                    'replied_at': now_iso,
+                }).eq('gmail_thread_id', thread_id).is_('replied_at', 'null').execute()
+            except Exception as e:
+                print(f"  ⚠️ Could not update outreach_log replied_at: {e}")
+
+            # Update prospect status to 'engaged'
+            try:
+                supabase.table('prospects').update({
+                    'status': 'engaged',
+                    'updated_at': now_iso,
+                }).eq('org_id', org_id).eq('website', website).execute()
+            except Exception as e:
+                print(f"  ⚠️ Could not update prospect status: {e}")
+
+            self._log('email_reply',
+                       summary=f"[prospect] Reply from {contact_email} at {website}")
+
+        print(f"\n  ✅ Found {new_replies} new {'reply' if new_replies == 1 else 'replies'}")
+        return new_replies
+
+    def _show_prospect_stats(self):
+        """Show prospect pipeline stats alongside leads stats."""
+        org_id = self._resolve_org_id()
+
+        print(f"\n{'─' * 60}")
+        print("📊 PROSPECT PIPELINE")
+        print(f"{'─' * 60}")
+
+        statuses = ['new', 'enriching', 'enriched', 'qualified', 'contacted', 'engaged', 'disqualified']
+        for status in statuses:
+            cnt = supabase.table("prospects").select(
+                "*", count="exact", head=True
+            ).eq("org_id", org_id).eq("status", status).execute().count or 0
+            print(f"  {status:15s} {cnt}")
+
+        # Average confidence
+        try:
+            conf_rows = supabase.table("prospects").select(
+                "confidence_score"
+            ).eq("org_id", org_id).not_.is_("confidence_score", "null").execute()
+            scores = [r['confidence_score'] for r in (conf_rows.data or []) if r.get('confidence_score') is not None]
+            avg_conf = sum(scores) / len(scores) if scores else 0
+            print(f"\n  Avg confidence:   {avg_conf:.2f}")
+        except Exception:
+            print(f"\n  Avg confidence:   N/A")
+
+        # Stale data (last_enriched_at > 90 days ago)
+        try:
+            ninety_days_ago = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+            stale = supabase.table("prospects").select(
+                "*", count="exact", head=True
+            ).eq("org_id", org_id).lt("last_enriched_at", ninety_days_ago).execute().count or 0
+            stale_null = supabase.table("prospects").select(
+                "*", count="exact", head=True
+            ).eq("org_id", org_id).is_("last_enriched_at", "null").execute().count or 0
+            print(f"  Stale (>90d):     {stale + stale_null}")
+        except Exception:
+            print(f"  Stale (>90d):     N/A")
+
+        # Under-crawled (< 3 pages)
+        try:
+            all_prospects = supabase.table("prospects").select("id").eq("org_id", org_id).execute()
+            prospect_ids = [p['id'] for p in (all_prospects.data or [])]
+            under_crawled = 0
+            # Check crawl counts in batches
+            for pid in prospect_ids:
+                crawl_cnt = supabase.table("company_crawls").select(
+                    "*", count="exact", head=True
+                ).eq("prospect_id", pid).execute().count or 0
+                if crawl_cnt < 3:
+                    under_crawled += 1
+            print(f"  Under-crawled:    {under_crawled}")
+        except Exception:
+            print(f"  Under-crawled:    N/A")
+
+        print(f"{'─' * 60}")
+
     # ─── BATCH VERIFY EMAILS ─────────────────────
 
     def batch_verify(self, limit: int = 500, min_score: int = 60):
@@ -1982,9 +2456,20 @@ class AISDRAgent:
         except Exception as e:
             print(f"  ⚠️ Bounce check error: {e}")
 
+        # Determine pipeline mode from settings
+        settings = self._get_settings(refresh=True)
+        use_prospects = settings.get('use_prospect_db', False)
+        if use_prospects:
+            print("🔀 Pipeline mode: PROSPECTS")
+        else:
+            print("🔀 Pipeline mode: LEADS (classic)")
+
         print("\n💬 Phase 1b: Checking replies...")
         try:
-            self.check_replies()
+            if use_prospects:
+                self.check_replies_prospects()
+            else:
+                self.check_replies()
         except Exception as e:
             print(f"  ⚠️ Reply check error: {e}")
 
@@ -2064,15 +2549,24 @@ class AISDRAgent:
                 except Exception as e:
                     print(f"  ⚠️ Follow-up error: {e}")
                 try:
-                    self.check_replies()
+                    if use_prospects:
+                        self.check_replies_prospects()
+                    else:
+                        self.check_replies()
                 except Exception as e:
                     print(f"  ⚠️ Reply check error: {e}")
 
+            # Re-check pipeline mode (may change via dashboard)
+            use_prospects = settings.get('use_prospect_db', False)
+
             # Send a small batch (5 at a time to allow frequent settings checks)
             batch_size = min(remaining, 5)
-            print(f"\n🔄 Loop #{loop_count} — Budget: {remaining}/{max_per_day}, sending up to {batch_size}")
+            print(f"\n🔄 Loop #{loop_count} — Budget: {remaining}/{max_per_day}, sending up to {batch_size} ({'prospects' if use_prospects else 'leads'})")
 
-            sent = self.send_batch(count=batch_size, deadline=hard_deadline, sender_pool=sender_pool_for_loop)
+            if use_prospects:
+                sent = self.send_batch_prospects(count=batch_size, sender_pool=sender_pool_for_loop, deadline=hard_deadline)
+            else:
+                sent = self.send_batch(count=batch_size, deadline=hard_deadline, sender_pool=sender_pool_for_loop)
             total_sent_this_run += sent
 
             if sent == 0:
@@ -2108,11 +2602,13 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  python ai_sdr_agent.py auto              # Full autonomous run")
-        print("  python ai_sdr_agent.py send-batch 10     # Send N emails")
+        print("  python ai_sdr_agent.py auto              # Full autonomous run (auto-detects leads/prospects mode)")
+        print("  python ai_sdr_agent.py send-batch 10     # Send N emails (leads)")
+        print("  python ai_sdr_agent.py send-batch-prospects 10  # Send N emails (prospects)")
         print("  python ai_sdr_agent.py process-followups  # Send due follow-up emails")
         print("  python ai_sdr_agent.py check-bounces     # Check bounced emails")
-        print("  python ai_sdr_agent.py check-replies [days]  # Scan threads for new replies (default: 60 days)")
+        print("  python ai_sdr_agent.py check-replies [days]  # Scan threads for replies (leads)")
+        print("  python ai_sdr_agent.py check-replies-prospects [days]  # Scan threads for replies (prospects)")
         print("  python ai_sdr_agent.py batch-verify 500  # Pre-verify N emails for HIGH leads")
         print("  python ai_sdr_agent.py verify-gmail      # Test Gmail")
         print("  python ai_sdr_agent.py status             # Pipeline stats")
@@ -2125,6 +2621,9 @@ if __name__ == "__main__":
     elif cmd == "send-batch":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 10
         agent.send_batch(n)
+    elif cmd == "send-batch-prospects":
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        agent.send_batch_prospects(n)
     elif cmd == "process-followups":
         agent.process_followups()
     elif cmd == "check-bounces":
@@ -2132,6 +2631,9 @@ if __name__ == "__main__":
     elif cmd == "check-replies":
         days = int(sys.argv[2]) if len(sys.argv) > 2 else 60
         agent.check_replies(lookback_days=days)
+    elif cmd == "check-replies-prospects":
+        days = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+        agent.check_replies_prospects(lookback_days=days)
     elif cmd == "batch-verify":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 500
         min_score = int(sys.argv[3]) if len(sys.argv) > 3 else 60
