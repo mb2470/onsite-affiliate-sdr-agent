@@ -1,12 +1,13 @@
--- Data Migration: leads → prospects, contacts → prospect_contacts
--- Idempotent (ON CONFLICT DO NOTHING) — safe to re-run
--- Non-destructive — does NOT delete from leads or contacts
+-- One-time migration: leads → prospects. Safe to re-run (idempotent via ON CONFLICT).
+-- Does NOT delete anything from leads or contacts — both systems run in parallel during transition.
+
+BEGIN;
 
 -- ============================================
--- 1. MIGRATE LEADS → PROSPECTS
+-- Step 1: MIGRATE LEADS → PROSPECTS
 -- ============================================
--- Maps existing lead fields to prospect Gold layer fields.
--- Stores original lead_id in source_metadata for traceability.
+-- Maps existing lead fields to prospect fields.
+-- The website normalization trigger on prospects will clean the website value.
 
 INSERT INTO prospects (
   org_id,
@@ -14,75 +15,60 @@ INSERT INTO prospects (
   website_raw,
   company_name,
   industry_primary,
-  employee_range,
-  technographics,
+  employee_actual,
   status,
+  enrichment_source,
   source_metadata,
   created_at,
   updated_at
 )
 SELECT
   l.org_id,
-  -- website: use as canonical (already normalized in leads)
   l.website,
-  -- website_raw: preserve the original
   l.website,
-  -- company_name: required NOT NULL, fallback to website domain
   COALESCE(l.company_name, split_part(replace(replace(l.website, 'https://', ''), 'http://', ''), '/', 1)),
-  -- industry_primary: from leads.industry
   l.industry,
-  -- employee_range: from leads.employee_count (text field)
-  l.employee_count,
-  -- technographics: pull ecommerce_platform into array if present
+  -- employee_count is TEXT in leads; safely cast to INTEGER, NULL if not numeric
   CASE
-    WHEN l.ecommerce_platform IS NOT NULL THEN ARRAY[l.ecommerce_platform]
+    WHEN l.employee_count ~ '^\d+$' THEN l.employee_count::INTEGER
     ELSE NULL
   END,
-  -- status: map lead statuses to prospect statuses
   CASE l.status
     WHEN 'new'       THEN 'new'
     WHEN 'enriched'  THEN 'enriched'
     WHEN 'contacted' THEN 'contacted'
     WHEN 'replied'   THEN 'engaged'
-    WHEN 'qualified' THEN 'qualified'
-    WHEN 'demo'      THEN 'qualified'
-    WHEN 'lost'      THEN 'disqualified'
     ELSE 'new'
   END,
-  -- source_metadata: preserve original lead data for traceability
-  jsonb_build_object(
-    'migrated_from', 'leads',
-    'lead_id', l.id,
-    'original_status', l.status,
-    'enrichment_status', l.enrichment_status,
-    'icp_fit', l.icp_fit,
-    'source', l.source,
-    'revenue_range', l.revenue_range,
-    'research_notes', l.research_notes,
-    'pain_points', l.pain_points,
-    'talking_points', l.talking_points,
-    'decision_makers', to_jsonb(l.decision_makers),
-    'metadata', l.metadata,
-    'migrated_at', NOW()
-  ),
+  'lead_migration',
+  jsonb_build_object('migrated_from_lead_id', l.id),
   l.created_at,
-  l.updated_at
+  COALESCE(l.updated_at, l.created_at)
 FROM leads l
 WHERE l.org_id IS NOT NULL
   AND l.website IS NOT NULL
 ON CONFLICT (org_id, website) DO NOTHING;
 
 -- ============================================
--- 2. MIGRATE CONTACTS → PROSPECT_CONTACTS
+-- Step 2: MIGRATE CONTACTS → PROSPECT_CONTACTS
 -- ============================================
--- Looks up the prospect by matching lead_id → leads.website → prospects.website
--- within the same org. Only migrates contacts whose parent lead was migrated.
+-- Uses a CTE to build the lead_id → prospect_id mapping via the shared
+-- (org_id, website) key, then joins contacts through leads to find their
+-- matching prospect.
 
--- Note: elv_status, elv_verified_at, apollo_email_status, apollo_verified_at
--- are omitted because those columns may not exist on the contacts table yet
--- (add_contact_verification_columns.sql / add_apollo_verification_columns.sql
--- may not have been run). Those fields will be NULL in prospect_contacts.
-
+WITH lead_prospect_map AS (
+  -- Map each lead to its corresponding prospect via org_id + website
+  SELECT
+    l.id   AS lead_id,
+    p.id   AS prospect_id,
+    l.org_id,
+    l.company_name,
+    l.website
+  FROM leads l
+  JOIN prospects p ON p.org_id = l.org_id AND p.website = l.website
+  WHERE l.org_id IS NOT NULL
+    AND l.website IS NOT NULL
+)
 INSERT INTO prospect_contacts (
   org_id,
   prospect_id,
@@ -106,37 +92,32 @@ INSERT INTO prospect_contacts (
 )
 SELECT
   c.org_id,
-  p.id,
+  lpm.prospect_id,
   c.first_name,
   c.last_name,
   c.full_name,
   c.email,
   c.title,
-  -- Denormalize company info from the contacts/leads tables
-  COALESCE(c.company_name, l.company_name),
-  COALESCE(c.company_website, l.website),
+  COALESCE(c.company_name, lpm.company_name),
+  COALESCE(c.company_website, lpm.website),
   c.linkedin_url,
   c.match_score,
   c.match_level,
   c.match_reason,
   c.contacted,
   c.contacted_at,
-  'migration',
-  -- Store original IDs and source info in metadata for traceability
+  'lead_migration',
   jsonb_build_object(
-    'migrated_from', 'contacts',
-    'contact_id', c.id,
-    'lead_id', c.lead_id,
-    'original_source', c.source,
-    'original_metadata', c.metadata,
-    'migrated_at', NOW()
+    'migrated_from_contact_id', c.id,
+    'migrated_from_lead_id', c.lead_id
   ),
   c.created_at,
   COALESCE(c.contacted_at, c.created_at)
 FROM contacts c
-JOIN leads l ON l.id = c.lead_id
-JOIN prospects p ON p.org_id = l.org_id AND p.website = l.website
+JOIN lead_prospect_map lpm ON lpm.lead_id = c.lead_id
 WHERE c.org_id IS NOT NULL
   AND c.email IS NOT NULL
   AND c.lead_id IS NOT NULL
 ON CONFLICT (prospect_id, email) DO NOTHING;
+
+COMMIT;
