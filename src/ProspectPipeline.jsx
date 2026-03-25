@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { supabase } from './supabaseClient';
 import { getProspects, getProspectStats, getProspectWithRelations } from './services/prospectService';
 
 export default function ProspectPipeline({ orgId }) {
@@ -20,6 +21,12 @@ export default function ProspectPipeline({ orgId }) {
   const [selectedProspect, setSelectedProspect] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Re-enrichment
+  const [reenrichPreview, setReenrichPreview] = useState(null);
+  const [reenrichLoading, setReenrichLoading] = useState(false);
+  const [reenrichResult, setReenrichResult] = useState(null);
+  const [reenrichError, setReenrichError] = useState('');
 
   const loadStats = useCallback(async () => {
     if (!orgId) return;
@@ -79,6 +86,58 @@ export default function ProspectPipeline({ orgId }) {
     setDetailData(null);
   };
 
+  const handleReenrichPreview = async () => {
+    setReenrichLoading(true);
+    setReenrichError('');
+    setReenrichPreview(null);
+    setReenrichResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/.netlify/functions/prospect-reenrich', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ org_id: orgId, dry_run: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setReenrichPreview(data);
+    } catch (e) {
+      setReenrichError(e.message);
+    } finally {
+      setReenrichLoading(false);
+    }
+  };
+
+  const handleReenrichExecute = async () => {
+    setReenrichLoading(true);
+    setReenrichError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/.netlify/functions/prospect-reenrich', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ org_id: orgId, dry_run: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setReenrichResult(data);
+      setReenrichPreview(null);
+      // Refresh stats and list
+      loadStats();
+      loadProspects();
+    } catch (e) {
+      setReenrichError(e.message);
+    } finally {
+      setReenrichLoading(false);
+    }
+  };
+
   const totalAll = stats ? Object.values(stats.byStatus).reduce((a, b) => a + b, 0) : 0;
   const qualifiedCount = stats?.byStatus?.qualified || 0;
   const avgConf = stats?.avgConfidence != null ? stats.avgConfidence.toFixed(2) : '—';
@@ -124,6 +183,117 @@ export default function ProspectPipeline({ orgId }) {
             <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginTop: '4px' }}>{s.label}</div>
           </div>
         ))}
+      </div>
+
+      {/* Re-enrichment Controls */}
+      <div style={{
+        background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '10px', padding: '16px', marginBottom: '16px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '13px', fontWeight: 600 }}>Data Freshness</span>
+          <button
+            onClick={handleReenrichPreview}
+            disabled={reenrichLoading}
+            style={{
+              padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+              border: '1px solid rgba(144,21,237,0.3)', background: 'rgba(144,21,237,0.1)',
+              color: '#c6beee', cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            {reenrichLoading && !reenrichPreview ? 'Scanning...' : 'Scan for Stale Data'}
+          </button>
+          {reenrichResult && (
+            <span style={{ fontSize: '12px', color: '#4ade80' }}>
+              Done: {reenrichResult.stale_recrawl} re-crawled, {reenrichResult.low_confidence_enrich} re-enriched
+            </span>
+          )}
+          {reenrichError && (
+            <span style={{ fontSize: '12px', color: '#f87171' }}>{reenrichError}</span>
+          )}
+        </div>
+
+        {/* Preview results */}
+        {reenrichPreview && (
+          <div style={{ marginTop: '12px' }}>
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '12px' }}>
+              <div style={{ padding: '10px 16px', borderRadius: '8px', background: 'rgba(0,0,0,0.2)', flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", color: '#f59e0b' }}>{reenrichPreview.stale_recrawl}</div>
+                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginTop: '2px' }}>Stale ({'>'}90 days)</div>
+              </div>
+              <div style={{ padding: '10px 16px', borderRadius: '8px', background: 'rgba(0,0,0,0.2)', flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", color: '#f87171' }}>{reenrichPreview.low_confidence_enrich}</div>
+                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginTop: '2px' }}>Low Confidence ({'<'}0.5)</div>
+              </div>
+              <div style={{ padding: '10px 16px', borderRadius: '8px', background: 'rgba(0,0,0,0.2)', flex: 1, textAlign: 'center' }}>
+                <div style={{ fontSize: '20px', fontWeight: 700, fontFamily: "'Barlow', sans-serif", color: 'rgba(255,255,255,0.4)' }}>{reenrichPreview.skipped_contacted}</div>
+                <div style={{ fontSize: '10px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginTop: '2px' }}>Skipped (Active)</div>
+              </div>
+            </div>
+
+            {/* Expandable prospect lists */}
+            {reenrichPreview.prospects?.stale?.length > 0 && (
+              <details style={{ marginBottom: '8px' }}>
+                <summary style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', marginBottom: '6px' }}>
+                  {reenrichPreview.prospects.stale.length} prospects to re-crawl
+                </summary>
+                <div style={{ maxHeight: '150px', overflowY: 'auto', background: 'rgba(0,0,0,0.15)', borderRadius: '6px', padding: '8px' }}>
+                  {reenrichPreview.prospects.stale.map(p => (
+                    <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '11px' }}>
+                      <span style={{ color: 'rgba(255,255,255,0.7)' }}>{p.company_name || p.website}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.35)' }}>{p.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {reenrichPreview.prospects?.low_confidence?.length > 0 && (
+              <details style={{ marginBottom: '8px' }}>
+                <summary style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', marginBottom: '6px' }}>
+                  {reenrichPreview.prospects.low_confidence.length} prospects to re-enrich
+                </summary>
+                <div style={{ maxHeight: '150px', overflowY: 'auto', background: 'rgba(0,0,0,0.15)', borderRadius: '6px', padding: '8px' }}>
+                  {reenrichPreview.prospects.low_confidence.map(p => (
+                    <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '11px' }}>
+                      <span style={{ color: 'rgba(255,255,255,0.7)' }}>{p.company_name || p.website}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.35)' }}>{p.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {(reenrichPreview.stale_recrawl > 0 || reenrichPreview.low_confidence_enrich > 0) ? (
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <button
+                  onClick={handleReenrichExecute}
+                  disabled={reenrichLoading}
+                  style={{
+                    padding: '8px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+                    border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                    background: 'linear-gradient(135deg, #9015ed, #245ef9)', color: '#fff',
+                    opacity: reenrichLoading ? 0.5 : 1,
+                  }}
+                >
+                  {reenrichLoading ? 'Processing...' : `Re-enrich ${reenrichPreview.stale_recrawl + reenrichPreview.low_confidence_enrich} Prospects`}
+                </button>
+                <button
+                  onClick={() => setReenrichPreview(null)}
+                  style={{
+                    padding: '8px 14px', borderRadius: '8px', fontSize: '12px',
+                    border: '1px solid rgba(255,255,255,0.15)', background: 'transparent',
+                    color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : (
+              <div style={{ fontSize: '12px', color: '#4ade80', marginTop: '4px' }}>All prospect data is fresh.</div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Filters */}
