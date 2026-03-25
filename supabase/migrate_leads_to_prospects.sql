@@ -86,6 +86,8 @@ INSERT INTO prospect_contacts (
   full_name,
   email,
   title,
+  company_name,
+  company_website,
   linkedin_url,
   match_score,
   match_level,
@@ -97,7 +99,7 @@ INSERT INTO prospect_contacts (
   contacted,
   contacted_at,
   source,
-  source_metadata,
+  metadata,
   created_at,
   updated_at
 )
@@ -109,6 +111,9 @@ SELECT
   c.full_name,
   c.email,
   c.title,
+  -- Denormalize company info from the contacts/leads tables
+  COALESCE(c.company_name, l.company_name),
+  COALESCE(c.company_website, l.website),
   c.linkedin_url,
   c.match_score,
   c.match_level,
@@ -120,12 +125,13 @@ SELECT
   c.contacted,
   c.contacted_at,
   'migration',
+  -- Store original IDs and source info in metadata for traceability
   jsonb_build_object(
     'migrated_from', 'contacts',
     'contact_id', c.id,
     'lead_id', c.lead_id,
     'original_source', c.source,
-    'metadata', c.metadata,
+    'original_metadata', c.metadata,
     'migrated_at', NOW()
   ),
   c.created_at,
