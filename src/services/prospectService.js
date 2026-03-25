@@ -353,7 +353,7 @@ export const getProspectStats = async (orgId) => {
  */
 export const searchProspectsSemantic = async (orgId, queryEmbedding, threshold = 0.75, limit = 20) => {
   const scopedOrgId = await resolveOrgId(orgId);
-  const { data, error } = await supabase.rpc('match_prospects', {
+  const { data, error } = await supabase.rpc('match_prospect_embeddings', {
     query_embedding: queryEmbedding,
     match_threshold: threshold,
     match_count: limit,
