@@ -78,6 +78,11 @@ ON CONFLICT (org_id, website) DO NOTHING;
 -- Looks up the prospect by matching lead_id → leads.website → prospects.website
 -- within the same org. Only migrates contacts whose parent lead was migrated.
 
+-- Note: elv_status, elv_verified_at, apollo_email_status, apollo_verified_at
+-- are omitted because those columns may not exist on the contacts table yet
+-- (add_contact_verification_columns.sql / add_apollo_verification_columns.sql
+-- may not have been run). Those fields will be NULL in prospect_contacts.
+
 INSERT INTO prospect_contacts (
   org_id,
   prospect_id,
@@ -92,10 +97,6 @@ INSERT INTO prospect_contacts (
   match_score,
   match_level,
   match_reason,
-  elv_status,
-  elv_verified_at,
-  apollo_email_status,
-  apollo_verified_at,
   contacted,
   contacted_at,
   source,
@@ -118,10 +119,6 @@ SELECT
   c.match_score,
   c.match_level,
   c.match_reason,
-  c.elv_status,
-  c.elv_verified_at,
-  c.apollo_email_status,
-  c.apollo_verified_at,
   c.contacted,
   c.contacted_at,
   'migration',
