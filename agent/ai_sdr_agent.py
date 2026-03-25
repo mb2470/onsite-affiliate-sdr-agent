@@ -1642,6 +1642,186 @@ class AISDRAgent:
 
     # ─── PROSPECT-BASED METHODS ─────────────────────
 
+    def discover_prospect_contacts(self, prospect_id: str) -> int:
+        """Discover contacts for a prospect: check contact_database, then Apollo.
+
+        Mirrors the Netlify prospect-discover-contacts.js flow:
+        1. Check contact_database by matching website/email_domain
+        2. If none found, call Apollo mixed_people search + bulk_match
+        3. Insert discovered contacts into prospect_contacts
+
+        Returns number of contacts inserted.
+        """
+        org_id = self._resolve_org_id()
+
+        # Fetch the prospect
+        result = supabase.table('prospects').select('id, website, company_name').eq(
+            'id', prospect_id).eq('org_id', org_id).single().execute()
+        prospect = result.data
+        if not prospect:
+            print(f"  ⚠️ Prospect {prospect_id} not found")
+            return 0
+
+        website = prospect['website']
+        domain = website.lower().replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
+        print(f"  🔍 Discovering contacts for {domain} (prospect {prospect_id})")
+
+        # Check if prospect already has contacts
+        existing = supabase.table('prospect_contacts').select(
+            '*', count='exact'
+        ).eq('prospect_id', prospect_id).eq('org_id', org_id).execute()
+        if existing.count and existing.count > 0:
+            print(f"  ⏭️ Already has {existing.count} contacts, skipping")
+            return existing.count
+
+        contacts = []
+
+        # Step 1: Check contact_database
+        db_result = supabase.table('contact_database').select('*').or_(
+            f"website.eq.{domain},website.eq.www.{domain},email_domain.eq.{domain}"
+        ).eq('org_id', org_id).limit(50).execute()
+
+        if db_result.data:
+            print(f"  📋 Found {len(db_result.data)} contacts in contact_database")
+            for c in db_result.data:
+                contacts.append({
+                    'first_name': c.get('first_name', ''),
+                    'last_name': c.get('last_name', ''),
+                    'email': c['email'],
+                    'title': c.get('title', ''),
+                    'linkedin_url': c.get('linkedin_url', ''),
+                    'apollo_email_status': c.get('apollo_email_status'),
+                    'source': 'contact_database',
+                })
+
+        # Step 2: If no contacts in DB, try Apollo
+        if not contacts and APOLLO_API_KEY:
+            print(f"  📡 No contacts in database, trying Apollo...")
+            try:
+                titles = [
+                    'VP Marketing', 'Head of Marketing', 'Director of Marketing',
+                    'VP Ecommerce', 'Head of Ecommerce', 'Director of Ecommerce',
+                    'VP Digital', 'Head of Digital', 'Head of Growth',
+                    'CMO', 'Chief Marketing Officer',
+                    'VP Brand', 'Director of Brand', 'Head of Brand',
+                    'Director of Partnerships', 'Head of Partnerships',
+                    'Director of Content', 'Head of Content',
+                    'CEO', 'Founder', 'Co-Founder', 'President',
+                ]
+                search_payload = json.dumps({
+                    'q_organization_domains_list': [domain],
+                    'person_titles': titles,
+                    'per_page': 25,
+                })
+                req = urllib.request.Request(
+                    'https://api.apollo.io/api/v1/mixed_people/api_search',
+                    data=search_payload.encode(),
+                    method='POST',
+                )
+                req.add_header('Content-Type', 'application/json')
+                req.add_header('x-api-key', APOLLO_API_KEY)
+
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    search_data = json.loads(resp.read().decode())
+
+                people = [p for p in (search_data.get('people') or []) if p.get('has_email')]
+
+                if people:
+                    # Enrich top 3 to get actual emails
+                    top3 = people[:3]
+                    enrich_payload = json.dumps({'details': [{'id': p['id']} for p in top3]})
+                    req2 = urllib.request.Request(
+                        'https://api.apollo.io/api/v1/people/bulk_match',
+                        data=enrich_payload.encode(),
+                        method='POST',
+                    )
+                    req2.add_header('Content-Type', 'application/json')
+                    req2.add_header('x-api-key', APOLLO_API_KEY)
+
+                    with urllib.request.urlopen(req2, timeout=20) as resp2:
+                        enrich_data = json.loads(resp2.read().decode())
+
+                    for m in (enrich_data.get('matches') or []):
+                        if not m.get('email'):
+                            continue
+                        email_status = (m.get('email_status') or 'unavailable').lower()
+                        # Skip invalid emails
+                        if email_status == 'invalid':
+                            print(f"  🗑️ Discarding invalid: {m['email']} ({email_status})")
+                            continue
+                        contacts.append({
+                            'first_name': m.get('first_name', ''),
+                            'last_name': m.get('last_name', ''),
+                            'email': m['email'].lower(),
+                            'title': m.get('title', ''),
+                            'linkedin_url': m.get('linkedin_url', ''),
+                            'apollo_email_status': email_status,
+                            'source': 'apollo',
+                        })
+                    print(f"  ✅ Apollo found {len(contacts)} usable contacts")
+                else:
+                    print(f"  ⚠️ Apollo found no people with email for {domain}")
+            except Exception as e:
+                print(f"  ⚠️ Apollo discovery error for {domain}: {e}")
+
+        if not contacts:
+            print(f"  ⚠️ No contacts found for {domain}")
+            return 0
+
+        # Step 3: Insert into prospect_contacts
+        inserted = 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for c in contacts:
+            full_name = ' '.join(filter(None, [c['first_name'], c['last_name']])) or 'Unknown'
+            score_info = self._score_prospect_contact_title(c.get('title', ''))
+
+            try:
+                supabase.table('prospect_contacts').upsert({
+                    'org_id': org_id,
+                    'prospect_id': prospect_id,
+                    'first_name': c['first_name'],
+                    'last_name': c['last_name'],
+                    'full_name': full_name,
+                    'email': c['email'],
+                    'title': c.get('title', ''),
+                    'company_name': prospect.get('company_name') or domain,
+                    'company_website': domain,
+                    'match_score': score_info['match_score'],
+                    'match_level': score_info['match_level'],
+                    'match_reason': score_info['match_reason'],
+                    'linkedin_url': c.get('linkedin_url') or None,
+                    'apollo_email_status': c.get('apollo_email_status'),
+                    'apollo_verified_at': now_iso if c.get('apollo_email_status') else None,
+                    'source': c.get('source', 'apollo'),
+                }, on_conflict='prospect_id,email').execute()
+                inserted += 1
+            except Exception as e:
+                print(f"  ⚠️ Insert error for {c['email']}: {e}")
+
+        print(f"  ✅ Inserted {inserted} contacts for {domain}")
+        self._log('prospect_contact_discovery', prospect_id=prospect_id,
+                  summary=f"Discovered {inserted} contacts for {domain}")
+        return inserted
+
+    @staticmethod
+    def _score_prospect_contact_title(title: str) -> Dict:
+        """Score a contact title for prospect_contacts. Mirrors contactService.js scoring."""
+        t = (title or '').lower()
+        import re
+        if re.search(r'\b(cmo|chief marketing|vp market|head of market|director.*market|svp.*market)\b', t):
+            return {'match_score': 100, 'match_level': 'Best Match', 'match_reason': 'Marketing Leader'}
+        if re.search(r'\b(creator|influencer|ugc|partnership|affiliate|social media|community)\b', t):
+            return {'match_score': 95, 'match_level': 'Best Match', 'match_reason': 'Creator/Social'}
+        if re.search(r'\b(ecommerce|e-commerce|digital|growth|head of growth|vp.*digital|director.*digital|director.*ecommerce)\b', t):
+            return {'match_score': 90, 'match_level': 'Great Match', 'match_reason': 'Digital/Ecommerce'}
+        if re.search(r'\b(brand|content|communications|pr|public relations)\b', t):
+            return {'match_score': 70, 'match_level': 'Good Match', 'match_reason': 'Brand/Content'}
+        if re.search(r'\b(ceo|coo|founder|co-founder|president|owner|general manager)\b', t):
+            return {'match_score': 60, 'match_level': 'Good Match', 'match_reason': 'Executive'}
+        if re.search(r'\b(manager|coordinator|specialist|analyst|associate)\b', t):
+            return {'match_score': 30, 'match_level': 'Possible Match', 'match_reason': 'Mid-Level'}
+        return {'match_score': 10, 'match_level': 'Possible Match', 'match_reason': 'Other'}
+
     def _send_one_prospect(self, prospect, all_emailed, today_by_website, settings, sender: Dict, bounced_set: set = None) -> str:
         """Try to send one email for a prospect. Returns: 'sent', 'skipped', 'failed'."""
         max_contacts_per_lead_per_day = settings.get('max_contacts_per_lead_per_day', 1)
@@ -1866,6 +2046,17 @@ class AISDRAgent:
             today_by_website.setdefault(o['website'], []).append(o['contact_email'])
 
         bounced_set = self._load_bounce_suppression()
+
+        # Auto-discover contacts for prospects that have none
+        for prospect in all_prospects:
+            try:
+                existing = supabase.table('prospect_contacts').select(
+                    '*', count='exact'
+                ).eq('prospect_id', prospect['id']).eq('org_id', org_id).execute()
+                if not existing.count or existing.count == 0:
+                    self.discover_prospect_contacts(prospect['id'])
+            except Exception as e:
+                print(f"  ⚠️ Contact discovery error for {prospect['website']}: {e}")
 
         print(f"📋 {len(all_prospects)} candidate prospects ({n_qualified} qualified, {n_contacted} contacted), {len(all_emailed)} contacts already emailed\n")
 

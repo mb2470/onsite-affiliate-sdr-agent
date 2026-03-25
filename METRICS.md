@@ -14,7 +14,8 @@ The **primary record** of all emails sent. Both the Netlify `send-email.js` func
 |--------|------|-------------|
 | `id` | uuid | Primary key |
 | `org_id` | uuid | Multi-tenant org identifier |
-| `lead_id` | uuid | FK to `leads` |
+| `lead_id` | uuid | FK to `leads` (lead-mode rows) |
+| `prospect_id` | uuid | FK to `prospects` (prospect-mode rows) |
 | `website` | text | Company website (denormalized from lead) |
 | `contact_email` | text | Recipient email address |
 | `contact_name` | text | Recipient name |
@@ -37,7 +38,8 @@ Every significant action (email sent, reply detected, bounce, enrichment, etc.) 
 | `id` | uuid | Primary key |
 | `org_id` | uuid | Multi-tenant org identifier |
 | `activity_type` | text | Event type (see below) |
-| `lead_id` | uuid | Associated lead (nullable) |
+| `lead_id` | uuid | Associated lead (nullable, lead-mode) |
+| `prospect_id` | uuid | Associated prospect (nullable, prospect-mode) |
 | `summary` | text | Human-readable description |
 | `status` | text | `'success'` or `'failed'` |
 | `created_at` | timestamptz | When the event occurred |
@@ -71,6 +73,49 @@ Tracks per-sender daily usage for multi-sender rotation.
 | `daily_send_limit` | int | Max emails per day for this account |
 | `current_daily_sent` | int | How many sent today (resets daily) |
 | `status` | text | `'active'`, `'ready'`, `'warming'` |
+
+### `prospects` — Enriched company profiles (Medallion Gold layer)
+One row per company per org. Used when `use_prospect_db` is true in `agent_settings`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Primary key |
+| `org_id` | uuid | Multi-tenant org identifier |
+| `website` | text | Normalized company domain |
+| `company_name` | text | Company name |
+| `status` | text | `new`, `enriching`, `enriched`, `qualified`, `contacted`, `engaged`, `disqualified` |
+| `confidence_score` | numeric | Overall confidence (0–1), ≥ 0.7 = qualified |
+| `industry_primary` | text | Primary industry |
+| `business_model` | text | B2B, B2C, DTC, etc. |
+| `employee_range` | text | Employee count bucket |
+| `revenue_annual` | numeric | Annual revenue |
+| `enrichment_source` | text | `crawl`, `apollo`, etc. |
+
+### `prospect_contacts` — People at prospect companies (Gold layer)
+Contacts linked to prospects via `prospect_id` FK. Has its own `org_id`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Primary key |
+| `org_id` | uuid | Multi-tenant org identifier |
+| `prospect_id` | uuid | FK to `prospects(id)` |
+| `email` | text | Contact email |
+| `full_name` | text | Full name |
+| `title` | text | Job title |
+| `match_score` | int | Title relevance score (10–100) |
+| `match_level` | text | `Best Match`, `Great Match`, `Good Match`, `Possible Match` |
+| `contacted` | boolean | Whether this contact has been emailed |
+| `source` | text | `contact_database`, `apollo`, `csv_database` |
+| `apollo_email_status` | text | Apollo verification status |
+
+### `search_signals` — Raw search results (Bronze layer)
+Raw Google/Bing search result rows linked to prospects.
+
+### `company_crawls` — Crawled page data (Silver layer)
+Cleaned content from prospect website crawls, linked to prospects.
+
+### `prospect_embeddings` — Vector chunks for similarity search
+Embeddings of crawled content for vector similarity queries.
 
 ### `emails` table — NOT used for metrics
 This is a legacy table. **Do not query it for metrics.** All email metrics come from `outreach_log`.

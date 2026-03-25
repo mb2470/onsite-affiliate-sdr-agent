@@ -5,7 +5,9 @@ Multi-tenant SDR automation platform: React 18 frontend, Supabase backend, Netli
 
 ## Key Architecture Rules
 - **Multi-tenant**: All data tables have `org_id`. Server-side functions use service role key (bypasses RLS). Frontend uses anon key with RLS.
-- **Email data lives in `outreach_log`**: The `send-email.js` function writes to `outreach_log`, not the `emails` table. Always query `outreach_log` for email stats.
+- **Email data lives in `outreach_log`**: The `send-email.js` function writes to `outreach_log`, not the `emails` table. Always query `outreach_log` for email stats. `outreach_log` has both `lead_id` (lead-mode) and `prospect_id` (prospect-mode).
+- **Prospect data lives in `prospects` table** (Medallion architecture). Use `prospectService.js` for frontend queries. Contacts are in `prospect_contacts` (not the old `contacts` table).
+- **When `use_prospect_db` is true** in `agent_settings`, the Python agent uses prospects instead of leads. The agent's `send_batch_prospects` auto-discovers contacts if `prospect_contacts` is empty.
 - **Netlify Functions are CommonJS**: Use `require()` not `import`. Frontend is ESM.
 - **Supabase count queries**: Use `{ count: 'exact', head: true }` for counts. Default limit is 1000 rows — use individual filtered count queries for accurate stats.
 
