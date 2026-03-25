@@ -580,6 +580,26 @@ export default function AgentMonitor() {
               </div>
             </div>
 
+            {/* Use Prospect Database Toggle */}
+            <div style={{ ...statBoxStyle, flex: 'unset', gridColumn: 'span 2' }}>
+              <label style={settingLabelStyle}>Use Prospect Database</label>
+              <div style={{ marginTop: '8px' }}>
+                <button onClick={() => handleSaveSettings({ use_prospect_db: !settings.use_prospect_db })}
+                  style={{
+                    width: '100%', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold',
+                    border: settings.use_prospect_db ? '1px solid rgba(34,211,238,0.5)' : '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: settings.use_prospect_db ? 'rgba(34,211,238,0.2)' : 'transparent',
+                    color: settings.use_prospect_db ? '#22d3ee' : 'rgba(255,255,255,0.4)',
+                    fontFamily: 'inherit',
+                  }}>
+                  {settings.use_prospect_db ? '🔀 Prospect Pipeline Active' : '📋 Using Leads Table'}
+                </button>
+                <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>
+                  When enabled, the agent will source leads from the prospect pipeline instead of the leads table.
+                </div>
+              </div>
+            </div>
+
             {/* Sender Accounts + Per-Account Daily Limits */}
             <div style={{ ...statBoxStyle, flex: 'unset', gridColumn: 'span 2' }}>
               <label style={settingLabelStyle}>Sender Accounts (Per-Day Limits)</label>
