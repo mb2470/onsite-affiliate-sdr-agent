@@ -949,11 +949,13 @@ class AISDRAgent:
             self._settings = result.data or {}
         return self._settings
 
-    def _log(self, activity_type, lead_id=None, summary="", status="success"):
+    def _log(self, activity_type, lead_id=None, summary="", status="success", prospect_id=None):
         try:
             row = {"activity_type": activity_type, "summary": summary, "status": status}
             if lead_id:
                 row["lead_id"] = lead_id
+            if prospect_id:
+                row["prospect_id"] = prospect_id
             org_id = self._resolve_org_id()
             if org_id:
                 row["org_id"] = org_id
@@ -1758,6 +1760,7 @@ class AISDRAgent:
 
         # Log outreach (retry on failure — email WAS sent)
         outreach_row_data = {
+            "prospect_id": prospect['id'],
             "website": prospect['website'],
             "contact_email": contact['email'],
             "contact_name": contact['name'],
@@ -1784,6 +1787,7 @@ class AISDRAgent:
                 else:
                     print(f"  ❌ CRITICAL: outreach_log insert failed after 3 attempts for gmail_message_id={gmail_msg_id}.")
                     self._log('outreach_log_write_failed',
+                              prospect_id=prospect['id'],
                               summary=f"CRITICAL: Sent {gmail_msg_id} to {contact['email']} but DB write failed: {e}",
                               status='failed')
 
@@ -1807,6 +1811,7 @@ class AISDRAgent:
         today_by_website.setdefault(prospect['website'], []).append(contact['email'])
 
         self._log('email_sent',
+                   prospect_id=prospect['id'],
                    summary=f"[prospect] Sent from {sender.get('email_address')} to {contact['name']} <{contact['email']}> at {prospect['website']}")
 
         return 'sent'
@@ -1922,10 +1927,12 @@ class AISDRAgent:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
         org_id = self._resolve_org_id()
 
-        # Get unreplied outreach rows — filter to prospect-based rows (no lead_id)
+        # Get unreplied outreach rows — filter to prospect-based rows (prospect_id IS NOT NULL)
         results = supabase.table('outreach_log').select(
-            'id, contact_email, contact_name, website, gmail_thread_id, replied_at'
-        ).is_('replied_at', 'null').not_.is_('gmail_thread_id', 'null').neq(
+            'id, contact_email, contact_name, website, gmail_thread_id, replied_at, prospect_id'
+        ).is_('replied_at', 'null').not_.is_('gmail_thread_id', 'null').not_.is_(
+            'prospect_id', 'null'
+        ).neq(
             'gmail_thread_id', ''
         ).gte('sent_at', cutoff).order('sent_at', desc=True).execute()
 
@@ -1978,6 +1985,7 @@ class AISDRAgent:
                 print(f"  ⚠️ Could not update prospect status: {e}")
 
             self._log('email_reply',
+                       prospect_id=row.get('prospect_id'),
                        summary=f"[prospect] Reply from {contact_email} at {website}")
 
         print(f"\n  ✅ Found {new_replies} new {'reply' if new_replies == 1 else 'replies'}")
