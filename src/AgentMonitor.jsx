@@ -470,6 +470,39 @@ export default function AgentMonitor() {
       {settings && (
         <div style={{ ...cardStyle, marginBottom: '20px' }}>
           <h3 style={{ fontFamily: "'Barlow', sans-serif", fontSize: '16px', fontWeight: 600, marginBottom: '16px' }}>⚙️ Agent Settings</h3>
+
+          {/* ── Data Source Toggle (top-level mode switch) ── */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '16px',
+            padding: '14px 18px', borderRadius: '10px', marginBottom: '16px',
+            background: settings.use_prospect_db ? 'rgba(34,211,238,0.08)' : 'rgba(255,255,255,0.03)',
+            border: settings.use_prospect_db ? '1px solid rgba(34,211,238,0.25)' : '1px solid rgba(255,255,255,0.08)',
+          }}>
+            <button onClick={() => handleSaveSettings({ use_prospect_db: !settings.use_prospect_db })}
+              style={{
+                position: 'relative', width: '48px', height: '26px', borderRadius: '13px', border: 'none', cursor: 'pointer',
+                backgroundColor: settings.use_prospect_db ? '#22d3ee' : 'rgba(255,255,255,0.15)',
+                transition: 'background-color 0.2s',
+                flexShrink: 0,
+              }}>
+              <span style={{
+                position: 'absolute', top: '3px',
+                left: settings.use_prospect_db ? '24px' : '3px',
+                width: '20px', height: '20px', borderRadius: '50%',
+                backgroundColor: '#fff',
+                transition: 'left 0.2s',
+              }} />
+            </button>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: settings.use_prospect_db ? '#22d3ee' : 'rgba(255,255,255,0.7)' }}>
+                {settings.use_prospect_db ? 'Prospect Pipeline Active' : 'Using Leads Table'}
+              </div>
+              <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>
+                When enabled, the agent sources prospects from the new prospect pipeline instead of the leads table.
+              </div>
+            </div>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             {/* Send Hours */}
             <div style={{ ...statBoxStyle, flex: 'unset' }}>
@@ -576,26 +609,6 @@ export default function AgentMonitor() {
                 </button>
                 <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>
                   {settings.auto_send ? 'Agent sends emails automatically' : 'Agent drafts emails for your review'}
-                </div>
-              </div>
-            </div>
-
-            {/* Use Prospect Database Toggle */}
-            <div style={{ ...statBoxStyle, flex: 'unset', gridColumn: 'span 2' }}>
-              <label style={settingLabelStyle}>Use Prospect Database</label>
-              <div style={{ marginTop: '8px' }}>
-                <button onClick={() => handleSaveSettings({ use_prospect_db: !settings.use_prospect_db })}
-                  style={{
-                    width: '100%', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold',
-                    border: settings.use_prospect_db ? '1px solid rgba(34,211,238,0.5)' : '1px solid rgba(255,255,255,0.15)',
-                    backgroundColor: settings.use_prospect_db ? 'rgba(34,211,238,0.2)' : 'transparent',
-                    color: settings.use_prospect_db ? '#22d3ee' : 'rgba(255,255,255,0.4)',
-                    fontFamily: 'inherit',
-                  }}>
-                  {settings.use_prospect_db ? '🔀 Prospect Pipeline Active' : '📋 Using Leads Table'}
-                </button>
-                <div style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px' }}>
-                  When enabled, the agent will source leads from the prospect pipeline instead of the leads table.
                 </div>
               </div>
             </div>
