@@ -2747,7 +2747,7 @@ function AuthenticatedApp({ session }) {
           {/* ═══ MANAGE AGENT ═══ */}
           {activeView === 'agent' && (
             <div className="view-container">
-              <AgentMonitor />
+              <AgentMonitor orgId={orgId} />
             </div>
           )}
 
