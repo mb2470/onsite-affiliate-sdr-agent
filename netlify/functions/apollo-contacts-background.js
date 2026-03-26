@@ -105,7 +105,7 @@ exports.handler = async (event, context) => {
   try {
     // Get HIGH leads with no contacts
     const { data: leads, error } = await supabase
-      .from('leads')
+      .from('prospects')
       .select('id, website')
       .eq('icp_fit', 'HIGH')
       .eq('has_contacts', false)
@@ -267,7 +267,7 @@ exports.handler = async (event, context) => {
         // Update lead with contact info
         if (addedForLead > 0) {
           const bestMatch = matches.find(m => m.email && classifyApolloStatus((m.email_status || '').toLowerCase()) !== 'discard');
-          await supabase.from('leads').update({
+          await supabase.from('prospects').update({
             has_contacts: true,
             contact_name: bestMatch ? `${bestMatch.first_name || ''} ${bestMatch.last_name || ''}`.trim() : null,
             contact_email: bestMatch?.email || null,

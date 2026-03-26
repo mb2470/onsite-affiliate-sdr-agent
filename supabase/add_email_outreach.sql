@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS email_conversations (
 
   -- Associations (all optional — webhook may arrive before lead matching)
   campaign_id UUID REFERENCES outreach_campaigns(id) ON DELETE SET NULL,
-  lead_id UUID REFERENCES leads(id) ON DELETE SET NULL,
+  lead_id UUID REFERENCES prospects(id) ON DELETE SET NULL,
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
   account_id UUID REFERENCES email_accounts(id) ON DELETE SET NULL,
 
@@ -412,7 +412,7 @@ CREATE TABLE IF NOT EXISTS campaign_leads (
 
   -- Associations
   campaign_id UUID NOT NULL REFERENCES outreach_campaigns(id) ON DELETE CASCADE,
-  lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  lead_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
 
   -- Sequence progress
@@ -601,7 +601,7 @@ SELECT
   l.icp_fit AS lead_icp_fit,
   oc.name AS campaign_name
 FROM email_conversations ec
-LEFT JOIN leads l ON l.id = ec.lead_id
+LEFT JOIN prospects l ON l.id = ec.lead_id
 LEFT JOIN outreach_campaigns oc ON oc.id = ec.campaign_id
 WHERE ec.direction = 'inbound'
   AND ec.message_type IN ('reply', 'meeting_request')

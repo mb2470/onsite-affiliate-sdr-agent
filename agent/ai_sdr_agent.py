@@ -1132,13 +1132,13 @@ class AISDRAgent:
         print("📊 PIPELINE STATUS")
         print(f"{'=' * 60}")
 
-        total = supabase.table("leads").select("*", count="exact", head=True).execute().count
-        enriched = supabase.table("leads").select("*", count="exact", head=True).eq("status", "enriched").execute().count
-        contacted = supabase.table("leads").select("*", count="exact", head=True).eq("status", "contacted").execute().count
-        replied = supabase.table("leads").select("*", count="exact", head=True).eq("status", "replied").execute().count
-        high = supabase.table("leads").select("*", count="exact", head=True).eq("icp_fit", "HIGH").execute().count
-        high_contacts = supabase.table("leads").select("*", count="exact", head=True).eq("icp_fit", "HIGH").eq("has_contacts", True).execute().count
-        high_ready = supabase.table("leads").select("*", count="exact", head=True).eq("icp_fit", "HIGH").eq("has_contacts", True).eq("status", "enriched").execute().count
+        total = supabase.table("prospects").select("*", count="exact", head=True).execute().count
+        enriched = supabase.table("prospects").select("*", count="exact", head=True).eq("status", "enriched").execute().count
+        contacted = supabase.table("prospects").select("*", count="exact", head=True).eq("status", "contacted").execute().count
+        replied = supabase.table("prospects").select("*", count="exact", head=True).eq("status", "replied").execute().count
+        high = supabase.table("prospects").select("*", count="exact", head=True).eq("icp_fit", "HIGH").execute().count
+        high_contacts = supabase.table("prospects").select("*", count="exact", head=True).eq("icp_fit", "HIGH").eq("has_contacts", True).execute().count
+        high_ready = supabase.table("prospects").select("*", count="exact", head=True).eq("icp_fit", "HIGH").eq("has_contacts", True).eq("status", "enriched").execute().count
         outreach = supabase.table("outreach_log").select("*", count="exact", head=True).execute().count
 
         # Follow-up stats (may fail if columns not yet migrated)
@@ -1188,7 +1188,7 @@ class AISDRAgent:
             # No contacts found — mark lead so it's excluded from future queries
             print(f"  ⚠️ No contacts in DB for {lead['website']} — clearing has_contacts")
             try:
-                supabase.table("leads").update({"has_contacts": False}).eq("id", lead['id']).execute()
+                supabase.table("prospects").update({"has_contacts": False}).eq("id", lead['id']).execute()
             except Exception:
                 pass
             return 'failed'
@@ -1341,7 +1341,7 @@ class AISDRAgent:
                               'failed')
 
         # Mark contacted
-        supabase.table("leads").update({
+        supabase.table("prospects").update({
             "status": "contacted",
             "has_contacts": True,
             "contact_name": contact['name'],
@@ -1373,13 +1373,13 @@ class AISDRAgent:
         allowed_fits = settings.get('allowed_icp_fits', ['HIGH'])
 
         # Two-pass query: prioritize fresh enriched leads over contacted ones
-        enriched_leads = supabase.table("leads").select("*").in_(
+        enriched_leads = supabase.table("prospects").select("*").in_(
             "icp_fit", allowed_fits
         ).eq("has_contacts", True).eq(
             "status", "enriched"
         ).order("created_at", desc=False).limit(50).execute()
 
-        contacted_leads = supabase.table("leads").select("*").in_(
+        contacted_leads = supabase.table("prospects").select("*").in_(
             "icp_fit", allowed_fits
         ).eq("has_contacts", True).eq(
             "status", "contacted"
@@ -1525,7 +1525,7 @@ class AISDRAgent:
                 ).eq("website", o['website']).neq("contact_email", email).execute()
 
                 if not other.count or other.count == 0:
-                    supabase.table("leads").update({"status": "enriched"}).eq("website", o['website']).execute()
+                    supabase.table("prospects").update({"status": "enriched"}).eq("website", o['website']).execute()
                     print(f"  ↩️ Reset {o['website']} to enriched")
 
             # Mark outreach_log rows for this email as bounced
@@ -1621,7 +1621,7 @@ class AISDRAgent:
 
             # Mark lead as replied
             try:
-                update_q = supabase.table('leads').update({
+                update_q = supabase.table('prospects').update({
                     'status': 'replied',
                     'updated_at': now_iso,
                 })
@@ -2288,7 +2288,7 @@ class AISDRAgent:
         print(f"{'=' * 60}\n")
 
         # Get all HIGH ICP leads with contacts
-        leads = supabase.table("leads").select("website").eq(
+        leads = supabase.table("prospects").select("website").eq(
             "icp_fit", "HIGH"
         ).eq("has_contacts", True).execute()
         lead_websites = [l['website'] for l in (leads.data or [])]
@@ -2514,7 +2514,7 @@ class AISDRAgent:
                     if has_reply:
                         print(f"  💬 Prospect already replied — skipping!")
                         # Mark only this lead row as replied (avoid cross-domain/contact bleed).
-                        update_q = supabase.table("leads").update({
+                        update_q = supabase.table("prospects").update({
                             "status": "replied",
                             "updated_at": now.isoformat(),
                         })
@@ -2538,7 +2538,7 @@ class AISDRAgent:
 
             # Load the lead for context
             try:
-                lead_result = supabase.table("leads").select("*").eq(
+                lead_result = supabase.table("prospects").select("*").eq(
                     "id", outreach_row['lead_id']
                 ).single().execute()
                 lead = lead_result.data or {}

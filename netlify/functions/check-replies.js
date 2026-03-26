@@ -267,7 +267,7 @@ exports.handler = async (event) => {
       // Update lead status
       if (reply.website) {
         await supabase
-          .from('leads')
+          .from('prospects')
           .update({ status: 'replied' })
           .eq('website', reply.website);
       }

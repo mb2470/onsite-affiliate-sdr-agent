@@ -55,7 +55,7 @@ export const exportToGmail = async (leadId, emailText, contactEmails, contactDet
 
   try {
     const scopedOrgId = await resolveOrgId(orgId);
-    const { error } = await supabase.from('leads').update({
+    const { error } = await supabase.from('prospects').update({
       status: 'contacted',
       has_contacts: true,
       contact_name: contactDetails?.[0]?.name || null,

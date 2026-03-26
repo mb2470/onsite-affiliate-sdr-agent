@@ -33,54 +33,16 @@ CREATE INDEX idx_user_orgs_user_id ON user_organizations(user_id);
 CREATE INDEX idx_user_orgs_org_id ON user_organizations(org_id);
 
 -- ============================================
--- 1. LEADS TABLE
+-- 1. PROSPECTS TABLE (consolidated from leads)
 -- ============================================
-CREATE TABLE leads (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-
-  -- Tenant
-  org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
-
-  -- Company Info
-  website TEXT NOT NULL,
-  company_name TEXT,
-  industry TEXT,
-  revenue_range TEXT,
-  employee_count TEXT,
-
-  -- Research Data
-  icp_fit TEXT CHECK (icp_fit IN ('HIGH', 'MEDIUM', 'LOW')),
-  research_notes TEXT,
-  decision_makers TEXT[],
-  pain_points TEXT,
-  talking_points TEXT,
-
-  -- Catalog Info
-  ecommerce_platform TEXT,
-  estimated_products INTEGER,
-  catalog_analyzed_at TIMESTAMP WITH TIME ZONE,
-
-  -- Status Tracking
-  status TEXT DEFAULT 'new' CHECK (status IN ('new', 'enriched', 'contacted', 'replied', 'qualified', 'demo', 'lost')),
-  enrichment_status TEXT DEFAULT 'pending' CHECK (enrichment_status IN ('pending', 'in_progress', 'completed', 'failed')),
-
-  -- Source
-  source TEXT DEFAULT 'manual',
-
-  -- Metadata
-  metadata JSONB DEFAULT '{}'::jsonb,
-
-  -- Website unique per org (not globally)
-  UNIQUE(org_id, website)
-);
-
-CREATE INDEX idx_leads_status ON leads(status);
-CREATE INDEX idx_leads_icp_fit ON leads(icp_fit);
-CREATE INDEX idx_leads_website ON leads(website);
-CREATE INDEX idx_leads_enrichment_status ON leads(enrichment_status);
-CREATE INDEX idx_leads_org_id ON leads(org_id);
+-- Enriched company records. One row per company per org.
+-- This is the single source of truth — the legacy leads table has been retired.
+-- See add_prospect_database.sql for the full CREATE TABLE with all columns.
+-- See migrate_leads_to_prospects.sql for the data migration script.
+--
+-- Note: FK references from contacts, outreach_log, activity_log, emails,
+-- campaign_leads, email_conversations still use the column name "lead_id"
+-- pointing to prospects(id). The column name will be renamed in a future pass.
 
 -- ============================================
 -- 1B. STORELEADS CACHE TABLE
@@ -157,8 +119,8 @@ CREATE TABLE contacts (
   -- Tenant
   org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
 
-  -- Lead Association
-  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+  -- Prospect Association (column still named lead_id for backwards compat)
+  lead_id UUID REFERENCES prospects(id) ON DELETE CASCADE,
 
   -- Contact Info
   first_name TEXT,
@@ -219,8 +181,8 @@ CREATE TABLE emails (
   -- Tenant
   org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
 
-  -- Associations
-  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+  -- Associations (lead_id references prospects — column name kept for compat)
+  lead_id UUID REFERENCES prospects(id) ON DELETE CASCADE,
   contact_id UUID REFERENCES contacts(id) ON DELETE CASCADE,
 
   -- Email Content
@@ -274,7 +236,7 @@ CREATE TABLE agent_jobs (
 
   -- Job Details
   job_type TEXT NOT NULL CHECK (job_type IN ('enrich_lead', 'find_contacts', 'draft_email', 'send_email', 'full_workflow')),
-  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+  lead_id UUID REFERENCES prospects(id) ON DELETE CASCADE,
 
   -- Status
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
@@ -457,10 +419,7 @@ CREATE TRIGGER update_organizations_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_leads_updated_at
-  BEFORE UPDATE ON leads
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
+-- prospects updated_at trigger is in add_prospect_database.sql
 
 CREATE TRIGGER update_agent_jobs_updated_at
   BEFORE UPDATE ON agent_jobs
@@ -486,7 +445,7 @@ $$ LANGUAGE SQL SECURITY DEFINER STABLE;
 
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_organizations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE leads ENABLE ROW LEVEL SECURITY;
+-- prospects RLS is in add_prospect_database.sql
 ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE emails ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
@@ -514,19 +473,7 @@ CREATE POLICY "Users can delete their own memberships"
   ON user_organizations FOR DELETE
   USING (user_id = auth.uid());
 
--- leads: org-scoped CRUD
-CREATE POLICY "Users can view their org leads"
-  ON leads FOR SELECT
-  USING (org_id IN (SELECT get_user_org_ids()));
-CREATE POLICY "Users can insert leads into their org"
-  ON leads FOR INSERT
-  WITH CHECK (org_id IN (SELECT get_user_org_ids()));
-CREATE POLICY "Users can update their org leads"
-  ON leads FOR UPDATE
-  USING (org_id IN (SELECT get_user_org_ids()));
-CREATE POLICY "Users can delete their org leads"
-  ON leads FOR DELETE
-  USING (org_id IN (SELECT get_user_org_ids()));
+-- prospects RLS policies are in add_prospect_database.sql
 
 -- contacts: org-scoped CRUD
 CREATE POLICY "Users can view their org contacts"
@@ -590,15 +537,15 @@ CREATE POLICY "Users can delete their org ICP profiles"
 
 CREATE VIEW leads_with_stats AS
 SELECT
-  l.*,
+  p.*,
   COUNT(DISTINCT c.id) as contact_count,
-  COUNT(DISTINCT e.id) as email_count,
-  MAX(e.sent_at) as last_contacted_at,
-  SUM(CASE WHEN e.replied THEN 1 ELSE 0 END) as reply_count
-FROM leads l
-LEFT JOIN contacts c ON c.lead_id = l.id
-LEFT JOIN emails e ON e.lead_id = l.id
-GROUP BY l.id;
+  COUNT(DISTINCT o.id) as email_count,
+  MAX(o.sent_at) as last_contacted_at,
+  SUM(CASE WHEN o.replied_at IS NOT NULL THEN 1 ELSE 0 END) as reply_count
+FROM prospects p
+LEFT JOIN prospect_contacts c ON c.prospect_id = p.id
+LEFT JOIN outreach_log o ON o.lead_id = p.id
+GROUP BY p.id;
 
 CREATE VIEW pipeline_metrics AS
 SELECT
@@ -608,7 +555,7 @@ SELECT
   COUNT(CASE WHEN icp_fit = 'HIGH' THEN 1 END) as high_fit_count,
   COUNT(CASE WHEN icp_fit = 'MEDIUM' THEN 1 END) as medium_fit_count,
   COUNT(CASE WHEN icp_fit = 'LOW' THEN 1 END) as low_fit_count
-FROM leads
+FROM prospects
 GROUP BY org_id, status;
 
 -- ============================================

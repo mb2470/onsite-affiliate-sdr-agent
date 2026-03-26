@@ -15,13 +15,13 @@ DECLARE
 BEGIN
   SELECT id INTO v_org_id FROM organizations WHERE slug = 'onsite-affiliate';
   LOOP
-    UPDATE leads SET org_id = v_org_id
+    UPDATE prospects SET org_id = v_org_id
     WHERE id IN (
-      SELECT id FROM leads WHERE org_id IS NULL LIMIT 500
+      SELECT id FROM prospects WHERE org_id IS NULL LIMIT 500
     );
     GET DIAGNOSTICS v_rows = ROW_COUNT;
     EXIT WHEN v_rows = 0;
-    RAISE NOTICE 'leads: updated % rows', v_rows;
+    RAISE NOTICE 'prospects: updated % rows', v_rows;
   END LOOP;
 END $$;
 
@@ -80,7 +80,7 @@ BEGIN
 END $$;
 
 -- Verify counts
-SELECT 'leads' AS tbl, count(*) AS total, count(*) FILTER (WHERE org_id IS NULL) AS still_null FROM leads
+SELECT 'prospects' AS tbl, count(*) AS total, count(*) FILTER (WHERE org_id IS NULL) AS still_null FROM prospects
 UNION ALL
 SELECT 'contacts', count(*), count(*) FILTER (WHERE org_id IS NULL) FROM contacts
 UNION ALL

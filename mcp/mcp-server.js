@@ -248,7 +248,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'get_leads': {
-        let query = supabase.from('leads').select('*');
+        let query = supabase.from('prospects').select('*');
         
         if (args.status) {
           query = query.eq('status', args.status);
@@ -281,7 +281,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_lead_details': {
         const { data: lead, error: leadError } = await supabase
-          .from('leads')
+          .from('prospects')
           .select('*')
           .eq('website', args.website)
           .single();
@@ -313,11 +313,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_contacts': {
-        let query = supabase.from('contacts').select('*, leads(website)');
+        let query = supabase.from('contacts').select('*, prospects(website)');
         
         if (args.lead_website) {
           const { data: lead } = await supabase
-            .from('leads')
+            .from('prospects')
             .select('id')
             .eq('website', args.lead_website)
             .single();
@@ -349,7 +349,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_emails': {
         // outreach_log is the single source of truth for all email activity
-        let query = supabase.from('outreach_log').select('*, leads(website)');
+        let query = supabase.from('outreach_log').select('*, prospects(website)');
 
         if (args.status === 'bounced') {
           query = query.eq('bounced', true);
@@ -359,7 +359,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (args.lead_website) {
           const { data: lead } = await supabase
-            .from('leads')
+            .from('prospects')
             .select('id')
             .eq('website', args.lead_website)
             .single();
@@ -433,7 +433,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_activity_log': {
-        let query = supabase.from('activity_log').select('*, leads(website)');
+        let query = supabase.from('activity_log').select('*, prospects(website)');
         
         if (args.activity_type) {
           query = query.eq('activity_type', args.activity_type);
@@ -468,7 +468,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           .single();
         
         const { data: leads, count: totalLeads } = await supabase
-          .from('leads')
+          .from('prospects')
           .select('status, icp_fit', { count: 'exact' });
         
         const statusCounts = {};
@@ -505,7 +505,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Search leads
         if (query.includes('lead') || query.includes('high') || query.includes('medium') || query.includes('low')) {
           const { data: leads } = await supabase
-            .from('leads')
+            .from('prospects')
             .select('*')
             .limit(20);
           results.leads = leads;
@@ -516,7 +516,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const status = query.includes('contacted') ? 'contacted' : 
                         query.includes('enriched') ? 'enriched' : 'qualified';
           const { data } = await supabase
-            .from('leads')
+            .from('prospects')
             .select('*')
             .eq('status', status)
             .limit(20);
@@ -552,7 +552,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (args.research_notes) updates.research_notes = args.research_notes;
         
         const { data, error } = await supabase
-          .from('leads')
+          .from('prospects')
           .update(updates)
           .eq('website', args.website)
           .select()

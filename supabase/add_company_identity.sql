@@ -155,7 +155,7 @@ DO UPDATE SET
   ),
   updated_at = NOW();
 
-UPDATE leads l
+UPDATE prospects l
 SET company_id = ci.id
 FROM company_identity ci
 WHERE l.org_id = ci.org_id
@@ -170,12 +170,12 @@ WHERE s.org_id = ci.org_id
   AND (s.company_id IS NULL OR s.company_id <> ci.id);
 
 UPDATE contacts c
-SET company_id = l.company_id
-FROM leads l
-WHERE c.lead_id = l.id
-  AND (c.company_id IS NULL OR c.company_id <> l.company_id);
+SET company_id = p.company_id
+FROM prospects p
+WHERE c.lead_id = p.id
+  AND (c.company_id IS NULL OR c.company_id <> p.company_id);
 
-CREATE OR REPLACE FUNCTION set_lead_company_id()
+CREATE OR REPLACE FUNCTION set_prospect_company_id()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.company_id := resolve_company_identity_id(NEW.org_id, NEW.website, NEW.website);
@@ -184,11 +184,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS set_lead_company_id_on_write ON leads;
-CREATE TRIGGER set_lead_company_id_on_write
+DROP TRIGGER IF EXISTS set_prospect_company_id_on_write ON prospects;
+CREATE TRIGGER set_prospect_company_id_on_write
   BEFORE INSERT OR UPDATE OF org_id, website
-  ON leads
+  ON prospects
   FOR EACH ROW
-  EXECUTE FUNCTION set_lead_company_id();
+  EXECUTE FUNCTION set_prospect_company_id();
 
 CREATE OR REPLACE FUNCTION set_storeleads_company_id()
 RETURNS TRIGGER AS $$

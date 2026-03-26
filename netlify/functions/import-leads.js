@@ -23,7 +23,7 @@ exports.handler = async (event) => {
     let from = 0;
     let hasMore = true;
     while (hasMore) {
-      const { data } = await supabase.from('leads').select('website').range(from, from + 999);
+      const { data } = await supabase.from('prospects').select('website').range(from, from + 999);
       if (data && data.length > 0) {
         data.forEach(l => existing.add(l.website.toLowerCase().replace(/^www\./, '')));
         from += 1000;
@@ -55,14 +55,14 @@ exports.handler = async (event) => {
       if (lead.services) metadata.services = lead.services;
       if (lead.verticals) metadata.verticals = lead.verticals;
 
-      const { error } = await supabase.from('leads').insert({
+      const { error } = await supabase.from('prospects').insert({
         website: clean,
         status: 'new',
         source: 'csv_import',
         company_name: lead.company_name || lead.organization_name || null,
-        industry: lead.industry || lead.category || lead.verticals || null,
+        industry_primary: lead.industry || lead.category || lead.verticals || null,
         city: lead.city || null,
-        country: lead.country || null,
+        hq_country: lead.country || null,
         sells_d2c: lead.sells_d2c || null,
         org_id: orgId,
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),

@@ -28,7 +28,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 def export_contacts(output_path: str = "high_fit_contacts.csv", limit: int = 100):
     # 1. Get all HIGH icp_fit leads with contacts
     print("📋 Fetching HIGH-fit leads...")
-    leads_result = supabase.table("leads").select("website").eq(
+    leads_result = supabase.table("prospects").select("website").eq(
         "icp_fit", "HIGH"
     ).eq("has_contacts", True).execute()
 

@@ -69,7 +69,7 @@ async function fetchAllLeads() {
 
   while (true) {
     const { data, error } = await supabase
-      .from('leads')
+      .from('prospects')
       .select('id, website, company_name, status')
       .eq('org_id', ORG_ID)
       .range(from, from + pageSize - 1);
@@ -167,7 +167,7 @@ async function main() {
   let updated = 0;
   for (const u of toUpdate) {
     const { error } = await supabase
-      .from('leads')
+      .from('prospects')
       .update({ website: u.website, company_name: u.companyName })
       .eq('id', u.id);
 
@@ -185,7 +185,7 @@ async function main() {
     for (let i = 0; i < deleteIds.length; i += 100) {
       const batch = deleteIds.slice(i, i + 100);
       const { error } = await supabase
-        .from('leads')
+        .from('prospects')
         .delete()
         .in('id', batch);
 

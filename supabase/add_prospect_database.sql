@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS prospects (
   -- ============================================
   website TEXT NOT NULL,                -- normalized by trigger
   website_raw TEXT,                     -- original input preserved by trigger
-  company_name TEXT NOT NULL,
+  company_name TEXT,
   physical_address TEXT,
   city TEXT,
   email TEXT,
@@ -84,15 +84,49 @@ CREATE TABLE IF NOT EXISTS prospects (
   keywords TEXT[],
 
   -- ============================================
+  -- SDR Research Data (migrated from leads table)
+  -- ============================================
+  icp_fit TEXT CHECK (icp_fit IN ('HIGH', 'MEDIUM', 'LOW')),
+  research_notes TEXT,
+  decision_makers TEXT[],
+  pain_points TEXT,
+  talking_points TEXT,
+  fit_reason TEXT,
+
+  -- ============================================
+  -- Catalog / Ecommerce
+  -- ============================================
+  ecommerce_platform TEXT,
+  estimated_products INTEGER,
+  catalog_analyzed_at TIMESTAMPTZ,
+  store_rank BIGINT,
+  estimated_sales TEXT,
+  sells_d2c TEXT,
+
+  -- ============================================
+  -- Contact (denormalized top contact for quick access)
+  -- ============================================
+  has_contacts BOOLEAN DEFAULT FALSE,
+  contact_name TEXT,
+  contact_email TEXT,
+
+  -- ============================================
+  -- Company Identity
+  -- ============================================
+  company_id UUID,
+  state TEXT,
+
+  -- ============================================
   -- Pipeline
   -- ============================================
   status TEXT NOT NULL DEFAULT 'new' CHECK (status IN (
-    'new', 'enriching', 'enriched', 'qualified', 'contacted', 'engaged', 'disqualified'
+    'new', 'enriching', 'enriched', 'qualified', 'contacted', 'engaged', 'replied', 'disqualified'
   )),
   confidence_score NUMERIC(3,2) CHECK (confidence_score >= 0 AND confidence_score <= 1),
   confidence_details JSONB,
   last_enriched_at TIMESTAMPTZ,
   enrichment_source TEXT,
+  source TEXT DEFAULT 'manual',
   source_metadata JSONB,
 
   -- ============================================
@@ -116,6 +150,9 @@ CREATE INDEX idx_prospects_industry ON prospects(org_id, industry_primary);
 CREATE INDEX idx_prospects_confidence ON prospects(org_id, confidence_score DESC);
 CREATE INDEX idx_prospects_parent_id ON prospects(parent_id);
 CREATE INDEX idx_prospects_last_enriched ON prospects(last_enriched_at);
+CREATE INDEX idx_prospects_icp_fit ON prospects(org_id, icp_fit);
+CREATE INDEX idx_prospects_has_contacts ON prospects(org_id, has_contacts);
+CREATE INDEX idx_prospects_company_id ON prospects(company_id);
 
 
 -- ============================================

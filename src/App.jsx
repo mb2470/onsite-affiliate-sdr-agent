@@ -306,13 +306,13 @@ function AuthenticatedApp({ session }) {
 
     // ICP fit counts (enriched leads only)
     try {
-      const { count: enriched } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).in('status', ['enriched', 'contacted']);
-      const { count: unenriched } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('status', 'new');
+      const { count: enriched } = await supabase.from('prospects').select('*', { count: 'exact', head: true }).eq('org_id', orgId).in('status', ['enriched', 'contacted']);
+      const { count: unenriched } = await supabase.from('prospects').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('status', 'new');
       setEnrichedCount(enriched || 0);
       setUnenrichedCount(unenriched || 0);
-      const { count: high } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'HIGH');
-      const { count: medium } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'MEDIUM');
-      const { count: low } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'LOW');
+      const { count: high } = await supabase.from('prospects').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'HIGH');
+      const { count: medium } = await supabase.from('prospects').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'MEDIUM');
+      const { count: low } = await supabase.from('prospects').select('*', { count: 'exact', head: true }).eq('org_id', orgId).eq('icp_fit', 'LOW');
       setIcpCounts({ high: high || 0, medium: medium || 0, low: low || 0 });
     } catch (e) { console.error(e); }
 
@@ -529,7 +529,7 @@ function AuthenticatedApp({ session }) {
       const p = page ?? manualPage;
       
       let query = supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact' })
         .eq('org_id', orgId)
         .in('status', ['enriched', 'contacted', 'replied']);
@@ -829,23 +829,23 @@ function AuthenticatedApp({ session }) {
 
       // Pipeline stats — total contacts and % contacted
       const { count: totalWithContacts } = await supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('has_contacts', true);
       const { count: readyToContact } = await supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('status', 'enriched')
         .eq('has_contacts', true);
       const { count: totalContacted } = await supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('status', 'contacted');
       const { count: totalReplied } = await supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('status', 'replied');
@@ -880,7 +880,7 @@ function AuthenticatedApp({ session }) {
     if (audienceFit.length === 0) { setAudiencePreviewCount(0); return; }
     (async () => {
       const { count } = await supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .in('status', ['enriched', 'contacted', 'replied'])
@@ -897,7 +897,7 @@ function AuthenticatedApp({ session }) {
     try {
       // Fetch all enriched leads matching the selected fits
       const { data: leads } = await supabase
-        .from('leads')
+        .from('prospects')
         .select('*')
         .eq('org_id', orgId)
         .in('status', ['enriched', 'contacted', 'replied'])
@@ -925,10 +925,10 @@ function AuthenticatedApp({ session }) {
             domain,
             '', // linkedincompanypageurl - not stored
             '', // stocksymbol - not stored
-            lead.industry || '',
+            lead.industry_primary_primary || '',
             lead.city || '',
             lead.state || '',
-            lead.country || '',
+            lead.hq_country || '',
             '', // zipcode - not stored
           ].map(v => `"${String(v).replace(/"/g, '""')}"`);
           csvContent += row.join(',') + '\n';
@@ -976,7 +976,7 @@ function AuthenticatedApp({ session }) {
             c.last_name || '',
             c.title || '',
             c.account_name || matchedLead?.company_name || (c.website || '').replace(/^www\./, '').replace(/\.\w+$/, ''),
-            matchedLead?.country || '',
+            matchedLead?.hq_country || '',
             '', // googleaidid - not stored
           ].map(v => `"${String(v).replace(/"/g, '""')}"`);
           csvContent += row.join(',') + '\n';
@@ -1199,7 +1199,7 @@ function AuthenticatedApp({ session }) {
     if (e) { e.stopPropagation(); e.preventDefault(); }
     if (!confirm('Delete this lead? This will also remove its contacts, emails, and outreach history.')) return;
     try {
-      const { error } = await supabase.from('leads').delete().eq('id', leadId).eq('org_id', orgId);
+      const { error } = await supabase.from('prospects').delete().eq('id', leadId).eq('org_id', orgId);
       if (error) throw error;
       // Remove from local state immediately
       setEnrichLeadsList(prev => prev.filter(l => l.id !== leadId));
@@ -1235,9 +1235,9 @@ function AuthenticatedApp({ session }) {
         {lead.status === 'contacted' && <span className="status-badge contacted" style={{ backgroundColor: 'rgba(34,197,94,0.2)', color: '#4ade80' }}>CONTACTED</span>}
         {lead.status === 'replied' && <span className="status-badge contacted" style={{ backgroundColor: 'rgba(36,94,249,0.2)', color: '#245ef9' }}>REPLIED</span>}
         {lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}
-        <CountryBadge country={lead.country} />
+        <CountryBadge country={lead.hq_country} />
       </div>
-      {lead.industry && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry}</div>}
+      {lead.industry_primary && <div style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>{lead.industry_primary}</div>}
       {lead.fit_reason && <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.fit_reason}</div>}
       {!lead.fit_reason && lead.research_notes && (() => {
         try {
@@ -2566,7 +2566,7 @@ function AuthenticatedApp({ session }) {
                       <div>
                         <strong style={{ fontSize: '16px' }}>{selectedLeadForManual.website}</strong>
                         {selectedLeadForManual.icp_fit && <span className={`icp-badge ${selectedLeadForManual.icp_fit.toLowerCase()}`} style={{ marginLeft: '8px' }}>{selectedLeadForManual.icp_fit}</span>}
-                        {selectedLeadForManual.industry && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry}</span>}
+                        {selectedLeadForManual.industry_primary && <span style={{ marginLeft: '12px', opacity: 0.7, fontSize: '13px' }}>{selectedLeadForManual.industry_primary}</span>}
                       </div>
                       <button className="primary-btn" onClick={() => { setManualStep(2); handleFindContacts(); }} style={{ whiteSpace: 'nowrap' }}>Next: Find Contacts →</button>
                     </div>
@@ -2676,7 +2676,7 @@ function AuthenticatedApp({ session }) {
                 <div style={{ maxWidth: '700px', margin: '0 auto', padding: '24px', borderRadius: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)' }}>
                   <div style={{ marginBottom: '20px' }}>
                     <h3 style={{ margin: '0 0 4px 0' }}>{selectedLeadForManual.website}</h3>
-                    <span style={{ opacity: 0.6, fontSize: '13px' }}>{selectedLeadForManual.industry} · {selectedLeadForManual.icp_fit} fit</span>
+                    <span style={{ opacity: 0.6, fontSize: '13px' }}>{selectedLeadForManual.industry_primary} · {selectedLeadForManual.icp_fit} fit</span>
                   </div>
                   {cachedEmailUsed && (
                     <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2814,8 +2814,8 @@ function AuthenticatedApp({ session }) {
                         <td style={{ padding: '10px 12px', fontSize: '13px', fontWeight: 500 }}>{lead.website}</td>
                         <td style={{ padding: '10px 8px' }}><span className={`status-badge ${lead.status}`}>{lead.status}</span></td>
                         <td style={{ padding: '10px 8px' }}>{lead.icp_fit && <span className={`icp-badge ${lead.icp_fit.toLowerCase()}`}>{lead.icp_fit}</span>}</td>
-                        <td style={{ padding: '10px 8px', fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>{lead.industry || '—'}</td>
-                        <td style={{ padding: '10px 8px', fontSize: '12px' }}>{lead.country || '—'}</td>
+                        <td style={{ padding: '10px 8px', fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>{lead.industry_primary || '—'}</td>
+                        <td style={{ padding: '10px 8px', fontSize: '12px' }}>{lead.hq_country || '—'}</td>
                         <td style={{ padding: '10px 8px', textAlign: 'center' }}>
                           {lead.outreach_history.length > 0 ? (
                             <span style={{
@@ -2867,7 +2867,7 @@ function AuthenticatedApp({ session }) {
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                           <span className={`status-badge ${emailDetailLead.status}`}>{emailDetailLead.status}</span>
                           {emailDetailLead.icp_fit && <span className={`icp-badge ${emailDetailLead.icp_fit.toLowerCase()}`}>{emailDetailLead.icp_fit}</span>}
-                          <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{emailDetailLead.industry}</span>
+                          <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{emailDetailLead.industry_primary}</span>
                         </div>
                       </div>
                       <button onClick={() => setEmailDetailLead(null)}

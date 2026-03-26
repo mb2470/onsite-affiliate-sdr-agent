@@ -5,7 +5,7 @@ import { resolveOrgId } from './orgService';
 export const getTotalLeadCount = async (orgId) => {
   const scopedOrgId = await resolveOrgId(orgId);
   const { count, error } = await supabase
-    .from('leads')
+    .from('prospects')
     .select('*', { count: 'exact', head: true })
     .eq('org_id', scopedOrgId);
   if (error) throw error;
@@ -26,14 +26,14 @@ export const searchLeads = async ({
 }) => {
   const scopedOrgId = await resolveOrgId(orgId);
   let query = supabase
-    .from('leads')
+    .from('prospects')
     .select('*', { count: 'exact' })
     .eq('org_id', scopedOrgId);
 
   // Text search
   if (search && search.trim()) {
     query = query.or(
-      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry.ilike.%${search.trim()}%`
+      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry_primary.ilike.%${search.trim()}%`
     );
   }
 
@@ -53,17 +53,17 @@ export const searchLeads = async ({
     query = query.eq('icp_fit', icp);
   }
 
-  // Country filter
+  // Country filter (hq_country is CHAR(2) on prospects)
   if (country !== 'all') {
     if (country === 'US/CA') {
-      query = query.in('country', ['US (assumed)', 'US', 'Canada']);
+      query = query.in('hq_country', ['US', 'CA']);
     } else if (country === 'International') {
-      query = query.not('country', 'in', '("US (assumed)","US","Canada","Unknown")');
-      query = query.not('country', 'is', null);
+      query = query.not('hq_country', 'in', '("US","CA")');
+      query = query.not('hq_country', 'is', null);
     } else if (country === 'Unknown') {
-      query = query.or('country.is.null,country.eq.Unknown');
+      query = query.is('hq_country', null);
     } else {
-      query = query.eq('country', country);
+      query = query.eq('hq_country', country);
     }
   }
 
@@ -85,14 +85,14 @@ export const searchLeads = async ({
 export const searchEnrichedLeads = async ({ orgId, search = '', page = 0, pageSize = 50 }) => {
   const scopedOrgId = await resolveOrgId(orgId);
   let query = supabase
-    .from('leads')
+    .from('prospects')
     .select('*', { count: 'exact' })
     .eq('org_id', scopedOrgId)
     .in('status', ['enriched', 'contacted']);
 
   if (search && search.trim()) {
     query = query.or(
-      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry.ilike.%${search.trim()}%`
+      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry_primary.ilike.%${search.trim()}%`
     );
   }
 
@@ -114,7 +114,7 @@ export const searchEnrichedLeads = async ({ orgId, search = '', page = 0, pageSi
 export const markLeadContacted = async (leadId, orgId) => {
   const scopedOrgId = await resolveOrgId(orgId);
   const { error } = await supabase
-    .from('leads')
+    .from('prospects')
     .update({
       status: 'contacted',
       updated_at: new Date().toISOString()
@@ -136,7 +136,7 @@ export const addLead = async (website, orgId) => {
     .replace(/\/.*$/, '')
     .replace(/[?#].*$/, '');
   const { data, error } = await supabase
-    .from('leads')
+    .from('prospects')
     .insert([{ website: cleanWebsite, source: 'manual', status: 'new', org_id: scopedOrgId }])
     .select();
   
@@ -184,7 +184,7 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
   const existingSet = new Set();
   for (let i = 0; i < websites.length; i += 200) {
     const batch = websites.slice(i, i + 200);
-    const { data } = await supabase.from('leads').select('website').eq('org_id', scopedOrgId).in('website', batch);
+    const { data } = await supabase.from('prospects').select('website').eq('org_id', scopedOrgId).in('website', batch);
     (data || []).forEach(l => existingSet.add(l.website));
   }
 
@@ -206,13 +206,13 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
         source,
         status: 'new',
         company_name: r.company_name || null,
-        industry: r.industry || r.verticals || null,
-        country: r.country || null,
+        industry_primary: r.industry || r.verticals || null,
+        hq_country: r.country || null,
         sells_d2c: r.sells_d2c || null,
         icp_fit: r.icp_fit || null,
-        headquarters: r.headquarters || null,
-        platform: r.platform || null,
-        catalog_size: r.catalog_size || null,
+        physical_address: r.headquarters || null,
+        ecommerce_platform: r.platform || null,
+        estimated_products: r.catalog_size ? parseInt(r.catalog_size, 10) || null : null,
         city: r.city || null,
         state: r.state || null,
         org_id: scopedOrgId,
@@ -227,8 +227,8 @@ export const bulkAddLeads = async (leads, source = 'bulk_add', orgId) => {
   for (let i = 0; i < newRows.length; i += 100) {
     const batch = newRows.slice(i, i + 100);
     const { data, error } = await supabase
-      .from('leads')
-      .upsert(batch, { onConflict: 'website', ignoreDuplicates: true })
+      .from('prospects')
+      .upsert(batch, { onConflict: 'org_id,website', ignoreDuplicates: true })
       .select('website');
 
     if (error) {

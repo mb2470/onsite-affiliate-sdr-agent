@@ -682,7 +682,7 @@ exports.handler = async (event) => {
     if (leadId) {
       const firstContact = outreachRows[0] || {};
 
-      await supabase.from('leads').update({
+      await supabase.from('prospects').update({
         status: 'contacted',
         has_contacts: true,
         contact_name: firstContact.contact_name || null,

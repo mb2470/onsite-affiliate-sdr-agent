@@ -175,7 +175,7 @@ exports.handler = async (event) => {
 
     // Step 6: Update lead if leadId provided
     if (leadId && contacts.length > 0) {
-      await supabase.from('leads').update({
+      await supabase.from('prospects').update({
         has_contacts: true,
         contact_name: `${contacts[0].first_name} ${contacts[0].last_name}`.trim(),
         contact_email: contacts[0].email,

@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient';
 // Get total lead count
 export const getTotalLeadCount = async () => {
   const { count, error } = await supabase
-    .from('leads')
+    .from('prospects')
     .select('*', { count: 'exact', head: true });
   if (error) throw error;
   return count || 0;
@@ -21,13 +21,13 @@ export const searchLeads = async ({
   pageSize = 100
 }) => {
   let query = supabase
-    .from('leads')
+    .from('prospects')
     .select('*', { count: 'exact' });
 
   // Text search
   if (search && search.trim()) {
     query = query.or(
-      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry.ilike.%${search.trim()}%`
+      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry_primary.ilike.%${search.trim()}%`
     );
   }
 
@@ -48,14 +48,14 @@ export const searchLeads = async ({
   // Country filter
   if (country !== 'all') {
     if (country === 'US/CA') {
-      query = query.in('country', ['US (assumed)', 'US', 'Canada']);
+      query = query.in('hq_country', ['US', 'CA']);
     } else if (country === 'International') {
-      query = query.not('country', 'in', '("US (assumed)","US","Canada","Unknown")');
-      query = query.not('country', 'is', null);
+      query = query.not('hq_country', 'in', '("US","CA")');
+      query = query.not('hq_country', 'is', null);
     } else if (country === 'Unknown') {
-      query = query.or('country.is.null,country.eq.Unknown');
+      query = query.is('hq_country', null);
     } else {
-      query = query.eq('country', country);
+      query = query.eq('hq_country', country);
     }
   }
 
@@ -76,13 +76,13 @@ export const searchLeads = async ({
 // Load enriched leads for manual outreach (with ICP sort)
 export const searchEnrichedLeads = async ({ search = '', page = 0, pageSize = 50 }) => {
   let query = supabase
-    .from('leads')
+    .from('prospects')
     .select('*', { count: 'exact' })
     .in('status', ['enriched', 'contacted']);
 
   if (search && search.trim()) {
     query = query.or(
-      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry.ilike.%${search.trim()}%`
+      `website.ilike.%${search.trim()}%,research_notes.ilike.%${search.trim()}%,industry_primary.ilike.%${search.trim()}%`
     );
   }
 
@@ -103,7 +103,7 @@ export const searchEnrichedLeads = async ({ search = '', page = 0, pageSize = 50
 // Update lead status to contacted and record date
 export const markLeadContacted = async (leadId) => {
   const { error } = await supabase
-    .from('leads')
+    .from('prospects')
     .update({
       status: 'contacted',
       updated_at: new Date().toISOString()
@@ -116,7 +116,7 @@ export const markLeadContacted = async (leadId) => {
 // Add single lead
 export const addLead = async (website) => {
   const { data, error } = await supabase
-    .from('leads')
+    .from('prospects')
     .insert([{ website: website.trim(), source: 'manual', status: 'new' }])
     .select();
   
@@ -139,7 +139,7 @@ export const bulkAddLeads = async (leads, source = 'bulk_add') => {
   const existingSet = new Set();
   for (let i = 0; i < websites.length; i += 200) {
     const batch = websites.slice(i, i + 200);
-    const { data } = await supabase.from('leads').select('website').in('website', batch);
+    const { data } = await supabase.from('prospects').select('website').in('website', batch);
     (data || []).forEach(l => existingSet.add(l.website));
   }
 
@@ -149,13 +149,13 @@ export const bulkAddLeads = async (leads, source = 'bulk_add') => {
       website: r.website,
       source,
       status: 'new',
-      industry: r.industry || null,
-      country: r.country || null,
+      industry_primary: r.industry || null,
+      hq_country: r.country || null,
       sells_d2c: r.sells_d2c || null,
       icp_fit: r.icp_fit || null,
-      headquarters: r.headquarters || null,
-      platform: r.platform || null,
-      catalog_size: r.catalog_size || null,
+      physical_address: r.headquarters || null,
+      ecommerce_platform: r.platform || null,
+      estimated_products: r.catalog_size ? parseInt(r.catalog_size, 10) || null : null,
       city: r.city || null,
       state: r.state || null,
     }));
@@ -166,7 +166,7 @@ export const bulkAddLeads = async (leads, source = 'bulk_add') => {
   let added = 0;
   for (let i = 0; i < newRows.length; i += 100) {
     const batch = newRows.slice(i, i + 100);
-    const { error } = await supabase.from('leads').insert(batch);
+    const { error } = await supabase.from('prospects').insert(batch);
     if (error) {
       console.error('Batch insert error:', error);
     } else {

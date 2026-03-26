@@ -255,7 +255,7 @@ exports.handler = async (event) => {
 
           if (count === 0) {
             await supabase
-              .from('leads')
+              .from('prospects')
               .update({ has_contacts: false, contact_name: null, contact_email: null })
               .eq('org_id', orgId)
               .ilike('website', `%${website}%`);
@@ -276,7 +276,7 @@ exports.handler = async (event) => {
 
           if (count === 0) {
             await supabase
-              .from('leads')
+              .from('prospects')
               .update({ status: 'enriched' })
               .eq('org_id', orgId)
               .eq('website', o.website);

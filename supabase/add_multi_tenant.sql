@@ -74,14 +74,18 @@ CREATE INDEX IF NOT EXISTS idx_user_orgs_org_id ON user_organizations(org_id);
 -- ============================================
 -- Using DO blocks for idempotency (safe to re-run).
 
--- 3a. leads
+-- 3a. prospects (was leads)
+-- org_id is already in prospects table definition (add_prospect_database.sql)
+-- This block kept for backwards compat if run against an older schema
 DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'leads' AND column_name = 'org_id'
-  ) THEN
-    ALTER TABLE leads ADD COLUMN org_id UUID REFERENCES organizations(id) ON DELETE CASCADE;
-    CREATE INDEX idx_leads_org_id ON leads(org_id);
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'prospects') THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'prospects' AND column_name = 'org_id'
+    ) THEN
+      ALTER TABLE prospects ADD COLUMN org_id UUID REFERENCES organizations(id) ON DELETE CASCADE;
+      CREATE INDEX IF NOT EXISTS idx_prospects_org_id ON prospects(org_id);
+    END IF;
   END IF;
 END $$;
 
@@ -218,15 +222,15 @@ $$ LANGUAGE SQL SECURITY DEFINER STABLE;
 DROP VIEW IF EXISTS leads_with_stats;
 CREATE VIEW leads_with_stats AS
 SELECT
-  l.*,
+  p.*,
   COUNT(DISTINCT c.id) as contact_count,
-  COUNT(DISTINCT e.id) as email_count,
-  MAX(e.sent_at) as last_contacted_at,
-  SUM(CASE WHEN e.replied THEN 1 ELSE 0 END) as reply_count
-FROM leads l
-LEFT JOIN contacts c ON c.lead_id = l.id
-LEFT JOIN emails e ON e.lead_id = l.id
-GROUP BY l.id;
+  COUNT(DISTINCT o.id) as email_count,
+  MAX(o.sent_at) as last_contacted_at,
+  SUM(CASE WHEN o.replied_at IS NOT NULL THEN 1 ELSE 0 END) as reply_count
+FROM prospects p
+LEFT JOIN prospect_contacts c ON c.prospect_id = p.id
+LEFT JOIN outreach_log o ON o.lead_id = p.id
+GROUP BY p.id;
 
 DROP VIEW IF EXISTS pipeline_metrics;
 CREATE VIEW pipeline_metrics AS
@@ -237,7 +241,7 @@ SELECT
   COUNT(CASE WHEN icp_fit = 'HIGH' THEN 1 END) as high_fit_count,
   COUNT(CASE WHEN icp_fit = 'MEDIUM' THEN 1 END) as medium_fit_count,
   COUNT(CASE WHEN icp_fit = 'LOW' THEN 1 END) as low_fit_count
-FROM leads
+FROM prospects
 GROUP BY org_id, status;
 
 

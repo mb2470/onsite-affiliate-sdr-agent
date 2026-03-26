@@ -47,8 +47,8 @@ exports.handler = async (event, context) => {
 
     // Get leads that StoreLeads couldn't enrich (status = 'new')
     const { data: leads, error } = await supabase
-      .from('leads')
-      .select('id, website, country')
+      .from('prospects')
+      .select('id, website, hq_country')
       .eq('status', 'new')
       .order('created_at', { ascending: true })
       .limit(500);
@@ -103,7 +103,7 @@ exports.handler = async (event, context) => {
 
           // Score ICP using shared config (skip if no ICP profile)
           const { icp_fit, fitReason, factors } = config
-            ? scoreApollo(org, lead.country, config)
+            ? scoreApollo(org, lead.hq_country, config)
             : { icp_fit: null, fitReason: null, factors: 0 };
 
           if (icp_fit === 'HIGH') highCount++;
@@ -115,12 +115,12 @@ exports.handler = async (event, context) => {
             status: 'enriched',
             icp_fit,
             fit_reason: fitReason || null,
-            industry: org.industry || null,
-            country: org.country || lead.country || null,
+            industry_primary: org.industry || null,
+            hq_country: org.country || lead.hq_country || null,
             city: org.city || null,
             state: org.state || null,
-            headquarters: org.raw_address || null,
-            estimated_sales: org.annual_revenue || null,
+            physical_address: org.raw_address || null,
+            estimated_sales: org.annual_revenue ? String(org.annual_revenue) : null,
             research_notes: JSON.stringify({
               source: 'apollo',
               employees: org.estimated_num_employees,
@@ -134,7 +134,7 @@ exports.handler = async (event, context) => {
           };
 
           const { error: updateErr } = await supabase
-            .from('leads')
+            .from('prospects')
             .update(update)
             .eq('id', lead.id);
 

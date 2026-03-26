@@ -686,12 +686,12 @@ async function executeTool(name, input, orgId, authContext = null) {
 
     case 'query_leads': {
       const limit = Math.min(input.limit || 20, 100);
-      let query = supabase.from('leads').select('*', { count: 'exact' });
+      let query = supabase.from('prospects').select('*', { count: 'exact' });
       if (orgId) query = query.eq('org_id', orgId);
 
       if (input.search) {
         query = query.or(
-          `website.ilike.%${input.search}%,research_notes.ilike.%${input.search}%,industry.ilike.%${input.search}%`
+          `website.ilike.%${input.search}%,research_notes.ilike.%${input.search}%,industry_primary.ilike.%${input.search}%`
         );
       }
       if (input.status && input.status !== 'all') query = query.eq('status', input.status);
@@ -712,7 +712,7 @@ async function executeTool(name, input, orgId, authContext = null) {
     case 'query_pipeline': {
       const limit = Math.min(input.limit || 20, 100);
       let query = supabase
-        .from('leads')
+        .from('prospects')
         .select('*', { count: 'exact' })
         .in('status', input.status === 'replied' ? ['replied'] : ['contacted', 'replied']);
       if (orgId) query = query.eq('org_id', orgId);
@@ -771,7 +771,7 @@ async function executeTool(name, input, orgId, authContext = null) {
       // Use individual count queries to avoid Supabase's default 1000-row limit
       // All queries are scoped to org_id for multi-tenant correctness
       const leadsQuery = (extra) => {
-        let q = supabase.from('leads').select('*', { count: 'exact', head: true });
+        let q = supabase.from('prospects').select('*', { count: 'exact', head: true });
         if (orgId) q = q.eq('org_id', orgId);
         return extra ? extra(q) : q;
       };
@@ -882,7 +882,7 @@ async function executeTool(name, input, orgId, authContext = null) {
       const row = { website: input.website.trim(), source: 'chat', status: 'new' };
       if (orgId) row.org_id = orgId;
       const { data, error } = await supabase
-        .from('leads')
+        .from('prospects')
         .insert([row])
         .select();
       if (error) {
@@ -900,7 +900,7 @@ async function executeTool(name, input, orgId, authContext = null) {
       const existingSet = new Set();
       for (let i = 0; i < websites.length; i += 200) {
         const batch = websites.slice(i, i + 200);
-        let q = supabase.from('leads').select('website').in('website', batch);
+        let q = supabase.from('prospects').select('website').in('website', batch);
         if (orgId) q = q.eq('org_id', orgId);
         const { data } = await q;
         (data || []).forEach((l) => existingSet.add(l.website));
@@ -919,7 +919,7 @@ async function executeTool(name, input, orgId, authContext = null) {
       let added = 0;
       for (let i = 0; i < newRows.length; i += 100) {
         const batch = newRows.slice(i, i + 100);
-        const { error } = await supabase.from('leads').insert(batch);
+        const { error } = await supabase.from('prospects').insert(batch);
         if (!error) added += batch.length;
       }
       return { added, skipped: websites.length - added };
@@ -1036,7 +1036,7 @@ async function executeTool(name, input, orgId, authContext = null) {
     }
 
     case 'generate_email': {
-      let genLeadQ = supabase.from('leads').select('*').ilike('website', `%${input.website}%`);
+      let genLeadQ = supabase.from('prospects').select('*').ilike('website', `%${input.website}%`);
       if (orgId) genLeadQ = genLeadQ.eq('org_id', orgId);
       const { data: leadData } = await genLeadQ.limit(1).single();
 
@@ -1085,7 +1085,7 @@ Subject: [subject]
           .map((b) => b.text)
           .join('\n');
 
-        return { email: text, lead: { website: leadData.website, industry: leadData.industry } };
+        return { email: text, lead: { website: leadData.website, industry_primary: leadData.industry_primary } };
       } catch (e) {
         return { error: `Email generation failed: ${e.message}` };
       }
@@ -1093,7 +1093,7 @@ Subject: [subject]
 
     case 'send_email': {
       // Find or create lead ID
-      let sendLeadQ = supabase.from('leads').select('id').ilike('website', `%${input.website}%`);
+      let sendLeadQ = supabase.from('prospects').select('id').ilike('website', `%${input.website}%`);
       if (orgId) sendLeadQ = sendLeadQ.eq('org_id', orgId);
       const { data: leadRow } = await sendLeadQ.limit(1).single();
 
@@ -1173,13 +1173,13 @@ Subject: [subject]
 
     case 'delete_lead': {
       const website = input.website.trim();
-      let delQ = supabase.from('leads').select('id, website, status').ilike('website', `%${website}%`);
+      let delQ = supabase.from('prospects').select('id, website, status').ilike('website', `%${website}%`);
       if (orgId) delQ = delQ.eq('org_id', orgId);
       const { data: lead } = await delQ.limit(1).single();
 
       if (!lead) return { error: `No lead found matching "${website}"` };
 
-      const { error } = await supabase.from('leads').delete().eq('id', lead.id);
+      const { error } = await supabase.from('prospects').delete().eq('id', lead.id);
       if (error) return { error: error.message };
       return { success: true, message: `Deleted lead ${lead.website} and all associated data.` };
     }

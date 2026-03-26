@@ -151,7 +151,7 @@ class AutonomousSDRAgent:
             allowed_fits = self.settings.get('allowed_icp_fits', ['HIGH'])
             
             # Get enriched leads with allowed ICP fits that haven't been processed
-            response = supabase.table('leads').select('*').eq(
+            response = supabase.table('prospects').select('*').eq(
                 'status', 'enriched'
             ).in_('icp_fit', allowed_fits).is_(
                 'agent_processed', 'false'
@@ -354,7 +354,7 @@ TONE: Conversational, direct, no fluff."""
                 )
                 
                 # Mark as processed
-                supabase.table('leads').update({
+                supabase.table('prospects').update({
                     'agent_processed': True,
                     'status': 'no_contacts'
                 }).eq('id', lead['id']).execute()
@@ -401,7 +401,7 @@ TONE: Conversational, direct, no fluff."""
                 time.sleep(2)
             
             # Mark lead as processed
-            supabase.table('leads').update({
+            supabase.table('prospects').update({
                 'agent_processed': True,
                 'status': 'contacted' if emails_created > 0 else 'processed'
             }).eq('id', lead['id']).execute()

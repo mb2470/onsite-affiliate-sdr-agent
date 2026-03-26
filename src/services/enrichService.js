@@ -246,25 +246,23 @@ export const enrichLead = async (lead, orgId) => {
   const update = {
     research_notes: result.research_notes,
     icp_fit: result.icp_fit,
-    industry: result.industry || null,
-    catalog_size: result.catalog_size || null,
+    industry_primary: result.industry || null,
     sells_d2c: result.sells_d2c || null,
-    headquarters: result.headquarters || null,
-    google_shopping: result.google_shopping || null,
+    physical_address: result.headquarters || null,
     fit_reason: result.fit_reason || null,
     decision_makers: result.decision_makers || null,
     pain_points: result.pain_points || null,
-    country: result.country || null,
+    hq_country: result.country || null,
     city: result.city || null,
     state: result.state || null,
-    platform: result.platform || null,
-    product_count: result.product_count || null,
+    ecommerce_platform: result.platform || null,
+    estimated_products: result.product_count || null,
     store_rank: result.store_rank || null,
     estimated_sales: result.estimated_sales || null,
     status: 'enriched',
   };
 
-  const { error } = await supabase.from('leads').update(update).eq('id', lead.id).eq('org_id', scopedOrgId);
+  const { error } = await supabase.from('prospects').update(update).eq('id', lead.id).eq('org_id', scopedOrgId);
   if (error) throw error;
 
   await logActivity(
