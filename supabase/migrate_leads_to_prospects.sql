@@ -197,13 +197,14 @@ BEGIN
       ELSE 'NULL'
     END,
     -- estimated_products (check estimated_products, product_count, and catalog_size)
+    -- catalog_size is TEXT on leads, estimated_products is INTEGER on prospects — cast it
     CASE
-      WHEN has_estimated_products AND has_product_count AND has_catalog_size THEN 'COALESCE(l.estimated_products, l.product_count, l.catalog_size)'
+      WHEN has_estimated_products AND has_product_count AND has_catalog_size THEN 'COALESCE(l.estimated_products, l.product_count, NULLIF(l.catalog_size, '''')::INTEGER)'
       WHEN has_estimated_products AND has_product_count THEN 'COALESCE(l.estimated_products, l.product_count)'
-      WHEN has_estimated_products AND has_catalog_size THEN 'COALESCE(l.estimated_products, l.catalog_size)'
+      WHEN has_estimated_products AND has_catalog_size THEN 'COALESCE(l.estimated_products, NULLIF(l.catalog_size, '''')::INTEGER)'
       WHEN has_estimated_products THEN 'l.estimated_products'
       WHEN has_product_count THEN 'l.product_count'
-      WHEN has_catalog_size THEN 'l.catalog_size'
+      WHEN has_catalog_size THEN 'NULLIF(l.catalog_size, '''')::INTEGER'
       ELSE 'NULL'
     END,
     -- store_rank
