@@ -1876,7 +1876,7 @@ function AuthenticatedApp({ session }) {
                             backgroundColor: 'rgba(255,255,255,0.04)', color: '#f6f6f7', fontFamily: 'inherit', fontSize: '13px',
                           }}
                         />
-                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>StoreLeads catalog size</span>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>Min. product catalog size</span>
                       </div>
                       <div>
                         <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>
@@ -1895,7 +1895,7 @@ function AuthenticatedApp({ session }) {
                             }}
                           />
                         </div>
-                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>StoreLeads est. monthly revenue</span>
+                        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '2px', display: 'block' }}>Est. monthly revenue threshold</span>
                       </div>
                       <div>
                         <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: '4px' }}>

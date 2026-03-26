@@ -354,7 +354,7 @@ const TOOLS = [
   {
     name: 'enrich_lead',
     description:
-      'Trigger AI enrichment for a lead. Uses the enrichment waterfall: StoreLeads → Apollo → Claude AI.',
+      'Trigger AI enrichment for a lead. Uses the enrichment waterfall: Crawl + Claude extraction → Apollo contacts.',
     input_schema: {
       type: 'object',
       properties: {
@@ -851,22 +851,34 @@ async function executeTool(name, input, orgId, authContext = null) {
     }
 
     case 'enrich_lead': {
-      // We call the existing enrichment functions via their Netlify endpoints
+      // Trigger crawl + Claude extraction for a lead
       const website = input.website.trim();
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
 
-      // Step 1: Try StoreLeads
+      // Step 1: Crawl + Extract via prospect-crawl
       try {
-        const slRes = await fetch(
-          `https://${process.env.URL || 'localhost:8888'}/.netlify/functions/storeleads-single?domain=${encodeURIComponent(website)}`
-        );
-        if (slRes.ok) {
-          const slData = await slRes.json();
-          if (slData && slData.store) {
+        // Find the prospect by website
+        const { data: prospect } = await supabase
+          .from('prospects')
+          .select('id')
+          .eq('org_id', orgId)
+          .ilike('website', `%${website}%`)
+          .limit(1)
+          .maybeSingle();
+
+        if (prospect) {
+          const crawlRes = await fetch(`${baseUrl}/.netlify/functions/prospect-crawl`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ org_id: orgId, prospect_id: prospect.id }),
+          });
+          if (crawlRes.ok) {
+            const crawlData = await crawlRes.json();
             return {
               success: true,
-              source: 'storeleads',
-              message: `Enriched ${website} via StoreLeads`,
-              data: slData.store,
+              source: 'crawl',
+              message: `Crawled and extracted firmographics for ${website}`,
+              data: crawlData,
             };
           }
         }
@@ -874,16 +886,13 @@ async function executeTool(name, input, orgId, authContext = null) {
         /* fall through */
       }
 
-      // Step 2: Try Apollo
+      // Step 2: Fallback to Apollo org enrichment
       try {
-        const apRes = await fetch(
-          `https://${process.env.URL || 'localhost:8888'}/.netlify/functions/apollo-enrich-single`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain: website }),
-          }
-        );
+        const apRes = await fetch(`${baseUrl}/.netlify/functions/apollo-enrich-single`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: website }),
+        });
         if (apRes.ok) {
           const apData = await apRes.json();
           if (apData && apData.organization) {
@@ -901,7 +910,7 @@ async function executeTool(name, input, orgId, authContext = null) {
 
       return {
         success: false,
-        message: `Could not enrich ${website} via StoreLeads or Apollo. Try manual enrichment from the Enrich tab.`,
+        message: `Could not enrich ${website}. Ensure the prospect exists and try again.`,
       };
     }
 
@@ -1172,7 +1181,7 @@ You have access to tools that let you:
 - Search and read repository files to answer feature/function questions with evidence
 - Query and search leads, contacts, outreach history, and pipeline data
 - Add new leads (single or bulk)
-- Enrich leads with company data (StoreLeads → Apollo → Claude AI waterfall)
+- Enrich leads with company data (Crawl + Claude extraction → Apollo contacts)
 - Find contacts at a company
 - Generate personalized outreach emails
 - Send emails via Gmail

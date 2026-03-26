@@ -85,7 +85,6 @@ const DEFAULT_GEOGRAPHY = ['US', 'CA', 'UNITED STATES', 'CANADA'];
 // Default scoring thresholds
 const DEFAULT_THRESHOLDS = {
   min_product_count: 250,
-  min_monthly_sales: 1000000,    // $1M/mo in dollars
   min_annual_revenue: 12000000,  // $12M/yr
   min_employee_count: 50,
 };
@@ -106,10 +105,8 @@ function getThreshold(key) {
 
 function getTargetCategories() {
   if (_icpContext && _icpContext.industries && _icpContext.industries.length > 0) {
-    // Build category keywords from ICP profile industries
     const keywords = [];
     for (const industry of _icpContext.industries) {
-      // Split on common separators and add lowercase keywords
       const parts = industry.toLowerCase().split(/[&,/]+/).map(s => s.trim()).filter(Boolean);
       keywords.push(...parts);
     }
@@ -124,7 +121,6 @@ function getTargetGeography() {
     for (const geo of _icpContext.geography) {
       const g = geo.toUpperCase();
       geoKeywords.push(g);
-      // Expand common shorthand
       if (g.includes('NORTH AMERICA')) { geoKeywords.push('US', 'CA', 'UNITED STATES', 'CANADA'); }
       if (g.includes('EMEA')) { geoKeywords.push('UK', 'UNITED KINGDOM', 'GERMANY', 'FRANCE', 'SPAIN', 'ITALY', 'NETHERLANDS'); }
       if (g.includes('GLOBAL')) { return null; } // null = accept all
@@ -189,7 +185,7 @@ async function tryApollo(domain) {
   }
 }
 
-// ═══ STEP 3: Fall back to Claude AI ═══
+// ═══ STEP 2: Fall back to Claude AI ═══
 async function tryClaude(lead) {
   const response = await fetch('/.netlify/functions/claude', {
     method: 'POST',
@@ -234,14 +230,14 @@ export const enrichLead = async (lead, orgId) => {
   result = await tryApollo(domain);
   if (result) {
     source = 'apollo';
-    console.log(`✅ ${domain} enriched via Apollo → ${result.icp_fit}`);
+    console.log(`${domain} enriched via Apollo → ${result.icp_fit}`);
   }
 
   // Step 2: Claude AI (expensive, most thorough)
   if (!result) {
     result = await tryClaude(lead);
     source = 'claude';
-    console.log(`✅ ${domain} enriched via Claude AI → ${result.icp_fit}`);
+    console.log(`${domain} enriched via Claude AI → ${result.icp_fit}`);
   }
 
   const scopedOrgId = await resolveOrgId(orgId);
@@ -296,9 +292,9 @@ export const enrichLeads = async (leadIds, allLeads, onProgress, orgId) => {
       results.success.push(enriched);
       if (onProgress) onProgress(i + 1, leadIds.length, lead.website, 'success', enriched);
     } catch (error) {
-      console.error(`❌ Error enriching ${lead.website}:`, error);
+      console.error(`Error enriching ${lead.website}:`, error);
       results.failed.push({ lead, error: error.message });
-      
+
       await logActivity(
         'lead_enriched',
         leadId,
@@ -306,7 +302,7 @@ export const enrichLeads = async (leadIds, allLeads, onProgress, orgId) => {
         'failed',
         await resolveOrgId(orgId)
       );
-      
+
       if (onProgress) onProgress(i + 1, leadIds.length, lead.website, 'failed', null);
     }
 
