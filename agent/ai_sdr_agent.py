@@ -1236,24 +1236,23 @@ class AISDRAgent:
                        f"Apollo BLOCKED {contact['email']}: {apollo_result['apollo_status']}")
             return 'failed'
 
-        # ── Step 2: ELV secondary verification (if not Apollo-verified) ──
+        # ── Step 2: ELV final verification (ALWAYS required before send) ──
         if apollo_result['action'] == 'send':
-            print(f"  ✅ Apollo verified — skipping ELV")
-            self._log('email_verified', lead['id'],
-                       f"Apollo verified {contact['email']}: {apollo_result['apollo_status']}")
+            print(f"  ✅ Apollo verified — running final ELV check")
         else:
-            # extrapolated, catch-all, unknown — fall through to ELV
-            print(f"  🔶 Apollo: {apollo_result['apollo_status']} — routing to ELV")
-            verification = verify_email(contact['email'])
-            if not verification['safe']:
-                print(f"  🚫 ELV failed verification: {verification['status']}")
-                all_emailed.add(contact['email'].lower())
-                return 'failed'
+            print(f"  🔶 Apollo: {apollo_result['apollo_status']} — running ELV verification")
 
-            # Log fresh ELV verifications
-            if not verification.get('cached') and verification['status'] not in ('skipped', 'error'):
-                self._log('email_verified', lead['id'],
-                           f"Apollo={apollo_result['apollo_status']}, ELV={verification['status']} for {contact['email']}")
+        verification = verify_email(contact['email'])
+        if not verification['safe']:
+            print(f"  🚫 ELV final verification failed: {verification['status']}")
+            all_emailed.add(contact['email'].lower())
+            self._log('email_verified', lead['id'],
+                       f"ELV BLOCKED {contact['email']}: Apollo={apollo_result['apollo_status']}, ELV={verification['status']}")
+            return 'failed'
+        print(f"  ✅ ELV verified: {verification['status']}")
+
+        self._log('email_verified', lead['id'],
+                   f"Verified {contact['email']}: Apollo={apollo_result['apollo_status']}, ELV={verification['status']}")
 
         # Generate email
         try:
@@ -1865,7 +1864,7 @@ class AISDRAgent:
         print(f"  👤 {contact['name']} — {contact['title']} (score: {contact['score']})")
         print(f"  📧 {contact['email']}")
 
-        # Apollo email verification
+        # ── Step 1: Apollo email verification ──────────────────
         email_domain = contact['email'].split('@')[1] if '@' in contact['email'] else ''
         apollo_result = verify_via_apollo(
             contact['email'],
@@ -1880,16 +1879,21 @@ class AISDRAgent:
             self._log('email_verified', summary=f"Apollo BLOCKED {contact['email']}: {apollo_result['apollo_status']}")
             return 'failed'
 
-        # ELV secondary verification (if not Apollo-verified)
+        # ── Step 2: ELV final verification (ALWAYS required before send) ──
         if apollo_result['action'] == 'send':
-            print(f"  ✅ Apollo verified — skipping ELV")
+            print(f"  ✅ Apollo verified — running final ELV check")
         else:
-            print(f"  🔶 Apollo: {apollo_result['apollo_status']} — routing to ELV")
-            verification = verify_email(contact['email'])
-            if not verification['safe']:
-                print(f"  🚫 ELV failed verification: {verification['status']}")
-                all_emailed.add(contact['email'].lower())
-                return 'failed'
+            print(f"  🔶 Apollo: {apollo_result['apollo_status']} — running ELV verification")
+
+        verification = verify_email(contact['email'])
+        if not verification['safe']:
+            print(f"  🚫 ELV final verification failed: {verification['status']}")
+            all_emailed.add(contact['email'].lower())
+            self._log('email_verified',
+                       prospect_id=prospect['id'],
+                       summary=f"ELV BLOCKED {contact['email']}: Apollo={apollo_result['apollo_status']}, ELV={verification['status']}")
+            return 'failed'
+        print(f"  ✅ ELV verified: {verification['status']}")
 
         # Generate email with rich prospect data
         try:
@@ -2009,24 +2013,24 @@ class AISDRAgent:
 
         org_id = self._resolve_org_id()
 
-        # Query qualified prospects with high confidence
+        # Query gold-enriched prospects (high ICP fit with Apollo contacts discovered)
         prospects_result = supabase.table("prospects").select("*").eq(
             "org_id", org_id
-        ).eq("status", "qualified").gte(
-            "confidence_score", 0.7
-        ).order("revenue_annual", desc=True, nullsfirst=False).limit(50).execute()
+        ).eq("enrichment_status", "gold_enriched").in_(
+            "status", ["qualified", "enriched"]
+        ).order("icp_fit_score", desc=True, nullsfirst=False).limit(50).execute()
 
         # Also include contacted prospects (may have un-emailed contacts)
         contacted_result = supabase.table("prospects").select("*").eq(
             "org_id", org_id
-        ).eq("status", "contacted").gte(
-            "confidence_score", 0.7
+        ).eq("enrichment_status", "gold_enriched").eq(
+            "status", "contacted"
         ).order("created_at", desc=False).limit(50).execute()
 
         all_prospects = (prospects_result.data or []) + (contacted_result.data or [])
 
         if not all_prospects:
-            print("📭 No qualified prospects ready.")
+            print("📭 No gold-enriched prospects ready. Run the pipeline: Scout → Crawl → Analyze → Score → Gold Enrich")
             return 0
 
         n_qualified = len(prospects_result.data or [])
@@ -2196,6 +2200,30 @@ class AISDRAgent:
                 "*", count="exact", head=True
             ).eq("org_id", org_id).eq("status", status).execute().count or 0
             print(f"  {status:15s} {cnt}")
+
+        # Pipeline stage counts
+        print(f"\n  {'─' * 40}")
+        print("  Pipeline stages:")
+        for stage_field, stage_values in [
+            ("crawl_status", ["pending", "crawled", "failed"]),
+            ("analysis_status", ["pending", "analyzed", "failed"]),
+            ("enrichment_status", ["pending", "ready_for_gold", "gold_enriched"]),
+        ]:
+            for val in stage_values:
+                cnt = supabase.table("prospects").select(
+                    "*", count="exact", head=True
+                ).eq("org_id", org_id).eq(stage_field, val).execute().count or 0
+                if cnt > 0:
+                    print(f"    {stage_field}={val:20s} {cnt}")
+
+        # ICP fit breakdown
+        print(f"\n  ICP fit:")
+        for fit in ['HIGH', 'MEDIUM', 'LOW']:
+            cnt = supabase.table("prospects").select(
+                "*", count="exact", head=True
+            ).eq("org_id", org_id).eq("icp_fit", fit).execute().count or 0
+            if cnt > 0:
+                print(f"    {fit:10s} {cnt}")
 
         # Average confidence
         try:
