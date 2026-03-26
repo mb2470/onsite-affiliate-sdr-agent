@@ -5,7 +5,7 @@ import ProspectPipeline from './ProspectPipeline';
 import Login from './Login';
 import PublicIcpIntake from './PublicIcpIntake';
 import { supabase } from './supabaseClient';
-import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
+import { getTotalLeadCount, searchLeads, searchEnrichedLeads, logActivity } from './services/leadService';
 import { enrichLeads, setIcpContext } from './services/enrichService';
 import { generateEmail, setEmailIcpContext, getCachedEmail, personalizeEmail } from './services/emailService';
 import { findContacts, verifyContactEmails } from './services/contactService';
@@ -131,7 +131,7 @@ function AuthenticatedApp({ session }) {
   const [orgId, setOrgId] = useState(null);
 
   // Global state
-  const [activeView, setActiveView] = useState('add');
+  const [activeView, setActiveView] = useState('chat');
   const [totalLeadCount, setTotalLeadCount] = useState(0);
   const [enrichedCount, setEnrichedCount] = useState(0);
   const [unenrichedCount, setUnenrichedCount] = useState(0);
@@ -146,11 +146,6 @@ function AuthenticatedApp({ session }) {
   const [activityLog, setActivityLog] = useState([]);
 
   // Add leads state
-  const [newWebsite, setNewWebsite] = useState('');
-  const [bulkWebsites, setBulkWebsites] = useState('');
-  const [isUploading, setIsUploading] = useState(false);
-  const [addTab, setAddTab] = useState('single');
-  const [autoEnrich, setAutoEnrich] = useState(false);
 
   // Enrich page state
   const [enrichLeadsList, setEnrichLeadsList] = useState([]);
@@ -780,117 +775,6 @@ function AuthenticatedApp({ session }) {
     setCachedEmailUsed(false);
     await loadGlobalData();
     await loadManualLeads();
-  };
-
-  // ═══════════════════════════════════════════
-  // ADD LEADS
-  // ═══════════════════════════════════════════
-
-  const handleAddSingle = async () => {
-    if (!newWebsite.trim()) return;
-    try {
-      await addLead(newWebsite, orgId);
-      setNewWebsite('');
-      const count = await getTotalLeadCount(orgId);
-      setTotalLeadCount(count);
-      loadEnrichLeads();
-    } catch (e) { alert(e.message); }
-  };
-
-  const handleBulkAdd = async () => {
-    const leads = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w).map(line => {
-      // Support "company_name: website" format
-      const colonMatch = line.match(/^(.+?):\s+(\S+\.\S+)$/);
-      if (colonMatch) {
-        return { company_name: colonMatch[1].trim(), website: colonMatch[2].trim() };
-      }
-      return { website: line };
-    });
-    if (!leads.length) return;
-    try {
-      const { added, skipped } = await bulkAddLeads(leads, 'bulk_add', orgId);
-      setBulkWebsites('');
-      const count = await getTotalLeadCount(orgId);
-      setTotalLeadCount(count);
-      loadEnrichLeads();
-      alert(`✅ Added ${added} leads. Skipped ${skipped} duplicates.`);
-    } catch (e) { alert(e.message); }
-  };
-
-  const handleCSVUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const lines = e.target.result.split('\n').filter(l => l.trim());
-        if (lines.length < 2) { alert('No data found in CSV'); setIsUploading(false); return; }
-
-        // Parse header
-        const headerLine = lines[0];
-        const headers = headerLine.split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
-
-        // Map common column name variations
-        const colMap = {
-          'website': ['website', 'domain', 'url', 'site', 'website_url'],
-          'company_name': ['company_name', 'company', 'organization_name', 'org_name', 'name', 'business_name'],
-          'industry': ['industry', 'vertical', 'category', 'niche'],
-          'country': ['country', 'location', 'region'],
-          'sells_d2c': ['sells_d2c', 'selss_d2c', 'd2c', 'dtc', 'sells_dtc'],
-          'icp_fit': ['icp_fit', 'icp', 'fit', 'score'],
-          'headquarters': ['headquarters', 'hq'],
-          'platform': ['platform', 'ecommerce_platform'],
-          'catalog_size': ['catalog_size', 'products', 'product_count'],
-          'city': ['city'],
-          'state': ['state', 'province'],
-          'email': ['email', 'email_address', 'contact_email'],
-          'address': ['address', 'street_address', 'location_address'],
-          'phone': ['phone', 'phone_number', 'telephone'],
-          'facebook_url': ['facebook_url', 'facebook', 'fb_url'],
-          'linkedin_url': ['linkedin_url', 'linkedin', 'li_url'],
-          'services': ['services', 'service'],
-          'verticals': ['verticals'],
-        };
-
-        // Find column indices
-        const colIdx = {};
-        for (const [field, aliases] of Object.entries(colMap)) {
-          const idx = headers.findIndex(h => aliases.includes(h));
-          if (idx !== -1) colIdx[field] = idx;
-        }
-
-        if (!('website' in colIdx)) { alert('No "website" column found in CSV'); setIsUploading(false); return; }
-
-        // Parse rows
-        const leads = [];
-        for (let i = 1; i < lines.length; i++) {
-          // Handle quoted CSV values
-          const row = lines[i].match(/(".*?"|[^",]+|(?<=,)(?=,))/g)?.map(v => v.replace(/^"|"$/g, '').trim()) || lines[i].split(',').map(v => v.trim());
-
-          const website = (row[colIdx.website] || '').toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/.*$/, '').trim();
-          if (!website || !website.includes('.')) continue;
-
-          const lead = { website };
-          for (const [field, idx] of Object.entries(colIdx)) {
-            if (field !== 'website' && row[idx]) {
-              lead[field] = row[idx].trim();
-            }
-          }
-          leads.push(lead);
-        }
-
-        if (!leads.length) { alert('No valid websites found'); setIsUploading(false); return; }
-
-        const { added, skipped } = await bulkAddLeads(leads, 'csv_upload', orgId);
-        const count = await getTotalLeadCount(orgId);
-        setTotalLeadCount(count);
-        loadEnrichLeads();
-        alert(`✅ Imported ${added} leads. Skipped ${skipped} duplicates.`);
-      } catch (e) { alert(e.message); }
-      setIsUploading(false);
-    };
-    reader.readAsText(file);
   };
 
   // ═══════════════════════════════════════════
@@ -1552,10 +1436,9 @@ function AuthenticatedApp({ session }) {
             {[
               { key: 'chat', label: 'Chat', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> },
               { key: 'icp', label: 'ICP Setup', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> },
-              { key: 'add', label: 'Add Leads', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg> },
-              { key: 'pipeline', label: 'Pipeline', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> },
               { key: 'prospects', label: 'Prospects', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> },
-              { key: 'enrich', label: 'Enrich Leads', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
+              { key: 'enrich', label: 'Lead Gen', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> },
+              { key: 'pipeline', label: 'Pipeline', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> },
               { key: 'agent', label: 'Manage Agent', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> },
               { key: 'manual', label: 'Manual Outreach', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> },
               { key: 'audience', label: 'Create Audiences', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> },
@@ -2518,126 +2401,7 @@ function AuthenticatedApp({ session }) {
             </div>
           )}
 
-          {/* ═══ ADD LEADS ═══ */}
-          {activeView === 'add' && (
-            <div className="view-container">
-              <h2>+ Add Leads</h2>
-
-              {/* Tab Bar */}
-              <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '5px', marginBottom: '24px' }}>
-                {[
-                  { key: 'single', icon: '🌐', label: 'Single Website' },
-                  { key: 'bulk', icon: '📋', label: 'Bulk Add' },
-                  { key: 'csv', icon: '📄', label: 'Import CSV' },
-                ].map(t => (
-                  <button key={t.key} onClick={() => setAddTab(t.key)}
-                    style={{
-                      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                      padding: '12px 16px', borderRadius: '10px', border: 'none',
-                      background: addTab === t.key ? 'rgba(144,21,237,0.15)' : 'transparent',
-                      color: addTab === t.key ? '#c6beee' : 'rgba(255,255,255,0.45)',
-                      fontFamily: 'inherit', fontSize: '14px', fontWeight: addTab === t.key ? 600 : 500,
-                      cursor: 'pointer', transition: 'all 0.2s',
-                      boxShadow: addTab === t.key ? '0 0 0 1px rgba(144,21,237,0.25)' : 'none',
-                    }}>
-                    <span>{t.icon}</span> {t.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* ── Single Website ── */}
-              {addTab === 'single' && (
-                <div className="add-method-card" style={{ maxWidth: '600px' }}>
-                  <h3>Add a single website</h3>
-                  <p>Enter a domain to add it to your pipeline.</p>
-                  <div className="input-group">
-                    <input type="text" placeholder="e.g. allbirds.com" value={newWebsite}
-                      onChange={(e) => setNewWebsite(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleAddSingle()} />
-                    <button onClick={handleAddSingle} className="primary-btn" disabled={!newWebsite.trim()}>➕ Add Lead</button>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <div onClick={() => setAutoEnrich(!autoEnrich)}
-                      style={{ width: '40px', height: '22px', borderRadius: '11px', background: autoEnrich ? 'rgba(144,21,237,0.6)' : 'rgba(255,255,255,0.12)', position: 'relative', cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}>
-                      <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'white', position: 'absolute', top: '3px', left: autoEnrich ? '21px' : '3px', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-                    </div>
-                    <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>
-                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — runs Apollo → Claude waterfall + contact matching
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* ── Bulk Add ── */}
-              {addTab === 'bulk' && (
-                <div className="add-method-card" style={{ maxWidth: '600px' }}>
-                  <h3>Add multiple websites</h3>
-                  <p>Paste one domain per line. Duplicates are automatically skipped.</p>
-                  <textarea placeholder={"allbirds.com\naway.com\nbrookinen.com\noutdoorvoices.com\nparachutehome.com"}
-                    value={bulkWebsites} onChange={(e) => setBulkWebsites(e.target.value)}
-                    style={{ minHeight: '180px', lineHeight: '1.7' }} />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px' }}>
-                    <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.35)' }}>
-                      {bulkWebsites.split('\n').filter(w => w.trim()).length > 0
-                        ? `${bulkWebsites.split('\n').filter(w => w.trim()).length} domain(s) ready`
-                        : 'No domains entered'}
-                    </span>
-                    <button onClick={handleBulkAdd} className="primary-btn"
-                      disabled={bulkWebsites.split('\n').filter(w => w.trim()).length === 0}>
-                      ➕ Add {bulkWebsites.split('\n').filter(w => w.trim()).length} Lead{bulkWebsites.split('\n').filter(w => w.trim()).length !== 1 ? 's' : ''}
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <div onClick={() => setAutoEnrich(!autoEnrich)}
-                      style={{ width: '40px', height: '22px', borderRadius: '11px', background: autoEnrich ? 'rgba(144,21,237,0.6)' : 'rgba(255,255,255,0.12)', position: 'relative', cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}>
-                      <div style={{ width: '16px', height: '16px', borderRadius: '50%', background: 'white', position: 'absolute', top: '3px', left: autoEnrich ? '21px' : '3px', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-                    </div>
-                    <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)' }}>
-                      <strong style={{ color: 'rgba(255,255,255,0.8)' }}>Auto-enrich on add</strong> — waterfall enrichment runs for each domain after import
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* ── CSV Import ── */}
-              {addTab === 'csv' && (
-                <div className="add-method-card" style={{ maxWidth: '600px' }}>
-                  <h3>Import from CSV</h3>
-                  <p>Upload a .csv file with a <span style={{ color: '#c6beee', fontWeight: 600 }}>website</span> column. Additional columns are mapped automatically.</p>
-                  <label style={{ display: 'block', cursor: 'pointer' }}>
-                    <div style={{ border: '2px dashed rgba(255,255,255,0.1)', borderRadius: '14px', padding: '48px 32px', textAlign: 'center', transition: 'all 0.2s', background: 'rgba(0,0,0,0.15)' }}>
-                      <div style={{ fontSize: '40px', marginBottom: '12px', opacity: 0.7 }}>📄</div>
-                      <div style={{ fontSize: '15px', fontWeight: 500, color: 'rgba(255,255,255,0.6)', marginBottom: '6px' }}>
-                        {isUploading ? '⏳ Uploading...' : 'Drop CSV here or click to browse'}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginBottom: '16px' }}>Accepts .csv files</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'center' }}>
-                        {[
-                          { name: 'website', required: true }, { name: 'industry' }, { name: 'country' },
-                          { name: 'sells_d2c' }, { name: 'icp_fit' }, { name: 'platform' },
-                          { name: 'city' }, { name: 'state' }, { name: 'catalog_size' },
-                        ].map(col => (
-                          <span key={col.name} style={{
-                            padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontFamily: 'JetBrains Mono, monospace',
-                            background: col.required ? 'rgba(144,21,237,0.15)' : 'rgba(255,255,255,0.06)',
-                            color: col.required ? '#c6beee' : 'rgba(255,255,255,0.4)',
-                            border: col.required ? '1px solid rgba(144,21,237,0.2)' : 'none',
-                          }}>{col.name}{col.required ? ' *' : ''}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <input type="file" accept=".csv" onChange={handleCSVUpload} disabled={isUploading} style={{ display: 'none' }} />
-                  </label>
-                  <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.25)', marginTop: '12px', lineHeight: 1.5 }}>
-                    Column names are auto-detected (supports variations like <code style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>domain</code>, <code style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>url</code>, <code style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>site</code> for website). Existing domains are skipped.
-                  </div>
-                </div>
-              )}
-
-            </div>
-          )}
-
-          {/* ═══ ENRICH LEADS ═══ */}
+          {/* ═══ LEAD GEN ═══ */}
           {activeView === 'enrich' && (
             <div className="view-container">
               {/* Enrichment result modal */}
@@ -2701,7 +2465,10 @@ function AuthenticatedApp({ session }) {
               )}
 
               <div className="view-header">
-                <h2>🔬 Enrich Leads with AI</h2>
+                <h2>Lead Gen</h2>
+                <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', marginBottom: '16px' }}>
+                  Enrich scored prospects with contact data from Apollo and other providers to generate leads.
+                </p>
                 <div className="view-actions">
                   <button onClick={selectAllOnPage} className="secondary-btn">
                     Select All on Page ({enrichLeadsList.length})
@@ -3446,7 +3213,7 @@ function AuthenticatedApp({ session }) {
                     <div className="help-step-num">3</div>
                     <div>
                       <h4>Enrich Your Leads</h4>
-                      <p>Navigate to <strong>Enrich Leads</strong> to run AI-powered research. The system scrapes each brand's website, identifies key decision-makers, finds verified contact emails, and scores them against your ICP.</p>
+                      <p>Navigate to <strong>Lead Gen</strong> to enrich scored prospects with contact data. The system finds decision-makers, verified contact emails, and scores them against your ICP buyer personas.</p>
                     </div>
                   </div>
                   <div className="help-step">

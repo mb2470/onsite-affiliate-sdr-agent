@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
-import { getProspects, getProspectStats, getProspectWithRelations } from './services/prospectService';
+import { getProspects, getProspectStats, getProspectWithRelations, addProspect, bulkAddProspects, getTotalProspectCount } from './services/prospectService';
 
 export default function ProspectPipeline({ orgId }) {
   const [prospects, setProspects] = useState([]);
@@ -9,6 +9,14 @@ export default function ProspectPipeline({ orgId }) {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 50;
+
+  // Upload state
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadTab, setUploadTab] = useState('single');
+  const [newWebsite, setNewWebsite] = useState('');
+  const [bulkWebsites, setBulkWebsites] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState('');
@@ -27,6 +35,103 @@ export default function ProspectPipeline({ orgId }) {
   const [reenrichLoading, setReenrichLoading] = useState(false);
   const [reenrichResult, setReenrichResult] = useState(null);
   const [reenrichError, setReenrichError] = useState('');
+
+  // Upload handlers
+  const handleAddSingle = async () => {
+    if (!newWebsite.trim()) return;
+    setIsUploading(true);
+    try {
+      await addProspect(newWebsite, orgId);
+      setNewWebsite('');
+      setUploadResult({ added: 1, skipped: 0 });
+      loadProspects();
+      loadStats();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleBulkAdd = async () => {
+    const items = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w).map(line => {
+      const colonMatch = line.match(/^(.+?):\s+(\S+\.\S+)$/);
+      if (colonMatch) {
+        return { company_name: colonMatch[1].trim(), website: colonMatch[2].trim() };
+      }
+      return { website: line };
+    });
+    if (!items.length) return;
+    setIsUploading(true);
+    try {
+      const result = await bulkAddProspects(items, 'bulk_add', orgId);
+      setBulkWebsites('');
+      setUploadResult(result);
+      loadProspects();
+      loadStats();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleCSVUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const lines = e.target.result.split('\n').filter(l => l.trim());
+        if (lines.length < 2) { alert('No data found in CSV'); setIsUploading(false); return; }
+
+        const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+        const colMap = {
+          'website': ['website', 'domain', 'url', 'site', 'website_url'],
+          'company_name': ['company_name', 'company', 'organization_name', 'org_name', 'name', 'business_name'],
+          'industry': ['industry', 'vertical', 'category', 'niche'],
+          'country': ['country', 'location', 'region'],
+          'sells_d2c': ['sells_d2c', 'd2c', 'dtc', 'sells_dtc'],
+          'city': ['city'],
+          'platform': ['platform', 'ecommerce_platform'],
+          'employee_range': ['employee_range', 'employees', 'employee_count', 'company_size'],
+        };
+
+        const colIdx = {};
+        for (const [field, aliases] of Object.entries(colMap)) {
+          const idx = headers.findIndex(h => aliases.includes(h));
+          if (idx !== -1) colIdx[field] = idx;
+        }
+
+        if (!('website' in colIdx)) { alert('No "website" column found in CSV'); setIsUploading(false); return; }
+
+        const prospects = [];
+        for (let i = 1; i < lines.length; i++) {
+          const row = lines[i].match(/(".*?"|[^",]+|(?<=,)(?=,))/g)?.map(v => v.replace(/^"|"$/g, '').trim()) || lines[i].split(',').map(v => v.trim());
+          const website = (row[colIdx.website] || '').toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/.*$/, '').trim();
+          if (!website || !website.includes('.')) continue;
+
+          const prospect = { website };
+          for (const [field, idx] of Object.entries(colIdx)) {
+            if (field !== 'website' && row[idx]) {
+              prospect[field] = row[idx].trim();
+            }
+          }
+          prospects.push(prospect);
+        }
+
+        if (!prospects.length) { alert('No valid websites found'); setIsUploading(false); return; }
+
+        const result = await bulkAddProspects(prospects, 'csv_upload', orgId);
+        setUploadResult(result);
+        loadProspects();
+        loadStats();
+      } catch (err) { alert(err.message); }
+      setIsUploading(false);
+    };
+    reader.readAsText(file);
+  };
 
   const loadStats = useCallback(async () => {
     if (!orgId) return;
@@ -163,7 +268,131 @@ export default function ProspectPipeline({ orgId }) {
 
   return (
     <div>
-      <h2>Prospect Pipeline</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <h2 style={{ margin: 0 }}>Prospects</h2>
+        <button
+          onClick={() => { setShowUpload(!showUpload); setUploadResult(null); }}
+          style={{
+            padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+            border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+            background: showUpload ? 'rgba(255,255,255,0.08)' : 'linear-gradient(135deg, #9015ed, #245ef9)',
+            color: '#fff',
+          }}
+        >
+          {showUpload ? 'Close' : '+ Add Prospects'}
+        </button>
+      </div>
+
+      {/* Upload Panel */}
+      {showUpload && (
+        <div style={{
+          background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+          borderRadius: '12px', padding: '20px', marginBottom: '16px',
+        }}>
+          {/* Upload Tabs */}
+          <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.2)', borderRadius: '10px', padding: '4px', marginBottom: '16px' }}>
+            {[
+              { key: 'single', label: 'Single Website' },
+              { key: 'bulk', label: 'Bulk Add' },
+              { key: 'csv', label: 'Import CSV' },
+            ].map(t => (
+              <button key={t.key} onClick={() => setUploadTab(t.key)}
+                style={{
+                  flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                  border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                  background: uploadTab === t.key ? 'rgba(144,21,237,0.2)' : 'transparent',
+                  color: uploadTab === t.key ? '#c6beee' : 'rgba(255,255,255,0.4)',
+                }}
+              >{t.label}</button>
+            ))}
+          </div>
+
+          {/* Single */}
+          {uploadTab === 'single' && (
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                type="text" placeholder="e.g. allbirds.com" value={newWebsite}
+                onChange={(e) => setNewWebsite(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddSingle()}
+                className="search-input" style={{ flex: 1 }}
+              />
+              <button onClick={handleAddSingle} disabled={!newWebsite.trim() || isUploading}
+                style={{
+                  padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+                  border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                  background: 'linear-gradient(135deg, #9015ed, #245ef9)', color: '#fff',
+                  opacity: (!newWebsite.trim() || isUploading) ? 0.5 : 1,
+                }}
+              >{isUploading ? 'Adding...' : 'Add Prospect'}</button>
+            </div>
+          )}
+
+          {/* Bulk */}
+          {uploadTab === 'bulk' && (
+            <div>
+              <textarea
+                placeholder={'Paste one per line:\nallbirds.com\npeanut: teampeanut.com\naway.com'}
+                value={bulkWebsites}
+                onChange={(e) => setBulkWebsites(e.target.value)}
+                style={{
+                  width: '100%', minHeight: '120px', padding: '12px', borderRadius: '8px',
+                  background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.08)',
+                  color: 'inherit', fontSize: '13px', fontFamily: "'JetBrains Mono', monospace",
+                  resize: 'vertical',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
+                  {bulkWebsites.split('\n').filter(w => w.trim()).length} prospect(s) ready
+                </span>
+                <button onClick={handleBulkAdd}
+                  disabled={bulkWebsites.split('\n').filter(w => w.trim()).length === 0 || isUploading}
+                  style={{
+                    padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+                    border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                    background: 'linear-gradient(135deg, #9015ed, #245ef9)', color: '#fff',
+                    opacity: (bulkWebsites.split('\n').filter(w => w.trim()).length === 0 || isUploading) ? 0.5 : 1,
+                  }}
+                >{isUploading ? 'Adding...' : 'Add Prospects'}</button>
+              </div>
+            </div>
+          )}
+
+          {/* CSV */}
+          {uploadTab === 'csv' && (
+            <div>
+              <label style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                padding: '24px', borderRadius: '10px', border: '2px dashed rgba(255,255,255,0.1)',
+                background: 'rgba(0,0,0,0.2)', cursor: 'pointer', textAlign: 'center',
+              }}>
+                <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display: 'none' }} />
+                <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>
+                  {isUploading ? 'Uploading...' : 'Click to upload CSV'}
+                </div>
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
+                  Required: website | Optional: company_name, industry, country, city, employee_range, platform
+                </div>
+              </label>
+            </div>
+          )}
+
+          {/* Upload Result */}
+          {uploadResult && (
+            <div style={{
+              marginTop: '12px', padding: '10px 14px', borderRadius: '8px',
+              background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.2)',
+              fontSize: '13px', color: '#4ade80', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span>Added {uploadResult.added} prospect(s). {uploadResult.skipped > 0 ? `Skipped ${uploadResult.skipped} duplicate(s).` : ''}</span>
+              <button onClick={() => setUploadResult(null)}
+                style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '14px' }}>
+                X
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Stats Bar */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
