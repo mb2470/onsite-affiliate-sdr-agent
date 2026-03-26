@@ -149,6 +149,7 @@ BEGIN
       %s,
       %s,
       %s,
+      %s,
       CASE l.status
         WHEN ''new''       THEN ''new''
         WHEN ''enriched''  THEN ''enriched''
