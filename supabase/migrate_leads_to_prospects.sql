@@ -232,7 +232,8 @@ BEGIN
     -- analysis_attempted_at
     CASE WHEN has_analysis_attempted_at THEN 'l.analysis_attempted_at' ELSE 'NULL' END,
     -- extracted_services
-    CASE WHEN has_extracted_services THEN 'l.extracted_services' ELSE 'NULL' END,
+    -- extracted_services is JSONB on leads but TEXT[] on prospects — cast it
+    CASE WHEN has_extracted_services THEN 'CASE WHEN l.extracted_services IS NOT NULL AND jsonb_typeof(l.extracted_services) = ''array'' THEN ARRAY(SELECT jsonb_array_elements_text(l.extracted_services)) ELSE NULL END' ELSE 'NULL' END,
     -- extracted_contacts
     CASE WHEN has_extracted_contacts THEN 'l.extracted_contacts' ELSE 'NULL' END,
     -- social_urls
