@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 
-export default function AgentMonitor() {
+export default function AgentMonitor({ orgId: propOrgId }) {
   const [settings, setSettings] = useState(null);
   const [stats, setStats] = useState({ emailsToday: 0, repliesToday: 0, maxPerDay: 20, lastHeartbeat: null });
   const [senderAccounts, setSenderAccounts] = useState([]);
@@ -10,7 +10,7 @@ export default function AgentMonitor() {
   const [senderError, setSenderError] = useState('');
   const [senderSuccess, setSenderSuccess] = useState('');
   const [newSender, setNewSender] = useState({ email: '', displayName: '', dailyLimit: 30 });
-  const [activeOrgId, setActiveOrgId] = useState(null);
+  const activeOrgId = propOrgId || null;
   const [useProspectDb, setUseProspectDb] = useState(false);
   const [isCheckingReplies, setIsCheckingReplies] = useState(false);
   const [replyResult, setReplyResult] = useState(null);
@@ -23,41 +23,42 @@ export default function AgentMonitor() {
   const [rangeStats, setRangeStats] = useState({ sent: 0, replies: 0, bounces: 0, replyRate: 0 });
 
   useEffect(() => {
+    if (!activeOrgId) return;
     loadData();
     const interval = setInterval(loadData, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeOrgId]);
 
   useEffect(() => {
     loadRangeStats();
   }, [dateRange, customStart, customEnd, activeOrgId]);
 
   const loadData = async () => {
-    // Load agent settings
-    const { data: s } = await supabase.from('agent_settings').select('*').limit(1).single();
-    console.log('[AgentMonitor] agent_settings loaded:', s);
-    console.log('[AgentMonitor] use_prospect_db value:', s?.use_prospect_db);
+    if (!activeOrgId) return;
+
+    // Load agent settings — scoped by org_id
+    const { data: s } = await supabase.from('agent_settings').select('*').eq('org_id', activeOrgId).limit(1).single();
     setSettings(s);
     setUseProspectDb(!!s?.use_prospect_db);
 
-    // Load sender accounts + per-account limits for agent routing
+    // Load sender accounts + per-account limits for agent routing — scoped by org_id
     const { data: accounts } = await supabase
       .from('email_accounts')
       .select('id, org_id, domain_id, email_address, display_name, daily_send_limit, status')
+      .eq('org_id', activeOrgId)
       .order('created_at', { ascending: false });
     const nextAccounts = accounts || [];
-
-    const resolvedOrgId = s?.org_id || nextAccounts[0]?.org_id || null;
-    setActiveOrgId(resolvedOrgId);
 
     // Load today's stats — scoped by org_id
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
     // Compute per-sender sent counts from outreach_log (single source of truth)
-    let senderQuery = supabase.from('outreach_log').select('sender_email').gte('sent_at', todayStart.toISOString());
-    if (resolvedOrgId) senderQuery = senderQuery.eq('org_id', resolvedOrgId);
-    const { data: senderRows } = await senderQuery;
+    const { data: senderRows } = await supabase
+      .from('outreach_log')
+      .select('sender_email')
+      .eq('org_id', activeOrgId)
+      .gte('sent_at', todayStart.toISOString());
     const senderCounts = {};
     for (const row of (senderRows || [])) {
       const addr = (row.sender_email || '').trim().toLowerCase();
@@ -70,21 +71,19 @@ export default function AgentMonitor() {
     setSenderAccounts(enrichedAccounts);
 
     // outreach_log is the SINGLE source of truth for all email stats.
-    let emailsTodayQuery = supabase
+    const { count: emailsToday } = await supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
+      .eq('org_id', activeOrgId)
       .gte('sent_at', todayStart.toISOString());
-    if (resolvedOrgId) emailsTodayQuery = emailsTodayQuery.eq('org_id', resolvedOrgId);
-    const { count: emailsToday } = await emailsTodayQuery;
 
     // Reply count — exclude bounces and auto-responders
-    let repliesTodayQuery = supabase
+    const { count: repliesToday } = await supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
+      .eq('org_id', activeOrgId)
       .gte('replied_at', todayStart.toISOString())
       .or('bounced.is.null,bounced.eq.false');
-    if (resolvedOrgId) repliesTodayQuery = repliesTodayQuery.eq('org_id', resolvedOrgId);
-    const { count: repliesToday } = await repliesTodayQuery;
 
     // Capacity = min(global cap, sum of per-sender limits)
     // The agent can never exceed either ceiling.
@@ -112,13 +111,12 @@ export default function AgentMonitor() {
     }));
 
     // Load recent activity — scoped by org_id
-    let activityQuery = supabase
+    const { data: activity } = await supabase
       .from('activity_log')
       .select('*')
+      .eq('org_id', activeOrgId)
       .order('created_at', { ascending: false })
       .limit(20);
-    if (resolvedOrgId) activityQuery = activityQuery.eq('org_id', resolvedOrgId);
-    const { data: activity } = await activityQuery;
     setActivityLog(activity || []);
   };
 
@@ -133,7 +131,8 @@ export default function AgentMonitor() {
     const { error } = await supabase
       .from('email_accounts')
       .update({ daily_send_limit: parsedLimit })
-      .eq('id', accountId);
+      .eq('id', accountId)
+      .eq('org_id', activeOrgId);
 
     if (error) {
       setSenderError(error.message || 'Failed to update sender daily limit.');
@@ -275,38 +274,36 @@ export default function AgentMonitor() {
   };
 
   const loadRangeStats = async () => {
+    if (!activeOrgId) return;
     const { start, end } = getDateRange();
 
     // ALL stats come from outreach_log — the single source of truth.
 
     // Sent count
-    let sentQuery = supabase
+    const { count: sent } = await supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
+      .eq('org_id', activeOrgId)
       .gte('sent_at', start)
       .lte('sent_at', end);
-    if (activeOrgId) sentQuery = sentQuery.eq('org_id', activeOrgId);
-    const { count: sent } = await sentQuery;
 
     // Reply count — exclude bounces and auto-responders
-    let repliesQuery = supabase
+    const { count: replies } = await supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
+      .eq('org_id', activeOrgId)
       .gte('replied_at', start)
       .lte('replied_at', end)
       .or('bounced.is.null,bounced.eq.false');
-    if (activeOrgId) repliesQuery = repliesQuery.eq('org_id', activeOrgId);
-    const { count: replies } = await repliesQuery;
 
     // Bounce count — from outreach_log.bounced (not activity_log)
-    let bouncesQuery = supabase
+    const { count: bounces } = await supabase
       .from('outreach_log')
       .select('*', { count: 'exact', head: true })
+      .eq('org_id', activeOrgId)
       .eq('bounced', true)
       .gte('bounced_at', start)
       .lte('bounced_at', end);
-    if (activeOrgId) bouncesQuery = bouncesQuery.eq('org_id', activeOrgId);
-    const { count: bounces } = await bouncesQuery;
 
     const replyRate = (sent || 0) > 0 ? ((replies || 0) / (sent || 1) * 100).toFixed(1) : 0;
 
