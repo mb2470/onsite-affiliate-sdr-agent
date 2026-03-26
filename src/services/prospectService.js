@@ -4,6 +4,130 @@ import { resolveOrgId } from './orgService';
 const VALID_STATUSES = ['new', 'enriching', 'enriched', 'qualified', 'contacted', 'engaged', 'disqualified'];
 
 /**
+ * Normalize a website string: lowercase, strip protocol/www/path/query.
+ */
+const normalizeWebsite = (website) => {
+  if (!website || typeof website !== 'string') return null;
+  return website
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '')
+    .replace(/[?#].*$/, '');
+};
+
+/**
+ * Add a single prospect by website.
+ * company_name defaults to the domain (without TLD) if not provided.
+ */
+export const addProspect = async (website, orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
+  const cleanWebsite = normalizeWebsite(website);
+  if (!cleanWebsite) throw new Error('Invalid website');
+
+  const companyName = cleanWebsite.split('.')[0]; // fallback name from domain
+
+  const { data, error } = await supabase
+    .from('prospects')
+    .insert([{ website: cleanWebsite, company_name: companyName, status: 'new', org_id: scopedOrgId }])
+    .select();
+
+  if (error) {
+    if (error.code === '23505') throw new Error('This website already exists as a prospect!');
+    throw error;
+  }
+  return data;
+};
+
+/**
+ * Bulk add prospects (deduplicating against existing).
+ * Accepts an array of strings (websites) or objects with website + optional fields.
+ * @param {Array<string|Object>} prospects - Websites or {website, company_name, ...}
+ * @param {string} [source='bulk_add'] - Source label stored in source_metadata
+ * @param {string} orgId - Organization ID
+ * @returns {Promise<{added: number, skipped: number}>}
+ */
+export const bulkAddProspects = async (prospects, source = 'bulk_add', orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
+
+  const rows = prospects
+    .map(p => (typeof p === 'string' ? { website: p } : p))
+    .map(r => ({ ...r, website: normalizeWebsite(r.website) }))
+    .filter(r => r.website);
+
+  // Deduplicate within upload
+  const seenWebsites = new Set();
+  const uniqueRows = rows.filter((row) => {
+    if (seenWebsites.has(row.website)) return false;
+    seenWebsites.add(row.website);
+    return true;
+  });
+
+  const websites = uniqueRows.map(r => r.website);
+  if (!websites.length) return { added: 0, skipped: 0 };
+
+  // Check existing in batches
+  const existingSet = new Set();
+  for (let i = 0; i < websites.length; i += 200) {
+    const batch = websites.slice(i, i + 200);
+    const { data } = await supabase.from('prospects').select('website').eq('org_id', scopedOrgId).in('website', batch);
+    (data || []).forEach(p => existingSet.add(p.website));
+  }
+
+  const newRows = uniqueRows
+    .filter(r => r.website && !existingSet.has(r.website))
+    .map(r => {
+      const companyName = r.company_name || r.website.split('.')[0];
+
+      return {
+        website: r.website,
+        company_name: companyName,
+        status: 'new',
+        org_id: scopedOrgId,
+        industry_primary: r.industry || null,
+        business_model: r.sells_d2c === 'true' || r.sells_d2c === true ? 'D2C' : null,
+        hq_city: r.city || null,
+        hq_country: r.country || null,
+        employee_range: r.employee_range || null,
+        source_metadata: { source, platform: r.platform || null },
+      };
+    });
+
+  if (newRows.length === 0) return { added: 0, skipped: websites.length };
+
+  let added = 0;
+  for (let i = 0; i < newRows.length; i += 100) {
+    const batch = newRows.slice(i, i + 100);
+    const { data, error } = await supabase
+      .from('prospects')
+      .upsert(batch, { onConflict: 'org_id,website', ignoreDuplicates: true })
+      .select();
+
+    if (error) {
+      console.error('Prospect bulk insert batch error:', error.message);
+    } else {
+      added += (data || []).length;
+    }
+  }
+
+  return { added, skipped: websites.length - added };
+};
+
+/**
+ * Get total prospect count for an org.
+ */
+export const getTotalProspectCount = async (orgId) => {
+  const scopedOrgId = await resolveOrgId(orgId);
+  const { count, error } = await supabase
+    .from('prospects')
+    .select('*', { count: 'exact', head: true })
+    .eq('org_id', scopedOrgId);
+  if (error) throw error;
+  return count || 0;
+};
+
+/**
  * Fetch a paginated list of prospects with optional filters.
  * @param {string} orgId - Organization ID (resolved automatically if null)
  * @param {Object} filters

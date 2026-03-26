@@ -6,6 +6,7 @@ import Login from './Login';
 import PublicIcpIntake from './PublicIcpIntake';
 import { supabase } from './supabaseClient';
 import { getTotalLeadCount, searchLeads, searchEnrichedLeads, addLead, bulkAddLeads, logActivity } from './services/leadService';
+import { addProspect, bulkAddProspects, getTotalProspectCount } from './services/prospectService';
 import { enrichLeads, setIcpContext } from './services/enrichService';
 import { generateEmail, setEmailIcpContext, getCachedEmail, personalizeEmail } from './services/emailService';
 import { findContacts, verifyContactEmails } from './services/contactService';
@@ -789,16 +790,16 @@ function AuthenticatedApp({ session }) {
   const handleAddSingle = async () => {
     if (!newWebsite.trim()) return;
     try {
-      await addLead(newWebsite, orgId);
+      await addProspect(newWebsite, orgId);
       setNewWebsite('');
-      const count = await getTotalLeadCount(orgId);
+      const count = await getTotalProspectCount(orgId);
       setTotalLeadCount(count);
       loadEnrichLeads();
     } catch (e) { alert(e.message); }
   };
 
   const handleBulkAdd = async () => {
-    const leads = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w).map(line => {
+    const prospects = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w).map(line => {
       // Support "company_name: website" format
       const colonMatch = line.match(/^(.+?):\s+(\S+\.\S+)$/);
       if (colonMatch) {
@@ -806,14 +807,14 @@ function AuthenticatedApp({ session }) {
       }
       return { website: line };
     });
-    if (!leads.length) return;
+    if (!prospects.length) return;
     try {
-      const { added, skipped } = await bulkAddLeads(leads, 'bulk_add', orgId);
+      const { added, skipped } = await bulkAddProspects(prospects, 'bulk_add', orgId);
       setBulkWebsites('');
-      const count = await getTotalLeadCount(orgId);
+      const count = await getTotalProspectCount(orgId);
       setTotalLeadCount(count);
       loadEnrichLeads();
-      alert(`✅ Added ${added} leads. Skipped ${skipped} duplicates.`);
+      alert(`✅ Added ${added} prospects. Skipped ${skipped} duplicates.`);
     } catch (e) { alert(e.message); }
   };
 
@@ -882,11 +883,11 @@ function AuthenticatedApp({ session }) {
 
         if (!leads.length) { alert('No valid websites found'); setIsUploading(false); return; }
 
-        const { added, skipped } = await bulkAddLeads(leads, 'csv_upload', orgId);
-        const count = await getTotalLeadCount(orgId);
+        const { added, skipped } = await bulkAddProspects(leads, 'csv_upload', orgId);
+        const count = await getTotalProspectCount(orgId);
         setTotalLeadCount(count);
         loadEnrichLeads();
-        alert(`✅ Imported ${added} leads. Skipped ${skipped} duplicates.`);
+        alert(`✅ Imported ${added} prospects. Skipped ${skipped} duplicates.`);
       } catch (e) { alert(e.message); }
       setIsUploading(false);
     };
