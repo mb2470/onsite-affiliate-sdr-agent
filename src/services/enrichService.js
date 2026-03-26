@@ -250,7 +250,7 @@ export const enrichLead = async (lead, orgId) => {
     sells_d2c: result.sells_d2c || null,
     physical_address: result.headquarters || null,
     fit_reason: result.fit_reason || null,
-    decision_makers: result.decision_makers || null,
+    decision_makers: result.decision_makers ? result.decision_makers.split(';').map(s => s.trim()).filter(Boolean) : null,
     pain_points: result.pain_points || null,
     hq_country: result.country || null,
     city: result.city || null,
@@ -259,6 +259,7 @@ export const enrichLead = async (lead, orgId) => {
     estimated_products: result.product_count || null,
     store_rank: result.store_rank || null,
     estimated_sales: result.estimated_sales || null,
+    google_shopping: result.google_shopping || null,
     status: 'enriched',
   };
 

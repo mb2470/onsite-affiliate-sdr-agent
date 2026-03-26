@@ -1253,10 +1253,10 @@ function AuthenticatedApp({ session }) {
           return <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '2px' }}>{lead.research_notes.substring(0, 80)}</div>;
         }
       })()}
-      {(lead.catalog_size || lead.google_shopping) && (
+      {(lead.estimated_products || lead.google_shopping) && (
         <div style={{ marginTop: '4px', fontSize: '10px', opacity: 0.4 }}>
           {lead.sells_d2c && `D2C: ${lead.sells_d2c}`}
-          {lead.catalog_size && ` · ${lead.catalog_size}`}
+          {lead.estimated_products && ` · ${lead.estimated_products} products`}
           {lead.google_shopping && ` · GShop: ${lead.google_shopping}`}
         </div>
       )}

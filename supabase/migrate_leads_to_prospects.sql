@@ -4,6 +4,10 @@
 -- Does NOT delete anything from leads — both systems run in parallel during transition.
 -- After verifying everything works, run drop_leads_table.sql to retire leads.
 --
+-- PREREQUISITE: Run add_prospect_pipeline_columns.sql first to add
+-- crawl_status, analysis_status, raw_markdown, extracted_services,
+-- extracted_contacts, social_urls, scout_query, google_shopping columns.
+--
 -- NOTE: The leads table may not have all columns (they were added via separate
 -- ALTER TABLE migrations). This script dynamically checks which columns exist
 -- and only migrates what's available.
@@ -38,6 +42,19 @@ DECLARE
   has_contact_email BOOLEAN := FALSE;
   has_company_id BOOLEAN := FALSE;
   has_enrichment_status BOOLEAN := FALSE;
+  has_decision_makers BOOLEAN := FALSE;
+  -- Pipeline columns (may exist on leads from crawl/analysis features)
+  has_raw_markdown BOOLEAN := FALSE;
+  has_crawl_status BOOLEAN := FALSE;
+  has_crawl_attempted_at BOOLEAN := FALSE;
+  has_analysis_status BOOLEAN := FALSE;
+  has_analysis_attempted_at BOOLEAN := FALSE;
+  has_extracted_services BOOLEAN := FALSE;
+  has_extracted_contacts BOOLEAN := FALSE;
+  has_social_urls BOOLEAN := FALSE;
+  has_scout_query BOOLEAN := FALSE;
+  has_google_shopping BOOLEAN := FALSE;
+  has_catalog_size BOOLEAN := FALSE;
 BEGIN
   -- Check which columns exist on leads
   FOR has_col IN
@@ -61,6 +78,18 @@ BEGIN
       WHEN 'contact_email' THEN has_contact_email := TRUE;
       WHEN 'company_id' THEN has_company_id := TRUE;
       WHEN 'enrichment_status' THEN has_enrichment_status := TRUE;
+      WHEN 'decision_makers' THEN has_decision_makers := TRUE;
+      WHEN 'raw_markdown' THEN has_raw_markdown := TRUE;
+      WHEN 'crawl_status' THEN has_crawl_status := TRUE;
+      WHEN 'crawl_attempted_at' THEN has_crawl_attempted_at := TRUE;
+      WHEN 'analysis_status' THEN has_analysis_status := TRUE;
+      WHEN 'analysis_attempted_at' THEN has_analysis_attempted_at := TRUE;
+      WHEN 'extracted_services' THEN has_extracted_services := TRUE;
+      WHEN 'extracted_contacts' THEN has_extracted_contacts := TRUE;
+      WHEN 'social_urls' THEN has_social_urls := TRUE;
+      WHEN 'scout_query' THEN has_scout_query := TRUE;
+      WHEN 'google_shopping' THEN has_google_shopping := TRUE;
+      WHEN 'catalog_size' THEN has_catalog_size := TRUE;
       ELSE NULL;
     END CASE;
   END LOOP;
@@ -75,6 +104,10 @@ BEGIN
       fit_reason, ecommerce_platform, estimated_products, catalog_analyzed_at,
       store_rank, estimated_sales, sells_d2c,
       has_contacts, contact_name, contact_email, company_id,
+      raw_markdown, crawl_status, crawl_attempted_at,
+      analysis_status, analysis_attempted_at,
+      extracted_services, extracted_contacts, social_urls,
+      scout_query, google_shopping,
       status, enrichment_source, source, source_metadata,
       created_at, updated_at
     )
@@ -93,13 +126,22 @@ BEGIN
       CASE WHEN l.revenue_range ~ ''^\d+(\.\d+)?$'' THEN l.revenue_range::NUMERIC ELSE NULL END,
       l.icp_fit,
       l.research_notes,
-      l.decision_makers,
+      %s,
       l.pain_points,
       l.talking_points,
       %s,
       %s,
       %s,
       l.catalog_analyzed_at,
+      %s,
+      %s,
+      %s,
+      %s,
+      %s,
+      %s,
+      %s,
+      %s,
+      %s,
       %s,
       %s,
       %s,
@@ -140,6 +182,10 @@ BEGIN
             WHEN l.country ILIKE ''United Kingdom%'' OR l.country ILIKE ''UK%'' THEN ''GB''
             ELSE NULL END'
     ELSE 'NULL' END,
+    -- decision_makers (TEXT in leads → TEXT[] in prospects)
+    CASE WHEN has_decision_makers THEN
+      'CASE WHEN l.decision_makers IS NOT NULL THEN string_to_array(l.decision_makers, '';'') ELSE NULL END'
+    ELSE 'NULL' END,
     -- fit_reason
     CASE WHEN has_fit_reason THEN 'l.fit_reason' ELSE 'NULL' END,
     -- ecommerce_platform
@@ -149,11 +195,14 @@ BEGIN
       WHEN has_platform THEN 'l.platform'
       ELSE 'NULL'
     END,
-    -- estimated_products
+    -- estimated_products (check estimated_products, product_count, and catalog_size)
     CASE
+      WHEN has_estimated_products AND has_product_count AND has_catalog_size THEN 'COALESCE(l.estimated_products, l.product_count, l.catalog_size)'
       WHEN has_estimated_products AND has_product_count THEN 'COALESCE(l.estimated_products, l.product_count)'
+      WHEN has_estimated_products AND has_catalog_size THEN 'COALESCE(l.estimated_products, l.catalog_size)'
       WHEN has_estimated_products THEN 'l.estimated_products'
       WHEN has_product_count THEN 'l.product_count'
+      WHEN has_catalog_size THEN 'l.catalog_size'
       ELSE 'NULL'
     END,
     -- store_rank
@@ -170,6 +219,26 @@ BEGIN
     CASE WHEN has_contact_email THEN 'l.contact_email' ELSE 'NULL' END,
     -- company_id
     CASE WHEN has_company_id THEN 'l.company_id' ELSE 'NULL' END,
+    -- raw_markdown
+    CASE WHEN has_raw_markdown THEN 'l.raw_markdown' ELSE 'NULL' END,
+    -- crawl_status
+    CASE WHEN has_crawl_status THEN 'l.crawl_status' ELSE 'NULL' END,
+    -- crawl_attempted_at
+    CASE WHEN has_crawl_attempted_at THEN 'l.crawl_attempted_at' ELSE 'NULL' END,
+    -- analysis_status
+    CASE WHEN has_analysis_status THEN 'l.analysis_status' ELSE 'NULL' END,
+    -- analysis_attempted_at
+    CASE WHEN has_analysis_attempted_at THEN 'l.analysis_attempted_at' ELSE 'NULL' END,
+    -- extracted_services
+    CASE WHEN has_extracted_services THEN 'l.extracted_services' ELSE 'NULL' END,
+    -- extracted_contacts
+    CASE WHEN has_extracted_contacts THEN 'l.extracted_contacts' ELSE 'NULL' END,
+    -- social_urls
+    CASE WHEN has_social_urls THEN 'l.social_urls' ELSE 'NULL' END,
+    -- scout_query
+    CASE WHEN has_scout_query THEN 'l.scout_query' ELSE 'NULL' END,
+    -- google_shopping
+    CASE WHEN has_google_shopping THEN 'l.google_shopping' ELSE 'NULL' END,
     -- enrichment_status in metadata
     CASE WHEN has_enrichment_status THEN ', ''original_enrichment_status'', l.enrichment_status' ELSE '' END
   );
