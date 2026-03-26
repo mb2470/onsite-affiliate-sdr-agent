@@ -354,7 +354,7 @@ const TOOLS = [
   {
     name: 'enrich_lead',
     description:
-      'Trigger AI enrichment for a lead. Uses the enrichment waterfall: StoreLeads → Apollo → Claude AI.',
+      'Trigger AI enrichment for a lead. Uses the enrichment waterfall: Crawl + Claude extraction → Apollo contacts.',
     input_schema: {
       type: 'object',
       properties: {
@@ -550,6 +550,81 @@ const TOOLS = [
           type: 'number',
           description: 'Max results (default 10)',
         },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'scout_search',
+    description:
+      'Run Scout to discover new prospects via Google Search + Maps. Searches for businesses matching categories in target cities.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        city: { type: 'string', description: 'City to search in' },
+        state: { type: 'string', description: 'State abbreviation (e.g. CO, TX)' },
+        categories: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Business categories to search for (e.g. ["hotels", "property management"])',
+        },
+        scout_profile_id: { type: 'string', description: 'Use a saved scout profile instead of ad-hoc search' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'crawl_prospect',
+    description:
+      'Crawl a prospect website to extract firmographic data (industry, business model, contacts, services). This is the Researcher step.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prospect_id: { type: 'string', description: 'Specific prospect ID to crawl' },
+        batch: { type: 'boolean', description: 'Set true to crawl a batch of un-crawled prospects' },
+        limit: { type: 'number', description: 'Max prospects to crawl in batch mode (default 10)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'analyze_prospect',
+    description:
+      'Re-analyze a prospect that has been crawled to fill missing fields (email, phone, services, contacts). This is the Analyst step.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prospect_id: { type: 'string', description: 'Specific prospect ID to analyze' },
+        batch: { type: 'boolean', description: 'Set true to analyze a batch of prospects with incomplete data' },
+        limit: { type: 'number', description: 'Max prospects to analyze (default 10)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'score_prospects',
+    description:
+      'Score enriched prospects for ICP fit based on crawl-extracted data. High scorers get flagged for gold enrichment (Apollo contacts).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prospect_id: { type: 'string', description: 'Specific prospect ID to score' },
+        batch: { type: 'boolean', description: 'Set true to score a batch of un-scored enriched prospects' },
+        limit: { type: 'number', description: 'Max prospects to score (default 25)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'gold_enrich',
+    description:
+      'Run gold enrichment on high-ICP prospects: Apollo People Search to find buyer contacts (names, emails, phone numbers).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prospect_id: { type: 'string', description: 'Specific prospect ID to gold-enrich' },
+        batch: { type: 'boolean', description: 'Set true to gold-enrich a batch of ready prospects' },
+        limit: { type: 'number', description: 'Max prospects to gold-enrich (default 10)' },
       },
       required: [],
     },
@@ -851,22 +926,34 @@ async function executeTool(name, input, orgId, authContext = null) {
     }
 
     case 'enrich_lead': {
-      // We call the existing enrichment functions via their Netlify endpoints
+      // Trigger crawl + Claude extraction for a lead
       const website = input.website.trim();
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
 
-      // Step 1: Try StoreLeads
+      // Step 1: Crawl + Extract via prospect-crawl
       try {
-        const slRes = await fetch(
-          `https://${process.env.URL || 'localhost:8888'}/.netlify/functions/storeleads-single?domain=${encodeURIComponent(website)}`
-        );
-        if (slRes.ok) {
-          const slData = await slRes.json();
-          if (slData && slData.store) {
+        // Find the prospect by website
+        const { data: prospect } = await supabase
+          .from('prospects')
+          .select('id')
+          .eq('org_id', orgId)
+          .ilike('website', `%${website}%`)
+          .limit(1)
+          .maybeSingle();
+
+        if (prospect) {
+          const crawlRes = await fetch(`${baseUrl}/.netlify/functions/prospect-crawl`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ org_id: orgId, prospect_id: prospect.id }),
+          });
+          if (crawlRes.ok) {
+            const crawlData = await crawlRes.json();
             return {
               success: true,
-              source: 'storeleads',
-              message: `Enriched ${website} via StoreLeads`,
-              data: slData.store,
+              source: 'crawl',
+              message: `Crawled and extracted firmographics for ${website}`,
+              data: crawlData,
             };
           }
         }
@@ -874,16 +961,13 @@ async function executeTool(name, input, orgId, authContext = null) {
         /* fall through */
       }
 
-      // Step 2: Try Apollo
+      // Step 2: Fallback to Apollo org enrichment
       try {
-        const apRes = await fetch(
-          `https://${process.env.URL || 'localhost:8888'}/.netlify/functions/apollo-enrich-single`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain: website }),
-          }
-        );
+        const apRes = await fetch(`${baseUrl}/.netlify/functions/apollo-enrich-single`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: website }),
+        });
         if (apRes.ok) {
           const apData = await apRes.json();
           if (apData && apData.organization) {
@@ -901,7 +985,7 @@ async function executeTool(name, input, orgId, authContext = null) {
 
       return {
         success: false,
-        message: `Could not enrich ${website} via StoreLeads or Apollo. Try manual enrichment from the Enrich tab.`,
+        message: `Could not enrich ${website}. Ensure the prospect exists and try again.`,
       };
     }
 
@@ -1159,6 +1243,82 @@ Subject: [subject]
       return { requests: data, count: data?.length || 0 };
     }
 
+    case 'scout_search': {
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
+      const payload = { org_id: orgId };
+      if (input.scout_profile_id) payload.scout_profile_id = input.scout_profile_id;
+      if (input.city) payload.city = input.city;
+      if (input.state) payload.state = input.state;
+      if (input.categories) payload.categories = input.categories;
+
+      const res = await fetch(`${baseUrl}/.netlify/functions/scout-search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return await res.json();
+    }
+
+    case 'crawl_prospect': {
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
+      const payload = { org_id: orgId };
+      if (input.prospect_id) payload.prospect_id = input.prospect_id;
+      if (input.batch) payload.batch = true;
+      if (input.limit) payload.limit = input.limit;
+
+      const res = await fetch(`${baseUrl}/.netlify/functions/prospect-crawl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return await res.json();
+    }
+
+    case 'analyze_prospect': {
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
+      const payload = { org_id: orgId };
+      if (input.prospect_id) payload.prospect_id = input.prospect_id;
+      if (input.batch) payload.batch = true;
+      if (input.limit) payload.limit = input.limit;
+
+      const res = await fetch(`${baseUrl}/.netlify/functions/prospect-analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return await res.json();
+    }
+
+    case 'score_prospects': {
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
+      const payload = { org_id: orgId };
+      if (input.prospect_id) payload.prospect_id = input.prospect_id;
+      if (input.batch) payload.batch = true;
+      if (input.limit) payload.limit = input.limit;
+
+      const res = await fetch(`${baseUrl}/.netlify/functions/prospect-score`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return await res.json();
+    }
+
+    case 'gold_enrich': {
+      const baseUrl = `https://${process.env.URL || 'localhost:8888'}`;
+      const payload = { org_id: orgId };
+      if (input.prospect_id) payload.prospect_id = input.prospect_id;
+      if (input.batch) payload.batch = true;
+      if (input.limit) payload.limit = input.limit;
+
+      const res = await fetch(`${baseUrl}/.netlify/functions/prospect-enrich`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      return await res.json();
+    }
+
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -1172,7 +1332,12 @@ You have access to tools that let you:
 - Search and read repository files to answer feature/function questions with evidence
 - Query and search leads, contacts, outreach history, and pipeline data
 - Add new leads (single or bulk)
-- Enrich leads with company data (StoreLeads → Apollo → Claude AI waterfall)
+- Run the full prospect pipeline: Scout → Crawl → Analyze → Score → Gold Enrich
+- Scout for new prospects via Google Search + Maps
+- Crawl prospect websites to extract firmographic data
+- Analyze crawled prospects to fill missing fields
+- Score prospects for ICP fit
+- Gold-enrich high-ICP prospects via Apollo (find buyer contacts)
 - Find contacts at a company
 - Generate personalized outreach emails
 - Send emails via Gmail

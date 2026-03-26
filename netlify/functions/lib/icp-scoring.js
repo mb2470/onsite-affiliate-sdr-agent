@@ -2,12 +2,12 @@
  * Shared ICP scoring configuration & logic.
  * All Netlify functions import from here so scoring thresholds
  * are driven by the active ICP profile in the database.
+ *
+ * Scoring is based on crawl-extracted firmographics and Apollo data.
  */
 
 const DEFAULTS = {
-  minProductCount: 250,
-  minMonthlySalesCents: 100000000, // $1M in cents (StoreLeads uses cents)
-  minAnnualRevenue: 12000000,      // $12M/year (Apollo)
+  minAnnualRevenue: 12000000,      // $12M/year
   minEmployeeCount: 50,
   targetCategories: [
     'apparel', 'fashion', 'clothing', 'shoes', 'footwear', 'accessories',
@@ -16,6 +16,7 @@ const DEFAULTS = {
     'electronics', 'computers', 'consumer electronics', 'phones', 'networking',
   ],
   targetGeography: ['US', 'CA'],
+  minIcpScoreForGold: 60,
 };
 
 /**
@@ -26,7 +27,7 @@ async function getIcpScoringConfig(supabase, orgId) {
   try {
     const { data, error } = await supabase
       .from('icp_profiles')
-      .select('min_product_count, min_monthly_sales, min_annual_revenue, min_employee_count, industries, geography')
+      .select('min_annual_revenue, min_employee_count, industries, geography')
       .eq('is_active', true)
       .eq('org_id', orgId)
       .order('updated_at', { ascending: false })
@@ -72,55 +73,128 @@ async function getIcpScoringConfig(supabase, orgId) {
 
 function buildConfig(data, targetCategories, targetGeography) {
   return {
-    minProductCount: data.min_product_count ?? DEFAULTS.minProductCount,
-    // Convert from dollars (stored in DB) to cents (StoreLeads format)
-    minMonthlySalesCents: (data.min_monthly_sales ?? 1000000) * 100,
     minAnnualRevenue: data.min_annual_revenue ?? DEFAULTS.minAnnualRevenue,
     minEmployeeCount: data.min_employee_count ?? DEFAULTS.minEmployeeCount,
     targetCategories,
     targetGeography,
+    minIcpScoreForGold: DEFAULTS.minIcpScoreForGold,
   };
 }
 
 /**
- * Score a lead from StoreLeads data using ICP config.
+ * Score a prospect from crawl-extracted firmographic data.
+ * Returns { icp_fit: 'HIGH'|'MEDIUM'|'LOW', score: number, fitReason: string }
+ *
+ * Scoring factors (0-100 scale):
+ *   - Industry match (20 pts)
+ *   - Business model is D2C/B2C (15 pts)
+ *   - Geography match (15 pts)
+ *   - Employee range suggests scale (15 pts)
+ *   - Revenue estimate meets threshold (15 pts)
+ *   - Has website contacts (email/phone) (5 pts)
+ *   - Has social presence (5 pts)
+ *   - Website quality / content richness (10 pts)
  */
-function scoreStoreLeads(d, config) {
-  const categories = (d.categories || []).map(c => c.toLowerCase());
-  const productCount = d.product_count || 0;
-  const estSales = d.estimated_sales || 0; // in cents
-  const country = (d.country || '').toUpperCase();
+function scoreCrawlData(prospect, config) {
+  let score = 0;
+  const reasons = [];
 
-  const isTarget = categories.some(c => config.targetCategories.some(t => c.includes(t))) ? 1 : 0;
-  const hasLargeCatalog = productCount >= config.minProductCount ? 1 : 0;
-  const hasGoodSales = estSales >= config.minMonthlySalesCents ? 1 : 0;
+  // Industry match (20 pts)
+  const industry = (prospect.industry_primary || prospect.industry || '').toLowerCase();
+  const keywords = (prospect.keywords || []).map(k => k.toLowerCase());
+  const allIndustryText = [industry, ...keywords].join(' ');
+  if (config.targetCategories.some(cat => allIndustryText.includes(cat))) {
+    score += 20;
+    reasons.push(`Industry: ${prospect.industry_primary || prospect.industry}`);
+  }
 
-  const score = hasLargeCatalog + hasGoodSales + isTarget;
+  // Business model (15 pts)
+  const bm = (prospect.business_model || '').toUpperCase();
+  if (['D2C', 'B2C'].includes(bm)) {
+    score += 15;
+    reasons.push(`Business model: ${bm}`);
+  } else if (bm === 'MARKETPLACE' || bm === 'OTHER') {
+    score += 5;
+  }
 
-  // Geography check
-  const isTargetGeo = config.targetGeography === null ||
-    config.targetGeography.some(g => country.includes(g));
+  // Geography match (15 pts)
+  const hqCountry = (prospect.hq_country || prospect.country || '').toUpperCase();
+  const hqCity = (prospect.hq_city || prospect.city || '').toUpperCase();
+  const geoText = `${hqCity} ${hqCountry}`;
+  if (config.targetGeography === null) {
+    score += 15; // Global = accept all
+    reasons.push('Geography: Global target');
+  } else if (config.targetGeography.some(g => geoText.includes(g))) {
+    score += 15;
+    reasons.push(`Geography: ${hqCity || hqCountry}`);
+  }
 
-  if (isTargetGeo && score === 3) return 'HIGH';
-  if (score >= 2) return 'MEDIUM';
-  return 'LOW';
+  // Employee range (15 pts)
+  const empRange = prospect.employee_range || '';
+  const empActual = prospect.employee_actual || 0;
+  const empCount = empActual || parseEmployeeRange(empRange);
+  if (empCount >= config.minEmployeeCount) {
+    score += 15;
+    reasons.push(`Employees: ${empActual || empRange}`);
+  } else if (empCount > 0) {
+    score += Math.round((empCount / config.minEmployeeCount) * 10);
+  }
+
+  // Revenue (15 pts)
+  const revenue = prospect.revenue_annual || parseRevenueEstimate(prospect.revenue_estimate);
+  if (revenue >= config.minAnnualRevenue) {
+    score += 15;
+    reasons.push(`Revenue: $${(revenue / 1000000).toFixed(1)}M/yr`);
+  } else if (revenue > 0) {
+    score += Math.round((revenue / config.minAnnualRevenue) * 10);
+  }
+
+  // Has contact info (5 pts)
+  if (prospect.email || prospect.phone) {
+    score += 5;
+  }
+
+  // Social presence (5 pts)
+  const socials = prospect.social_urls || {};
+  const hasSocials = prospect.linkedin_url || socials.facebook || socials.linkedin || socials.instagram;
+  if (hasSocials) {
+    score += 5;
+  }
+
+  // Website quality (10 pts) — based on confidence score from crawl
+  const confidence = prospect.confidence_score || 0;
+  score += Math.round(confidence * 10);
+
+  // Cap at 100
+  score = Math.min(score, 100);
+
+  // Map to ICP fit level
+  let icp_fit;
+  if (score >= 70) icp_fit = 'HIGH';
+  else if (score >= 40) icp_fit = 'MEDIUM';
+  else icp_fit = 'LOW';
+
+  return {
+    icp_fit,
+    score,
+    fitReason: reasons.length > 0 ? reasons.join(' | ') : 'Insufficient data',
+    readyForGold: score >= config.minIcpScoreForGold,
+  };
 }
 
 /**
- * Score a lead from Apollo org data using ICP config.
+ * Score a prospect from Apollo org data.
  */
 function scoreApollo(org, country, config) {
   const factors = [];
   const fitReason = [];
 
-  // Revenue factor
   const annualRevenue = org.annual_revenue || 0;
   if (annualRevenue >= config.minAnnualRevenue) {
     factors.push('revenue');
     fitReason.push(`Revenue: $${(annualRevenue / 1000000).toFixed(1)}M/yr`);
   }
 
-  // Category factor
   const industry = (org.industry || '').toLowerCase();
   const keywords = (org.keywords || []).map(k => k.toLowerCase());
   const allText = [industry, ...keywords].join(' ');
@@ -129,18 +203,15 @@ function scoreApollo(org, country, config) {
     fitReason.push(`Industry: ${org.industry || 'target category'}`);
   }
 
-  // Size factor
   const employees = org.estimated_num_employees || 0;
   if (employees >= config.minEmployeeCount) {
     factors.push('size');
     fitReason.push(`Employees: ${employees}`);
   }
 
-  // Geography check
   const orgCountry = (country || org.country || '').toUpperCase();
   const isTargetGeo = config.targetGeography === null ||
-    config.targetGeography.some(g => orgCountry.includes(g)) ||
-    ['US (ASSUMED)'].some(c => orgCountry.includes(c));
+    config.targetGeography.some(g => orgCountry.includes(g));
 
   const score = factors.length;
   let icp_fit;
@@ -151,73 +222,34 @@ function scoreApollo(org, country, config) {
   return { icp_fit, fitReason: fitReason.join('; '), factors: score };
 }
 
-/**
- * Build a human-readable fit reason string for StoreLeads data.
- */
-function buildStoreLeadsFitReason(d, config) {
-  const productCount = d.product_count || 0;
-  const estSales = d.estimated_sales || 0;
-  const categories = d.categories || [];
-  const salesFormatted = estSales ? `$${Math.round(estSales / 100).toLocaleString()}/mo` : 'Unknown';
+// ── Helpers ──
 
-  const cats = categories.map(c => c.toLowerCase());
-  const isTarget = cats.some(c => config.targetCategories.some(t => c.includes(t)));
-
-  const factors = [];
-  factors.push(productCount >= config.minProductCount
-    ? `✅ ${productCount} products`
-    : `❌ ${productCount} products (<${config.minProductCount})`);
-  factors.push(estSales >= config.minMonthlySalesCents
-    ? `✅ ${salesFormatted} sales`
-    : `❌ ${salesFormatted} sales`);
-  factors.push(isTarget
-    ? `✅ ${categories.join(', ')}`
-    : `❌ ${categories.join(', ') || 'no target category'}`);
-
-  return factors.join(' | ');
+function parseEmployeeRange(range) {
+  if (!range) return 0;
+  const match = range.match(/(\d+)\s*[-–]\s*(\d+)/);
+  if (match) return Math.round((parseInt(match[1]) + parseInt(match[2])) / 2);
+  const single = range.match(/(\d+)\+?/);
+  return single ? parseInt(single[1]) : 0;
 }
 
-function catalogSizeLabel(count, minProductCount) {
-  if (!count) return 'Unknown';
-  const mid = Math.round(minProductCount * 0.4); // ~100 for default 250
-  if (count < mid) return `Small (${count} products)`;
-  if (count < minProductCount) return `Medium (${count} products)`;
-  return `Large (${count} products)`;
-}
-
-/**
- * Check if StoreLeads data indicates a fast-track HIGH lead.
- * Technographic signals (Shopify Plus, enterprise plans, high-volume stores)
- * can skip expensive Claude research and go straight to HIGH.
- *
- * @param {Object} d - StoreLeads domain data (must include plan, platform, product_count, estimated_sales)
- * @returns {{ fastTrack: boolean, reason: string }}
- */
-function checkFastTrack(d) {
-  const plan = (d.plan || '').toLowerCase();
-  const platform = (d.platform || '').toLowerCase();
-  const productCount = d.product_count || 0;
-  const estSales = d.estimated_sales || 0; // in cents
-
-  // Shopify Plus or Enterprise plan — strong signal
-  if (plan.includes('shopify plus') || plan.includes('enterprise')) {
-    return { fastTrack: true, reason: `Fast-track: ${d.plan} plan` };
-  }
-
-  // High-volume Shopify store (500+ products AND $5k+/mo sales)
-  if (platform.includes('shopify') && productCount >= 500 && estSales >= 50000000) {
-    return { fastTrack: true, reason: `Fast-track: High-volume Shopify (${productCount} products, $${Math.round(estSales / 100).toLocaleString()}/mo)` };
-  }
-
-  return { fastTrack: false, reason: '' };
+function parseRevenueEstimate(estimate) {
+  if (!estimate) return 0;
+  const lower = estimate.toLowerCase();
+  const match = lower.match(/\$?([\d.]+)\s*(m|b|k)?/);
+  if (!match) return 0;
+  const num = parseFloat(match[1]);
+  const unit = match[2];
+  if (unit === 'b') return num * 1000000000;
+  if (unit === 'm') return num * 1000000;
+  if (unit === 'k') return num * 1000;
+  return num;
 }
 
 module.exports = {
   DEFAULTS,
   getIcpScoringConfig,
-  scoreStoreLeads,
+  scoreCrawlData,
   scoreApollo,
-  buildStoreLeadsFitReason,
-  catalogSizeLabel,
-  checkFastTrack,
+  parseEmployeeRange,
+  parseRevenueEstimate,
 };
