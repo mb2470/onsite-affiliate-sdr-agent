@@ -798,10 +798,17 @@ function AuthenticatedApp({ session }) {
   };
 
   const handleBulkAdd = async () => {
-    const websites = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w);
-    if (!websites.length) return;
+    const leads = bulkWebsites.split('\n').map(w => w.trim()).filter(w => w).map(line => {
+      // Support "company_name: website" format
+      const colonMatch = line.match(/^(.+?):\s+(\S+\.\S+)$/);
+      if (colonMatch) {
+        return { company_name: colonMatch[1].trim(), website: colonMatch[2].trim() };
+      }
+      return { website: line };
+    });
+    if (!leads.length) return;
     try {
-      const { added, skipped } = await bulkAddLeads(websites, 'bulk_add', orgId);
+      const { added, skipped } = await bulkAddLeads(leads, 'bulk_add', orgId);
       setBulkWebsites('');
       const count = await getTotalLeadCount(orgId);
       setTotalLeadCount(count);
